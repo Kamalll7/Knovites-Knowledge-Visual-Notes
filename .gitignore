@@ -35,3 +35,6 @@ blob-report
 *.sln
 *.sw?
 
+
+# Gambar referensi dari situs lain, jangan di-commit
+docs/Image_reference*
