@@ -80,6 +80,9 @@ function stateToVirtualRepo(state: TreeState): Map<string, string> {
     for (const asset of node.assets) {
       files.set(`${node.path}/${asset}`, `__ASSET__:${asset}`)
     }
+    for (const extraFile of node.extraFiles) {
+      files.set(`${node.path}/${extraFile}`, `__EXTRA__:${extraFile}`)
+    }
   }
   return files
 }
@@ -87,7 +90,15 @@ function stateToVirtualRepo(state: TreeState): Map<string, string> {
 function applyChangeset(prevFiles: Map<string, string>, changeset: Changeset): Map<string, string> {
   const next = new Map(prevFiles)
 
-  // Read all move sources first so same-tree permutations cannot clobber each other
+  // 1. deletes first
+  for (const del of changeset.deletes) {
+    if (!next.has(del)) {
+      throw new Error(`Changeset delete target missing: ${del}`)
+    }
+    next.delete(del)
+  }
+
+  // 2. moves next (read all sources before mutating so subtree/chain moves do not clobber each other)
   const movedPayloads: Array<{ from: string; to: string; content: string }> = []
   for (const mv of changeset.moves) {
     const content = next.get(mv.from)
@@ -103,13 +114,7 @@ function applyChangeset(prevFiles: Map<string, string>, changeset: Changeset): M
     next.set(mv.to, mv.content)
   }
 
-  for (const del of changeset.deletes) {
-    if (!next.has(del)) {
-      throw new Error(`Changeset delete target missing: ${del}`)
-    }
-    next.delete(del)
-  }
-
+  // 3. upserts last (content in upserts wins over content moved to the same target path)
   for (const up of changeset.upserts) {
     next.set(up.path, up.content)
   }
@@ -531,6 +536,171 @@ describe('domain/tree [T1.3]', () => {
       const k3 = generateOrderBetween('bad key', null)
       expect(k3 > 'bad key').toBe(true)
     })
+
+    it('moves and deletes unreferenced node folder files (orphan assets and unknown extraFiles)', () => {
+      const idRoot = makeUlid(1)
+      const idChild = makeUlid(2)
+      const idDest = makeUlid(3)
+
+      const built = buildTree([
+        {
+          path: 'pwn',
+          node: makeNodeMeta(idRoot, 'PWN', 'a0'),
+          hasCanvas: false,
+          assets: ['assets/deadbeef12345678.png', 'assets/orphan-note-diagram.svg'],
+          extraFiles: ['README.local.md', 'attachments/exploit.py'],
+        },
+        {
+          path: 'pwn/rop',
+          node: makeNodeMeta(idChild, 'ROP', 'a0'),
+          hasCanvas: true,
+          assets: ['assets/cafebabe00001111.webp'],
+          extraFiles: ['gadgets.txt'],
+        },
+        {
+          path: 'archive',
+          node: makeNodeMeta(idDest, 'Archive', 'a1'),
+          hasCanvas: true,
+        },
+      ])
+
+      const initialRepo = stateToVirtualRepo(built.state)
+
+      // Move pwn subtree under archive
+      const moved = moveNode(built.state, {
+        nodeId: idRoot,
+        newParentId: idDest,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(moved.ok).toBe(true)
+      expect(moved.changeset.moves).toEqual(
+        expect.arrayContaining([
+          { from: 'pwn/node.json', to: 'archive/pwn/node.json' },
+          {
+            from: 'pwn/assets/deadbeef12345678.png',
+            to: 'archive/pwn/assets/deadbeef12345678.png',
+          },
+          {
+            from: 'pwn/assets/orphan-note-diagram.svg',
+            to: 'archive/pwn/assets/orphan-note-diagram.svg',
+          },
+          { from: 'pwn/README.local.md', to: 'archive/pwn/README.local.md' },
+          { from: 'pwn/attachments/exploit.py', to: 'archive/pwn/attachments/exploit.py' },
+          { from: 'pwn/rop/node.json', to: 'archive/pwn/rop/node.json' },
+          { from: 'pwn/rop/canvas.json', to: 'archive/pwn/rop/canvas.json' },
+          {
+            from: 'pwn/rop/assets/cafebabe00001111.webp',
+            to: 'archive/pwn/rop/assets/cafebabe00001111.webp',
+          },
+          { from: 'pwn/rop/gadgets.txt', to: 'archive/pwn/rop/gadgets.txt' },
+        ]),
+      )
+      expect(moved.changeset.upserts).toEqual([
+        {
+          path: 'archive/pwn/node.json',
+          content: serializeNodeJson(moved.state.nodes[idRoot]!.meta),
+        },
+      ])
+
+      // Verify Changeset semantics: deletes -> moves -> upserts, and upserts overwrites moved node.json
+      const repoAfterMove = applyChangeset(initialRepo, moved.changeset)
+      expect(repoAfterMove).toEqual(stateToVirtualRepo(moved.state))
+      expect(repoAfterMove.get('archive/pwn/node.json')).toBe(
+        serializeNodeJson(moved.state.nodes[idRoot]!.meta),
+      )
+
+      // Delete moved subtree and verify all orphan assets and extraFiles are listed in deletes
+      const deleted = deleteNode(moved.state, { nodeId: idRoot })
+      expect(deleted.ok).toBe(true)
+      expect(deleted.changeset.deletes).toEqual([
+        'archive/pwn/README.local.md',
+        'archive/pwn/assets/deadbeef12345678.png',
+        'archive/pwn/assets/orphan-note-diagram.svg',
+        'archive/pwn/attachments/exploit.py',
+        'archive/pwn/node.json',
+        'archive/pwn/rop/assets/cafebabe00001111.webp',
+        'archive/pwn/rop/canvas.json',
+        'archive/pwn/rop/gadgets.txt',
+        'archive/pwn/rop/node.json',
+      ])
+      expect(applyChangeset(repoAfterMove, deleted.changeset)).toEqual(
+        stateToVirtualRepo(deleted.state),
+      )
+    })
+
+    it('rejects moveNode and deleteNode on valid parents when subtree contains corrupt or newer-schema descendants', () => {
+      const idParentWithCorrupt = makeUlid(10)
+      const idParentWithNewer = makeUlid(11)
+      const idDest = makeUlid(12)
+
+      const built = buildTree([
+        { path: 'group-corrupt', node: makeNodeMeta(idParentWithCorrupt, 'Group Corrupt', 'a0') },
+        {
+          path: 'group-corrupt/bad-child',
+          parseResult: {
+            status: 'corrupt',
+            errors: [{ path: 'title', code: 'too_small', message: 'Empty title' }],
+          },
+          hasCanvas: true,
+        },
+        { path: 'group-newer', node: makeNodeMeta(idParentWithNewer, 'Group Newer', 'a1') },
+        {
+          path: 'group-newer/future-child',
+          parseResult: {
+            status: 'newer-schema',
+            schemaVersion: 2,
+          },
+          hasCanvas: true,
+        },
+        { path: 'dest', node: makeNodeMeta(idDest, 'Destination', 'a2') },
+      ])
+
+      const moveCorruptParent = moveNode(built.state, {
+        nodeId: idParentWithCorrupt,
+        newParentId: idDest,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(moveCorruptParent.ok).toBe(false)
+      if (!moveCorruptParent.ok) {
+        expect(moveCorruptParent.reason).toBe('corrupt_node')
+        expect(moveCorruptParent.message).toContain('group-corrupt/bad-child')
+      }
+      expect(moveCorruptParent.state).toBe(built.state)
+      expect(moveCorruptParent.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+
+      const deleteCorruptParent = deleteNode(built.state, { nodeId: idParentWithCorrupt })
+      expect(deleteCorruptParent.ok).toBe(false)
+      if (!deleteCorruptParent.ok) {
+        expect(deleteCorruptParent.reason).toBe('corrupt_node')
+        expect(deleteCorruptParent.message).toContain('group-corrupt/bad-child')
+      }
+      expect(deleteCorruptParent.state).toBe(built.state)
+      expect(deleteCorruptParent.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+
+      const moveNewerParent = moveNode(built.state, {
+        nodeId: idParentWithNewer,
+        newParentId: idDest,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(moveNewerParent.ok).toBe(false)
+      if (!moveNewerParent.ok) {
+        expect(moveNewerParent.reason).toBe('newer_schema_node')
+        expect(moveNewerParent.message).toContain('v2')
+        expect(moveNewerParent.message).toContain('group-newer/future-child')
+      }
+      expect(moveNewerParent.state).toBe(built.state)
+      expect(moveNewerParent.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+
+      const deleteNewerParent = deleteNode(built.state, { nodeId: idParentWithNewer })
+      expect(deleteNewerParent.ok).toBe(false)
+      if (!deleteNewerParent.ok) {
+        expect(deleteNewerParent.reason).toBe('newer_schema_node')
+        expect(deleteNewerParent.message).toContain('v2')
+        expect(deleteNewerParent.message).toContain('group-newer/future-child')
+      }
+      expect(deleteNewerParent.state).toBe(built.state)
+      expect(deleteNewerParent.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+    })
   })
 
   describe('model-based property test with fast-check', () => {
@@ -595,6 +765,7 @@ describe('domain/tree [T1.3]', () => {
               ),
               hasCanvas: true,
               assets: ['assets/abcdef0123456789.png'],
+              extraFiles: ['notes.local.txt'],
             },
           ])
           let state = initialBuilt.state
@@ -640,8 +811,20 @@ describe('domain/tree [T1.3]', () => {
                 op.direction === 'earlier'
                   ? Math.max(0, prevIdx - 1)
                   : Math.min(prevSiblings.length - 1, prevIdx + 1)
+              const withoutSelf = prevSiblings.filter((id) => id !== nodeId)
+              const prevNeighbor =
+                expectedIdx > 0 ? prevState.nodes[withoutSelf[expectedIdx - 1]!]! : null
+              const nextNeighbor =
+                expectedIdx < withoutSelf.length
+                  ? prevState.nodes[withoutSelf[expectedIdx]!]!
+                  : null
+              const hasStrictOrderGap =
+                !prevNeighbor ||
+                !nextNeighbor ||
+                prevNeighbor.meta.order !== nextNeighbor.meta.order ||
+                (prevNeighbor.id < nodeId && nodeId < nextNeighbor.id)
               result = reorderNode(state, { nodeId, direction: op.direction, now })
-              if (result.ok) {
+              if (result.ok && hasStrictOrderGap) {
                 const nextSiblings =
                   target.parentId === null
                     ? result.state.rootIds

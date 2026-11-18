@@ -12,6 +12,22 @@ export interface FileMove {
   to: string
 }
 
+/**
+ * Atomic set of repository file mutations returned by pure tree operations.
+ *
+ * Semantik penerapan `Changeset` oleh applier (`storage/` / `sync/`):
+ * 1. **Urutan eksekusi wajib:** terapkan `deletes` terlebih dahulu, lalu `moves`,
+ *    lalu `upserts` (`deletes` -> `moves` -> `upserts`). Saat menerapkan `moves`,
+ *    baca semua sumber `from` sebelum menulis ke `to` agar pemindahan subtree atau
+ *    pertukaran path di dalam satu changeset tidak saling menimpa.
+ * 2. **Path yang sama di `moves` dan `upserts`:** path target yang sama **boleh**
+ *    muncul sekaligus sebagai `moves[i].to` dan `upserts[j].path` — misalnya pada
+ *    `moveNode`, di mana `<oldPath>/node.json -> <newPath>/node.json` dicatat di
+ *    `moves` (memindahkan entri file) dan `<newPath>/node.json` juga dicatat di
+ *    `upserts` dengan `order` dan `updatedAt` baru.
+ * 3. **Isi `upserts` menang:** karena `upserts` selalu dijalankan terakhir, isi
+ *    file di `upserts` menimpa dan mengalahkan isi hasil `moves` pada path yang sama.
+ */
 export interface Changeset {
   upserts: FileUpsert[]
   moves: FileMove[]
@@ -48,7 +64,10 @@ export interface TreeNode {
   corruptErrors?: SchemaIssue[]
   newerSchemaVersion?: number
   childrenIds: string[]
+  /** All files inside `<nodePath>/assets/`, including orphan assets not referenced by `canvas.json`. */
   assets: string[]
+  /** Unreferenced or unknown relative files inside `<nodePath>/` (outside `node.json`, `canvas.json`, and `assets/`). */
+  extraFiles: string[]
   hasCanvas: boolean
 }
 
@@ -64,7 +83,10 @@ export interface TreeBuildEntry {
   corrupt?: boolean
   corruptErrors?: SchemaIssue[]
   newerSchemaVersion?: number
+  /** Files under `<nodePath>/assets/` supplied by the repository scanner (including orphan assets). */
   assets?: string[]
+  /** Other unknown files directly or nested under `<nodePath>/` supplied by the repository scanner. */
+  extraFiles?: string[]
   hasCanvas?: boolean
 }
 
@@ -82,6 +104,7 @@ export type TreeOperationErrorReason =
   | 'not_found'
   | 'parent_not_found'
   | 'corrupt_node'
+  | 'newer_schema_node'
   | 'cycle_detected'
   | 'invalid_title'
   | 'invalid_timestamp'

@@ -122,25 +122,78 @@ function isDescendant(state: TreeState, ancestorId: string, candidateId: string)
   return false
 }
 
-function hasCorruptInSubtree(state: TreeState, rootId: string): boolean {
+function findBlockingNodeInSubtree(state: TreeState, rootId: string): TreeNode | null {
   for (const id of collectSubtreeIds(state, rootId)) {
-    if (state.nodes[id]?.corrupt) {
-      return true
+    const node = state.nodes[id]
+    if (!node) continue
+    if (node.corrupt || node.newerSchemaVersion !== undefined) {
+      return node
     }
   }
-  return false
+  return null
 }
 
-function normalizeAssets(assets: readonly string[] | undefined): string[] {
-  if (!assets || assets.length === 0) return []
-  const unique = new Set<string>()
-  for (const raw of assets) {
-    const clean = raw.replace(/^\/+|\/+$/g, '')
-    if (clean.length > 0) {
-      unique.add(clean.startsWith('assets/') ? clean : `assets/${clean}`)
+function failReadOnlyNode(
+  state: TreeState,
+  action: 'create child inside' | 'rename' | 'move' | 'move into' | 'reorder' | 'delete',
+  target: TreeNode,
+  blocker: TreeNode,
+): TreeOperationResult {
+  const isSelf = blocker.id === target.id
+  if (blocker.newerSchemaVersion !== undefined) {
+    const msg = isSelf
+      ? `Cannot ${action} read-only node "${target.path}" (uses newer schema v${blocker.newerSchemaVersion}).`
+      : `Cannot ${action} "${target.path}" because descendant "${blocker.path}" uses newer schema v${blocker.newerSchemaVersion}.`
+    return fail(state, 'newer_schema_node', msg)
+  }
+  const msg = isSelf
+    ? `Cannot ${action} corrupt read-only node "${target.path}".`
+    : `Cannot ${action} "${target.path}" because descendant "${blocker.path}" is corrupt.`
+  return fail(state, 'corrupt_node', msg)
+}
+
+function cleanRelativeFilePath(raw: string): string {
+  return raw.replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, '')
+}
+
+function normalizeNodeFiles(
+  rawAssets: readonly string[] | undefined,
+  rawExtraFiles: readonly string[] | undefined,
+): { assets: string[]; extraFiles: string[] } {
+  const assetSet = new Set<string>()
+  const extraSet = new Set<string>()
+
+  if (rawAssets) {
+    for (const raw of rawAssets) {
+      const clean = cleanRelativeFilePath(raw)
+      if (clean.length === 0 || clean === 'assets') continue
+      assetSet.add(clean.startsWith('assets/') ? clean : `assets/${clean}`)
     }
   }
-  return [...unique].sort(compareLexicographical)
+
+  if (rawExtraFiles) {
+    for (const raw of rawExtraFiles) {
+      const clean = cleanRelativeFilePath(raw)
+      if (
+        clean.length === 0 ||
+        clean === 'node.json' ||
+        clean === 'canvas.json' ||
+        clean === 'assets'
+      ) {
+        continue
+      }
+      if (clean.startsWith('assets/')) {
+        assetSet.add(clean)
+      } else {
+        extraSet.add(clean)
+      }
+    }
+  }
+
+  return {
+    assets: [...assetSet].sort(compareLexicographical),
+    extraFiles: [...extraSet].sort(compareLexicographical),
+  }
 }
 
 function isValidTimestamp(now: string): boolean {
@@ -312,6 +365,8 @@ export function buildTree(
       usedIds.add(nodeId)
     }
 
+    const normalizedFiles = normalizeNodeFiles(item.entry.assets, item.entry.extraFiles)
+
     pathToId.set(item.path, nodeId)
     nodes[nodeId] = {
       id: nodeId,
@@ -321,7 +376,8 @@ export function buildTree(
       meta,
       corrupt: false,
       childrenIds: [],
-      assets: normalizeAssets(item.entry.assets),
+      assets: normalizedFiles.assets,
+      extraFiles: normalizedFiles.extraFiles,
       hasCanvas: item.entry.hasCanvas ?? false,
     }
   }
@@ -334,6 +390,8 @@ export function buildTree(
       nodeId = `${nodeId}_dup`
     }
     usedIds.add(nodeId)
+
+    const normalizedFiles = normalizeNodeFiles(item.entry.assets, item.entry.extraFiles)
 
     pathToId.set(item.path, nodeId)
     nodes[nodeId] = {
@@ -348,7 +406,8 @@ export function buildTree(
         ? { newerSchemaVersion: item.newerSchemaVersion }
         : {}),
       childrenIds: [],
-      assets: normalizeAssets(item.entry.assets),
+      assets: normalizedFiles.assets,
+      extraFiles: normalizedFiles.extraFiles,
       hasCanvas: item.entry.hasCanvas ?? false,
     }
   }
@@ -402,8 +461,8 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
     if (!parent) {
       return fail(state, 'parent_not_found', `Parent node "${input.parentId}" does not exist.`)
     }
-    if (parent.corrupt) {
-      return fail(state, 'corrupt_node', 'Cannot create a child inside a corrupt node.')
+    if (parent.corrupt || parent.newerSchemaVersion !== undefined) {
+      return failReadOnlyNode(state, 'create child inside', parent, parent)
     }
     parentPath = parent.path
   }
@@ -444,6 +503,7 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
     corrupt: false,
     childrenIds: [],
     assets: [],
+    extraFiles: [],
     hasCanvas: true,
   }
 
@@ -482,8 +542,8 @@ export function renameNode(state: TreeState, input: RenameNodeInput): TreeOperat
   if (!existing) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
   }
-  if (existing.corrupt) {
-    return fail(state, 'corrupt_node', 'Cannot rename a corrupt or read-only node.')
+  if (existing.corrupt || existing.newerSchemaVersion !== undefined) {
+    return failReadOnlyNode(state, 'rename', existing, existing)
   }
   if (input.title.length < 1 || input.title.length > 200) {
     return fail(state, 'invalid_title', 'Node title must be between 1 and 200 characters.')
@@ -521,8 +581,9 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
   }
-  if (target.corrupt || hasCorruptInSubtree(state, input.nodeId)) {
-    return fail(state, 'corrupt_node', 'Cannot move a corrupt node or subtree containing one.')
+  const subtreeBlocker = findBlockingNodeInSubtree(state, input.nodeId)
+  if (subtreeBlocker) {
+    return failReadOnlyNode(state, 'move', target, subtreeBlocker)
   }
   if (!isValidTimestamp(input.now)) {
     return fail(state, 'invalid_timestamp', 'Timestamp must be a valid ISO 8601 UTC string.')
@@ -534,8 +595,8 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
     if (!newParent) {
       return fail(state, 'parent_not_found', `Destination parent "${input.newParentId}" not found.`)
     }
-    if (newParent.corrupt) {
-      return fail(state, 'corrupt_node', 'Cannot move a node into a corrupt parent.')
+    if (newParent.corrupt || newParent.newerSchemaVersion !== undefined) {
+      return failReadOnlyNode(state, 'move into', newParent, newParent)
     }
     if (
       input.newParentId === input.nodeId ||
@@ -633,6 +694,12 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
           to: `${curr.newPath}/${asset}`,
         })
       }
+      for (const extraFile of currNode.extraFiles) {
+        moves.push({
+          from: `${curr.oldPath}/${extraFile}`,
+          to: `${curr.newPath}/${extraFile}`,
+        })
+      }
     }
 
     for (const childId of currNode.childrenIds) {
@@ -664,8 +731,8 @@ export function reorderNode(state: TreeState, input: ReorderNodeInput): TreeOper
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
   }
-  if (target.corrupt) {
-    return fail(state, 'corrupt_node', 'Cannot reorder a corrupt or read-only node.')
+  if (target.corrupt || target.newerSchemaVersion !== undefined) {
+    return failReadOnlyNode(state, 'reorder', target, target)
   }
   if (!isValidTimestamp(input.now)) {
     return fail(state, 'invalid_timestamp', 'Timestamp must be a valid ISO 8601 UTC string.')
@@ -747,8 +814,9 @@ export function deleteNode(state: TreeState, input: DeleteNodeInput): TreeOperat
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
   }
-  if (target.corrupt || hasCorruptInSubtree(state, input.nodeId)) {
-    return fail(state, 'corrupt_node', 'Cannot delete a corrupt node or subtree containing one.')
+  const subtreeBlocker = findBlockingNodeInSubtree(state, input.nodeId)
+  if (subtreeBlocker) {
+    return failReadOnlyNode(state, 'delete', target, subtreeBlocker)
   }
 
   const subtreeIds = collectSubtreeIds(state, input.nodeId)
@@ -761,6 +829,9 @@ export function deleteNode(state: TreeState, input: DeleteNodeInput): TreeOperat
     }
     for (const asset of node.assets) {
       deletes.push(`${node.path}/${asset}`)
+    }
+    for (const extraFile of node.extraFiles) {
+      deletes.push(`${node.path}/${extraFile}`)
     }
   }
   deletes.sort(compareLexicographical)
