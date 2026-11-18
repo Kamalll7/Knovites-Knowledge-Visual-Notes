@@ -1,0 +1,21 @@
+{
+  "color": null,
+  "createdAt": "2026-11-16T10:00:00Z",
+  "id": "01JC8ZQ4M7X2K9T5VB3N6D8RHW",
+  "links": [
+    {
+      "label": "mirip dengan",
+      "to": "01JC8ZR1B2C3D4E5F6G7H8J9KM"
+    }
+  ],
+  "order": "a1",
+  "schema": 1,
+  "status": "practiced",
+  "tags": [
+    "pwn",
+    "stack"
+  ],
+  "title": "ret2win",
+  "type": "technique",
+  "updatedAt": "2026-11-16T10:00:00Z"
+}

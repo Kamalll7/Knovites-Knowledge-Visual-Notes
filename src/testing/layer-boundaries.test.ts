@@ -141,4 +141,30 @@ describe('ESLint layer boundaries and hard rules', () => {
     const explicitAny = await lintSnippet('src/domain/any.ts', 'export const x: any = 1\n')
     expect(explicitAny.some((m) => m.ruleId === '@typescript-eslint/no-explicit-any')).toBe(true)
   })
+
+  it('allows only zod, fast-check, and vitest as external dependencies in domain/', async () => {
+    const allowedDomainImports = await lintSnippet(
+      'src/domain/schema/sample.test.ts',
+      [
+        "import { z } from 'zod'",
+        "import fc from 'fast-check'",
+        "import { describe } from 'vitest'",
+        'export { z, fc, describe }',
+        '',
+      ].join('\n'),
+    )
+    expect(allowedDomainImports).toEqual([])
+
+    const disallowedExternal = await lintSnippet(
+      'src/domain/schema/sample.ts',
+      "import { clsx } from 'clsx'\nexport const c = clsx\n",
+    )
+    expect(disallowedExternal.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+
+    const disallowedNodeCore = await lintSnippet(
+      'src/domain/schema/sample.ts',
+      "import fs from 'node:fs'\nexport const f = fs\n",
+    )
+    expect(disallowedNodeCore.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+  })
 })

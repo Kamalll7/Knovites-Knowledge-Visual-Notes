@@ -1,0 +1,95 @@
+{
+  "elements": {
+    "e_8f2a1c0d": {
+      "content": {
+        "content": [
+          {
+            "attrs": {
+              "level": 2
+            },
+            "content": [
+              {
+                "text": "Return to win",
+                "type": "text"
+              }
+            ],
+            "type": "heading"
+          },
+          {
+            "content": [
+              {
+                "marks": [
+                  {
+                    "type": "bold"
+                  },
+                  {
+                    "attrs": {
+                      "href": "https://example.com/ret2win"
+                    },
+                    "type": "link"
+                  }
+                ],
+                "text": "Reference",
+                "type": "text"
+              },
+              {
+                "text": " and ",
+                "type": "text"
+              },
+              {
+                "marks": [
+                  {
+                    "attrs": {
+                      "href": "knovites:01JC8ZR1B2C3D4E5F6G7H8J9KM"
+                    },
+                    "type": "link"
+                  }
+                ],
+                "text": "ROP Chain",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          },
+          {
+            "attrs": {
+              "language": "python"
+            },
+            "content": [
+              {
+                "text": "payload = b'A' * 72",
+                "type": "text"
+              }
+            ],
+            "type": "codeBlock"
+          }
+        ],
+        "type": "doc"
+      },
+      "style": {
+        "bg": null,
+        "border": null
+      },
+      "type": "text",
+      "updatedAt": "2026-11-16T10:05:00Z",
+      "w": 320,
+      "x": 120,
+      "y": 80,
+      "z": "a0"
+    },
+    "e_91bc40aa": {
+      "alt": "stack layout sebelum overflow",
+      "asset": "assets/3fa9c1d2e4b5a671.webp",
+      "h": 260,
+      "nh": 1040,
+      "nw": 1600,
+      "type": "image",
+      "updatedAt": "2026-11-16T10:07:00Z",
+      "w": 400,
+      "x": 480,
+      "y": 60,
+      "z": "a1"
+    }
+  },
+  "schema": 1
+}

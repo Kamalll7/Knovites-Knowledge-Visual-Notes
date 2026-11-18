@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "elements": {
+    "e_8f2a1c0d": {
+      "type": "text",
+      "x": 120.6,
+      "y": 80,
+      "w": 320,
+      "z": "a0",
+      "style": { "bg": null, "border": null },
+      "content": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": { "level": 4 },
+            "content": [{ "type": "text", "text": "Disallowed heading" }]
+          },
+          {
+            "type": "script",
+            "content": [{ "type": "text", "text": "alert(1)" }]
+          },
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "XSS link",
+                "marks": [
+                  { "type": "link", "attrs": { "href": "javascript:alert(1)" } },
+                  { "type": "unknownMark" },
+                  { "type": "bold", "attrs": { "extra": "drop-me" } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "updatedAt": "2026-11-16T10:05:00Z"
+    }
+  }
+}

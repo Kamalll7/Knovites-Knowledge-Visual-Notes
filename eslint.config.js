@@ -7,6 +7,8 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
+const DOMAIN_ALLOWED_EXTERNALS = ['zod', 'fast-check', 'vitest']
+
 export default defineConfig([
   globalIgnores(['dist', 'dist-ssr', 'coverage', 'playwright-report', 'test-results']),
   {
@@ -86,71 +88,115 @@ export default defineConfig([
       'boundaries/dependencies': [
         'error',
         {
+          checkAllOrigins: true,
           default: 'disallow',
           policies: [
             // Every internal module can import within its own layer (except cross-feature)
             {
               from: { element: { type: 'domain' } },
-              allow: { to: { element: { type: 'domain' } } },
+              allow: [
+                { to: { element: { type: 'domain' } } },
+                {
+                  to: {
+                    module: { origin: 'external', source: DOMAIN_ALLOWED_EXTERNALS },
+                  },
+                },
+              ],
             },
             {
               from: { element: { type: 'storage' } },
-              allow: { to: { element: { types: ['storage', 'domain'] } } },
+              allow: [
+                { to: { element: { types: ['storage', 'domain'] } } },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'sync' } },
-              allow: { to: { element: { types: ['sync', 'storage', 'domain'] } } },
+              allow: [
+                { to: { element: { types: ['sync', 'storage', 'domain'] } } },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'ui' } },
-              allow: { to: { element: { types: ['ui', 'i18n', 'domain'] } } },
+              allow: [
+                { to: { element: { types: ['ui', 'i18n', 'domain'] } } },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'i18n' } },
-              allow: { to: { element: { type: 'i18n' } } },
+              allow: [
+                { to: { element: { type: 'i18n' } } },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'feature' } },
-              allow: {
-                to: {
-                  element: [
-                    {
-                      type: 'feature',
-                      captured: { feature: '{{ from.element.captured.feature }}' },
-                    },
-                    { types: ['app', 'domain', 'ui', 'i18n'] },
-                  ],
+              allow: [
+                {
+                  to: {
+                    element: [
+                      {
+                        type: 'feature',
+                        captured: { feature: '{{ from.element.captured.feature }}' },
+                      },
+                      { types: ['app', 'domain', 'ui', 'i18n'] },
+                    ],
+                  },
                 },
-              },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'app' } },
-              allow: {
-                to: {
-                  element: {
-                    types: ['app', 'domain', 'storage', 'sync', 'feature', 'ui', 'i18n'],
+              allow: [
+                {
+                  to: {
+                    element: {
+                      types: ['app', 'domain', 'storage', 'sync', 'feature', 'ui', 'i18n'],
+                    },
                   },
                 },
-              },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { file: { categories: 'entry' } },
-              allow: { to: { element: { types: ['app', 'ui'] } } },
+              allow: [
+                { to: { element: { types: ['app', 'ui'] } } },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
             {
               from: { element: { type: 'testing' } },
-              allow: {
-                to: {
-                  element: {
-                    types: ['testing', 'domain', 'storage', 'sync', 'app', 'feature', 'ui', 'i18n'],
+              allow: [
+                {
+                  to: {
+                    element: {
+                      types: [
+                        'testing',
+                        'domain',
+                        'storage',
+                        'sync',
+                        'app',
+                        'feature',
+                        'ui',
+                        'i18n',
+                      ],
+                    },
                   },
                 },
-              },
+                { to: { module: { origin: ['external', 'core'] } } },
+              ],
             },
-            // Test files across src/ may import testing helpers/fixtures
+            // Test files across src/ may import testing helpers/fixtures and Node core modules
             {
               from: { file: { categories: 'test' } },
-              allow: { to: { element: { type: 'testing' } } },
+              allow: [
+                { to: { element: { type: 'testing' } } },
+                { to: { module: { origin: 'core' } } },
+              ],
             },
             // Non-test files may never import test files
             {

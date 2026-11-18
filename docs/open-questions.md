@@ -36,9 +36,24 @@ Format entri:
 - Keputusan sementara (opsi paling sederhana): Memakai `localStorage` (`knovites.theme`) di `ThemeProvider` agar reload langsung memulihkan tema tanpa kilatan warna salah (FOUC) dan tanpa menunggu IndexedDB asinkron. Tidak menyimpan token atau isi catatan di `localStorage` (§7.3 tetap terpenuhi).
 - Perlu keputusan pemilik: tidak (kecuali ingin memindahkan ke Dexie di M2 dengan tetap menjaga sinkronisasi anti-FOUC).
 
+### 2026-11-18 — Detail aturan skema & sanitizer TipTap (`T1.1`)
+- Task: T1.1 / `data-format.md` §5.3–§5.4
+- Masalah atau ambiguitas:
+  1. Ketika mark `highlight` atau `textStyle` memiliki atribut tidak valid (mis. `color: "red"` atau atribut ekstra), apakah mark-nya dipertahankan tanpa atribut tersebut atau ikut dibuang?
+  2. Apakah node `doc` boleh bersarang di dalam `doc.content`, dan apakah elemen `text` dengan properti `h` harus ditolak?
+  3. Bagaimana batas string `order` / `z` (fractional index) divalidasi pada tahap skema?
+- Opsi yang dipertimbangkan: Menolak seluruh elemen atau mempertahankan mark yang whitelisted sambil membuang atribut tak validnya.
+- Keputusan sementara (opsi paling sederhana):
+  1. Atribut tidak valid pada `bold`/`italic`/`underline`/`strike`/`code`/`textStyle`/`highlight` dibuang & dicatat sebagai `issue` sementara mark whitelisted-nya tetap dipertahankan (khusus `link`, mark dibuang jika `href` hilang/tidak valid karena `href` wajib).
+  2. Node `doc` hanya boleh di root (`doc.content` tidak boleh berisi `doc` bersarang); elemen `text` yang menyertakan `h` ditolak sebagai `corrupt` karena tinggi tidak disimpan (§5.4).
+  3. `order`/`z` divalidasi sebagai string non-kosong tanpa spasi (`/^\S+$/`), validasi urutan fractional-indexing lebih lanjut ditangani di `domain/tree` (T1.3).
+- Perlu keputusan pemilik: tidak
+
 ### Perbedaan PRD dan dokumentasi resmi
 
 Catat di sini setiap kali dokumentasi resmi berbeda dari PRD (nama API, parameter, batas, perilaku). Format: apa kata PRD, apa kata dokumentasi (dengan tautan dan versi), dan apa yang dilakukan.
+
+- **2026-11-18 (T1.1) — `zod@4.6.7` (Zod v4 API):** PRD §3 menyebut `Zod`. Pada Zod v4 (`4.6.7`), `z.iso.datetime()` menggantikan `z.string().datetime()` (dan otomatis mensyaratkan UTC `Z`), `z.strictObject()` menggantikan `.strict()`, `z.record(key, value)` mewajibkan 2 argumen, dan `ZodError` memakai `.issues` (bukan `.errors`). **Tindakan:** Memakai API Zod v4 sesuai paket terpasang.
 
 - **2026-11-18 (T0.4) — `react-router@8.5.1` & `@fontsource-variable/inter@5.3.0`:** Pada React Router v7/v8, komponen router DOM (`HashRouter`, `Routes`, `Route`, `NavLink`, `Link`, `useParams`, `useLocation`) diekspor langsung dari paket `react-router` tanpa memerlukan `react-router-dom`. Untuk font UI `Inter` (`spec-ui-nfr.md` §8.1), dipakai `@fontsource-variable/inter` (self-hosted, menggantikan `@fontsource-variable/geist` bawaan inisialisasi `shadcn`).
 - **2026-11-18 (T0.3) — Advisory `GHSA-fc5q-39xc-vjpf` (`picomatch <=4.0.7`, tanpa versi patched):** `pnpm audit` melaporkan 1 advisory `high` pada `picomatch@4.0.7` (dependensi transitif dev-only di `vite`, `vitest`, `typescript-eslint`, `eslint-plugin-boundaries`) dengan `Patched versions: None` (4.0.7 adalah versi terbaru). `pnpm audit --prod` bersih (0 kerentanan). **Tindakan:** CI menjalankan `pnpm audit --prod` (tanpa pengecualian) dan `pnpm audit --ignore GHSA-fc5q-39xc-vjpf` sampai `picomatch` merilis versi perbaikan.

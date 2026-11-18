@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "invalid-ulid",
+  "title": "Broken",
+  "type": "concept",
+  "status": "none",
+  "tags": [],
+  "order": "a0",
+  "color": null,
+  "links": [],
+  "createdAt": "2026-11-16T10:00:00Z",
+  "updatedAt": "2026-11-16T10:00:00Z"
+}

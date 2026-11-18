@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "elements": {
+    "e_91bc40aa": {
+      "type": "image",
+      "x": 480,
+      "y": 60,
+      "w": 400,
+      "h": 260,
+      "z": "a1",
+      "asset": "../outside/3fa9c1d2e4b5a671.svg",
+      "nh": 1040,
+      "updatedAt": "2026-11-16T10:07:00Z"
+    }
+  }
+}
