@@ -45,7 +45,7 @@ Format entri:
 - Opsi yang dipertimbangkan: Menolak seluruh elemen atau mempertahankan mark yang whitelisted sambil membuang atribut tak validnya.
 - Keputusan sementara (opsi paling sederhana):
   1. Atribut tidak valid pada `bold`/`italic`/`underline`/`strike`/`code`/`textStyle`/`highlight` dibuang & dicatat sebagai `issue` sementara mark whitelisted-nya tetap dipertahankan (khusus `link`, mark dibuang jika `href` hilang/tidak valid karena `href` wajib).
-  2. Node `doc` hanya boleh di root (`doc.content` tidak boleh berisi `doc` bersarang); elemen `text` yang menyertakan `h` ditolak sebagai `corrupt` karena tinggi tidak disimpan (§5.4).
+  2. Node `doc` hanya boleh di root (`doc.content` tidak boleh berisi `doc` bersarang); elemen `text` yang menyertakan `h` dipulihkan dengan membuang `h` dan mencatat `issue` (`ignored_text_height`, konsisten dengan prinsip §5.4/pemulihan non-fatal), sedangkan key tak dikenal lain pada elemen tetap membuat file `corrupt`.
   3. `order`/`z` divalidasi sebagai string non-kosong tanpa spasi (`/^\S+$/`), validasi urutan fractional-indexing lebih lanjut ditangani di `domain/tree` (T1.3).
 - Perlu keputusan pemilik: tidak
 

@@ -81,4 +81,3 @@ export function serializeCanvasJson(doc: CanvasJson): string {
     elements: normalizedElements,
   })
 }
-

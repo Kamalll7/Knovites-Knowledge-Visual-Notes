@@ -7,7 +7,8 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-const DOMAIN_ALLOWED_EXTERNALS = ['zod', 'fast-check', 'vitest']
+const DOMAIN_ALLOWED_EXTERNALS = ['zod']
+const DOMAIN_TEST_ALLOWED_EXTERNALS = ['fast-check', 'vitest']
 
 export default defineConfig([
   globalIgnores(['dist', 'dist-ssr', 'coverage', 'playwright-report', 'test-results']),
@@ -50,6 +51,7 @@ export default defineConfig([
       ],
       'boundaries/files': [
         { pattern: 'src/main.tsx', category: 'entry' },
+        { pattern: 'src/domain/**/*.test.ts', category: 'domain-test' },
         { pattern: 'src/**/*.{test,spec}.{ts,tsx}', category: 'test' },
       ],
     },
@@ -102,6 +104,14 @@ export default defineConfig([
                   },
                 },
               ],
+            },
+            {
+              from: { element: { type: 'domain' }, file: { categories: 'domain-test' } },
+              allow: {
+                to: {
+                  module: { origin: 'external', source: DOMAIN_TEST_ALLOWED_EXTERNALS },
+                },
+              },
             },
             {
               from: { element: { type: 'storage' } },

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import {
   CURRENT_SCHEMA_VERSION,
@@ -291,17 +292,38 @@ describe('schema parsers and fixtures [T1.1]', () => {
         ).toBe('corrupt')
       }
 
+      for (const badSize of [0, 0.4, -0.4, -0.6, -10]) {
+        expect(
+          parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ w: badSize }) })).status,
+        ).toBe('corrupt')
+        expect(
+          parseCanvasJson(makeValidCanvas({ e_91bc40aa: makeImageElement({ w: badSize }) })).status,
+        ).toBe('corrupt')
+        expect(
+          parseCanvasJson(makeValidCanvas({ e_91bc40aa: makeImageElement({ h: badSize }) })).status,
+        ).toBe('corrupt')
+      }
+
+      const textWithHeight = parseCanvasJson(
+        makeValidCanvas({ e_8f2a1c0d: makeTextElement({ h: 100 }) }),
+      )
+      expect(textWithHeight.status).toBe('ok')
+      if (textWithHeight.status === 'ok') {
+        expect(textWithHeight.issues).toEqual([
+          expect.objectContaining({
+            path: 'elements.e_8f2a1c0d.h',
+            code: 'ignored_text_height',
+          }),
+        ])
+        const el = textWithHeight.data.elements['e_8f2a1c0d']
+        expect(el).toBeDefined()
+        if (el) {
+          expect('h' in el).toBe(false)
+        }
+      }
+
       expect(
-        parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ w: 0 }) })).status,
-      ).toBe('corrupt')
-      expect(
-        parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ w: 0.4 }) })).status,
-      ).toBe('corrupt')
-      expect(
-        parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ h: 100 }) })).status,
-      ).toBe('corrupt')
-      expect(
-        parseCanvasJson(makeValidCanvas({ e_91bc40aa: makeImageElement({ h: 0 }) })).status,
+        parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ extraKey: 1 }) })).status,
       ).toBe('corrupt')
     })
 
@@ -547,6 +569,37 @@ describe('schema parsers and fixtures [T1.1]', () => {
           })
         }
       }
+    })
+  })
+
+  describe('fuzz safety across all three parsers', () => {
+    it('never throws and always returns ok, corrupt, or newer-schema for arbitrary jsonValue and non-object inputs', () => {
+      const fuzzInputArb = fc.oneof(
+        fc.jsonValue(),
+        fc.json(),
+        fc.string(),
+        fc.integer(),
+        fc.double(),
+        fc.boolean(),
+        fc.constant(null),
+        fc.constant(undefined),
+        fc.anything(),
+      )
+
+      const validStatuses = new Set(['ok', 'corrupt', 'newer-schema'])
+
+      fc.assert(
+        fc.property(fuzzInputArb, (value) => {
+          const r1 = parseKnovitesJson(value)
+          const r2 = parseNodeJson(value)
+          const r3 = parseCanvasJson(value)
+
+          expect(validStatuses.has(r1.status)).toBe(true)
+          expect(validStatuses.has(r2.status)).toBe(true)
+          expect(validStatuses.has(r3.status)).toBe(true)
+        }),
+        { numRuns: 300 },
+      )
     })
   })
 })

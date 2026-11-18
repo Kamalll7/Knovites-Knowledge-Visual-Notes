@@ -65,6 +65,7 @@ const rawCanvasTextElementSchema = z.strictObject({
   x: finiteNumberSchema,
   y: finiteNumberSchema,
   w: finiteNumberSchema,
+  h: z.unknown().optional(),
   z: orderStringSchema,
   rotation: finiteNumberSchema.optional(),
   style: canvasTextStyleSchema,
@@ -255,6 +256,13 @@ export function parseCanvasJson(input: unknown): ParseResult<CanvasJson> {
         : undefined
 
     if (rawEl.type === 'text') {
+      if ('h' in rawEl && rawEl.h !== undefined) {
+        issues.push({
+          path: `${basePath}.h`,
+          code: 'ignored_text_height',
+          message: 'Ignored height "h" on text element because text height is auto-derived.',
+        })
+      }
       const cleanEl: CanvasTextElement = {
         type: 'text',
         x,

@@ -142,8 +142,30 @@ describe('ESLint layer boundaries and hard rules', () => {
     expect(explicitAny.some((m) => m.ruleId === '@typescript-eslint/no-explicit-any')).toBe(true)
   })
 
-  it('allows only zod, fast-check, and vitest as external dependencies in domain/', async () => {
-    const allowedDomainImports = await lintSnippet(
+  it('allows zod across domain/ and restricts fast-check/vitest to domain test files', async () => {
+    const allowedInDomainProd = await lintSnippet(
+      'src/domain/schema/sample.ts',
+      "import { z } from 'zod'\nexport { z }\n",
+    )
+    expect(allowedInDomainProd).toEqual([])
+
+    const disallowedVitestInDomainProd = await lintSnippet(
+      'src/domain/schema/sample.ts',
+      "import { describe } from 'vitest'\nexport { describe }\n",
+    )
+    expect(disallowedVitestInDomainProd.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(
+      true,
+    )
+
+    const disallowedFastCheckInDomainProd = await lintSnippet(
+      'src/domain/schema/sample.ts',
+      "import fc from 'fast-check'\nexport { fc }\n",
+    )
+    expect(
+      disallowedFastCheckInDomainProd.some((m) => m.ruleId === 'boundaries/dependencies'),
+    ).toBe(true)
+
+    const allowedInDomainTest = await lintSnippet(
       'src/domain/schema/sample.test.ts',
       [
         "import { z } from 'zod'",
@@ -153,7 +175,7 @@ describe('ESLint layer boundaries and hard rules', () => {
         '',
       ].join('\n'),
     )
-    expect(allowedDomainImports).toEqual([])
+    expect(allowedInDomainTest).toEqual([])
 
     const disallowedExternal = await lintSnippet(
       'src/domain/schema/sample.ts',
