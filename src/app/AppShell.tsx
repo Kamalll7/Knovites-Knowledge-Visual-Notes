@@ -53,10 +53,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                     end={item.end}
                     className={({ isActive }) =>
                       cn(
-                        'inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-sm font-medium transition-colors',
+                        'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-sm font-medium transition-colors',
                         isActive
-                          ? 'bg-secondary text-foreground'
-                          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                          ? 'border-primary/40 bg-primary/15 text-foreground'
+                          : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
                       )
                     }
                   >

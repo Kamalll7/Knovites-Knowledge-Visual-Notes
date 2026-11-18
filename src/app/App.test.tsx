@@ -32,6 +32,14 @@ describe('App shell, routing, theme, toast, and error boundary', () => {
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     expect(document.documentElement.classList.contains('light')).toBe(true)
     expect(window.localStorage.getItem('knovites.theme')).toBe('light')
+    expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Switch to dark theme' }))
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Switch to light theme' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: 'Light' }))
+    expect(document.documentElement.classList.contains('light')).toBe(true)
 
     await user.click(screen.getByRole('button', { name: 'Show sample toast' }))
     expect(screen.getByText('Workspace ready')).toBeInTheDocument()

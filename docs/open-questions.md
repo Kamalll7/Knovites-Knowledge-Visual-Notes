@@ -27,6 +27,15 @@ Format entri:
 - Perlu keputusan pemilik: ya/tidak
 ```
 
+### 2026-11-18 — Penyimpanan tema di `localStorage` (`knovites.theme`)
+- Task: T0.4 / FR-LOC-02 (§6.10), FR-SET-01 (§6.14)
+- Masalah atau ambiguitas: `spec-storage-sync.md` §6.10 (FR-LOC-02) menyebut reload memulihkan tema dengan IndexedDB sebagai penyimpanan lokal utama, sedangkan Dexie (M2) belum dibangun di T0.4 dan pembacaan IndexedDB bersifat asinkron.
+- Opsi yang dipertimbangkan:
+  1. Simpan tema di `localStorage` (`knovites.theme`) sekarang (sinkron, bebas FOUC saat reload), lalu bila perlu cerminkan ke tabel settings Dexie pada M2.
+  2. Tunggu M2 / simpan di memori saja (hilang saat reload di T0.4).
+- Keputusan sementara (opsi paling sederhana): Memakai `localStorage` (`knovites.theme`) di `ThemeProvider` agar reload langsung memulihkan tema tanpa kilatan warna salah (FOUC) dan tanpa menunggu IndexedDB asinkron. Tidak menyimpan token atau isi catatan di `localStorage` (§7.3 tetap terpenuhi).
+- Perlu keputusan pemilik: tidak (kecuali ingin memindahkan ke Dexie di M2 dengan tetap menjaga sinkronisasi anti-FOUC).
+
 ### Perbedaan PRD dan dokumentasi resmi
 
 Catat di sini setiap kali dokumentasi resmi berbeda dari PRD (nama API, parameter, batas, perilaku). Format: apa kata PRD, apa kata dokumentasi (dengan tautan dan versi), dan apa yang dilakukan.
