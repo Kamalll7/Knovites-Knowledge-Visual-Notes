@@ -49,6 +49,21 @@ describe('ESLint layer boundaries and hard rules', () => {
     )
     expect(domErrors.some((m) => m.ruleId === 'no-restricted-globals')).toBe(true)
 
+    const allowedPureGlobals = await lintSnippet(
+      'src/domain/tree/pure.ts',
+      [
+        'export async function pureHelpers(input: { a: number }) {',
+        '  const cloned = structuredClone(input)',
+        '  const encoded = new TextEncoder().encode(JSON.stringify(cloned))',
+        "  const digest = await crypto.subtle.digest('SHA-256', encoded)",
+        '  const now = new Date().toISOString()',
+        '  return { digest, now }',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    expect(allowedPureGlobals).toEqual([])
+
     await withTempFile('src/storage/__boundary_test__.ts', 'export const db = 1\n', async () => {
       const storageErrors = await lintSnippet(
         'src/domain/tree/sample.ts',
