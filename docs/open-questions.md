@@ -49,9 +49,26 @@ Format entri:
   3. `order`/`z` divalidasi sebagai string non-kosong tanpa spasi (`/^\S+$/`), validasi urutan fractional-indexing lebih lanjut ditangani di `domain/tree` (T1.3).
 - Perlu keputusan pemilik: tidak
 
+### 2026-11-18 — Detail `buildTree`, `changeset`, dan fallback `order` (`T1.3`)
+- Task: T1.3 / `data-format.md` §5.1 & §5.3, `spec-nodes-search.md` §6.7 (FR-NODE-01..05)
+- Masalah atau ambiguitas:
+  1. Bagaimana `buildTree` menangani folder tanpa parent `node.json` (orphan), folder berslug terlarang, serta ID untuk node `corrupt` yang mungkin tidak punya ULID valid?
+  2. Bagaimana `moveNode` memodelkan `node.json` milik akar subtree yang dipindah (karena `order` dan `updatedAt` berubah) bersama file lain yang isinya tetap?
+  3. Bagaimana `reorderNode` menangani dua sibling yang `order`-nya seri (`prevOrder === nextOrder`) atau mengandung key tak valid untuk `fractional-indexing`?
+- Opsi yang dipertimbangkan:
+  1. Membuang/mengabaikan orphan & node terlarang dengan `TreeIssue` tanpa menyentuh file, atau membuat node virtual.
+  2. Memasukkan `node.json` akar subtree ke `deletes` + `upserts`, atau memodelkan seluruh file subtree di `moves` (`{from, to}`) + `upserts` untuk `${newPath}/node.json` yang berubah.
+- Keputusan sementara (opsi paling sederhana):
+  1. Folder berslug terlarang atau tanpa parent `node.json` diabaikan dengan `TreeIssue` (menjaga konsistensi `path === parent.path + '/' + slug` tanpa mengubah folder tak dikenal). Node `corrupt` / `newer-schema` mendapat ID read-only deterministik `__corrupt__:<path>`, tetap mengklaim `slug` foldernya agar tidak tertimpa sibling baru, dan diblokir dari semua operasi tulis.
+  2. `moveNode` mencatat seluruh file subtree di `changeset.moves` (`{ from, to }`), `deletes: []`, dan hanya `${newPath}/node.json` di `changeset.upserts` (konsisten: `moves` -> `deletes` -> `upserts`).
+  3. `generateOrderBetween` membungkus `fractional-indexing` dalam `try/catch`, memvalidasi batas ketat `a < key < b`, dan memakai fallback leksikografis deterministik bila key input tidak valid atau `prevOrder === nextOrder`.
+- Perlu keputusan pemilik: tidak
+
 ### Perbedaan PRD dan dokumentasi resmi
 
 Catat di sini setiap kali dokumentasi resmi berbeda dari PRD (nama API, parameter, batas, perilaku). Format: apa kata PRD, apa kata dokumentasi (dengan tautan dan versi), dan apa yang dilakukan.
+
+- **2026-11-18 (T1.3) — `fractional-indexing@4.0.0`:** PRD §3 menyebut `fractional-indexing`. Pada `4.0.0`, `generateKeyBetween(a, b)` diam-diam menukar `a` dan `b` jika `a > b` (alih-alih melempar error), dan melempar error jika key memiliki trailing `'0'` pada pecahan (`"a00"`), head di luar `A-Za-z`, atau `a === b`. **Tindakan:** `src/domain/tree/order.ts` memvalidasi batas ketat setelah memanggil `generateKeyBetween` dan menyediakan fallback leksikografis aman tanpa pernah melempar.
 
 - **2026-11-18 (T1.1) — `zod@4.6.7` (Zod v4 API):** PRD §3 menyebut `Zod`. Pada Zod v4 (`4.6.7`), `z.iso.datetime()` menggantikan `z.string().datetime()` (dan otomatis mensyaratkan UTC `Z`), `z.strictObject()` menggantikan `.strict()`, `z.record(key, value)` mewajibkan 2 argumen, dan `ZodError` memakai `.issues` (bukan `.errors`). **Tindakan:** Memakai API Zod v4 sesuai paket terpasang.
 - **2026-11-18 (T1.2) — `fast-check@4.10.2` (v4 null-prototype & `fc.string`) & Prettier vs fixture JSON kanonik:** Pada `fast-check` v4, `fc.record()` mengembalikan objek ber-prototipe `null` (`Object.create(null)`) dan `fc.string({ unit })` dipakai untuk generator karakter. Selain itu, Prettier merapatkan array pendek ke satu baris (`["pwn", "stack"]`), berbeda dari format kanonik `JSON.stringify(obj, null, 2)` (§5.5). **Tindakan:** `isPlainObject` dan `canonicalize` menangani objek ber-prototipe `null`, dan `src/testing/fixtures` ditambahkan ke `.prettierignore` agar fixture tetap identik byte demi byte dengan serializer kanonik.

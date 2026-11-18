@@ -7,7 +7,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-const DOMAIN_ALLOWED_EXTERNALS = ['zod']
+const DOMAIN_ALLOWED_EXTERNALS = ['zod', 'fractional-indexing']
 const DOMAIN_TEST_ALLOWED_EXTERNALS = ['fast-check', 'vitest']
 
 export default defineConfig([

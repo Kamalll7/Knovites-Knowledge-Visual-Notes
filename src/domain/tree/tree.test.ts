@@ -1,0 +1,673 @@
+import fc from 'fast-check'
+import { describe, expect, it } from 'vitest'
+import { parseNodeJson, type NodeJson } from '@/domain/schema'
+import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
+import {
+  FORBIDDEN_SLUGS,
+  buildTree,
+  compareSiblings,
+  createNode,
+  deleteNode,
+  deriveNodePath,
+  generateOrderBetween,
+  moveNode,
+  renameNode,
+  reorderNode,
+  resolveUniqueSlug,
+  slugify,
+  type Changeset,
+  type TreeBuildEntry,
+  type TreeNode,
+  type TreeState,
+} from '@/domain/tree'
+
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+function makeUlid(n: number): string {
+  let num = n
+  let suffix = ''
+  for (let i = 0; i < 10; i += 1) {
+    suffix = CROCKFORD[num % 32]! + suffix
+    num = Math.floor(num / 32)
+  }
+  return `01JC8ZQ4M7X2K9T5${suffix}`
+}
+
+function makeIdGenerator(start = 1): () => string {
+  let counter = start
+  return () => {
+    const id = makeUlid(counter)
+    counter += 1
+    return id
+  }
+}
+
+function makeNodeMeta(
+  id: string,
+  title: string,
+  order: string,
+  now = '2026-11-18T10:00:00Z',
+): NodeJson {
+  return {
+    schema: 1,
+    id,
+    title,
+    type: 'technique',
+    status: 'none',
+    tags: [],
+    order,
+    color: null,
+    links: [],
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function stateToVirtualRepo(state: TreeState): Map<string, string> {
+  const files = new Map<string, string>()
+  for (const node of Object.values(state.nodes)) {
+    if (node.corrupt) {
+      files.set(`${node.path}/node.json`, '__CORRUPT__')
+      if (node.hasCanvas) {
+        files.set(`${node.path}/canvas.json`, '__CORRUPT_CANVAS__')
+      }
+    } else {
+      files.set(`${node.path}/node.json`, serializeNodeJson(node.meta))
+      if (node.hasCanvas) {
+        files.set(`${node.path}/canvas.json`, serializeCanvasJson({ schema: 1, elements: {} }))
+      }
+    }
+    for (const asset of node.assets) {
+      files.set(`${node.path}/${asset}`, `__ASSET__:${asset}`)
+    }
+  }
+  return files
+}
+
+function applyChangeset(prevFiles: Map<string, string>, changeset: Changeset): Map<string, string> {
+  const next = new Map(prevFiles)
+
+  // Read all move sources first so same-tree permutations cannot clobber each other
+  const movedPayloads: Array<{ from: string; to: string; content: string }> = []
+  for (const mv of changeset.moves) {
+    const content = next.get(mv.from)
+    if (content === undefined) {
+      throw new Error(`Changeset move source missing: ${mv.from}`)
+    }
+    movedPayloads.push({ from: mv.from, to: mv.to, content })
+  }
+  for (const mv of movedPayloads) {
+    next.delete(mv.from)
+  }
+  for (const mv of movedPayloads) {
+    next.set(mv.to, mv.content)
+  }
+
+  for (const del of changeset.deletes) {
+    if (!next.has(del)) {
+      throw new Error(`Changeset delete target missing: ${del}`)
+    }
+    next.delete(del)
+  }
+
+  for (const up of changeset.upserts) {
+    next.set(up.path, up.content)
+  }
+
+  return next
+}
+
+function assertTreeInvariants(state: TreeState): void {
+  const nodeIds = Object.keys(state.nodes)
+  const visitedFromRoots = new Set<string>()
+
+  // 1 & 2. No cycles, every node key matches node.id, reachable from rootIds once
+  function walk(id: string, expectedParentId: string | null) {
+    expect(visitedFromRoots.has(id)).toBe(false)
+    visitedFromRoots.add(id)
+    const node = state.nodes[id]
+    expect(node).toBeDefined()
+    if (!node) return
+    expect(node.id).toBe(id)
+    expect(node.parentId).toBe(expectedParentId)
+
+    const expectedPath =
+      expectedParentId === null
+        ? node.slug
+        : deriveNodePath(state.nodes[expectedParentId]!.path, node.slug)
+    expect(node.path).toBe(expectedPath)
+
+    // 3 & 4. Children slugs unique & not forbidden, children sorted & stable
+    const childSlugs = new Set<string>()
+    for (let i = 0; i < node.childrenIds.length; i += 1) {
+      const childId = node.childrenIds[i]!
+      const child = state.nodes[childId]!
+      expect(child).toBeDefined()
+      expect(FORBIDDEN_SLUGS.has(child.slug)).toBe(false)
+      expect(childSlugs.has(child.slug)).toBe(false)
+      childSlugs.add(child.slug)
+
+      if (i > 0) {
+        const prevChild = state.nodes[node.childrenIds[i - 1]!]!
+        expect(
+          compareSiblings(
+            { order: prevChild.meta.order, id: prevChild.id },
+            { order: child.meta.order, id: child.id },
+          ),
+        ).toBeLessThan(0)
+      }
+      walk(childId, id)
+    }
+  }
+
+  const rootSlugs = new Set<string>()
+  for (let i = 0; i < state.rootIds.length; i += 1) {
+    const rootId = state.rootIds[i]!
+    const rootNode = state.nodes[rootId]!
+    expect(rootNode).toBeDefined()
+    expect(FORBIDDEN_SLUGS.has(rootNode.slug)).toBe(false)
+    expect(rootSlugs.has(rootNode.slug)).toBe(false)
+    rootSlugs.add(rootNode.slug)
+
+    if (i > 0) {
+      const prevRoot = state.nodes[state.rootIds[i - 1]!]!
+      expect(
+        compareSiblings(
+          { order: prevRoot.meta.order, id: prevRoot.id },
+          { order: rootNode.meta.order, id: rootNode.id },
+        ),
+      ).toBeLessThan(0)
+    }
+    walk(rootId, null)
+  }
+
+  expect(visitedFromRoots.size).toBe(nodeIds.length)
+
+  // Parent pointer termination check
+  for (const id of nodeIds) {
+    let curr: TreeNode | undefined = state.nodes[id]
+    let steps = 0
+    while (curr && curr.parentId !== null) {
+      curr = state.nodes[curr.parentId]
+      steps += 1
+      expect(steps).toBeLessThanOrEqual(nodeIds.length)
+    }
+    expect(curr).toBeDefined()
+  }
+}
+
+describe('domain/tree [T1.3]', () => {
+  describe('slugify and resolveUniqueSlug', () => {
+    it('normalizes ASCII, collapses hyphens, truncates at 48 chars, and avoids forbidden slugs', () => {
+      expect(slugify('Ret2Win — Stack Overflow!!')).toBe('ret2win-stack-overflow')
+      expect(slugify('Café & Résumé')).toBe('cafe-resume')
+      expect(slugify('   ...   ')).toBe('node')
+      expect(slugify('')).toBe('node')
+      expect(slugify('a'.repeat(80))).toHaveLength(48)
+      expect(slugify(`${'a'.repeat(47)}-b`)).toHaveLength(47)
+
+      expect(slugify('assets')).toBe('node')
+      expect(slugify('ASSETS')).toBe('node')
+      for (const forbidden of ['assets', '.git', '.github', 'node_modules', 'ASSETS']) {
+        expect(FORBIDDEN_SLUGS.has(slugify(forbidden))).toBe(false)
+        expect(FORBIDDEN_SLUGS.has(resolveUniqueSlug(forbidden, []))).toBe(false)
+      }
+      expect(resolveUniqueSlug('.git', [])).toBe('node')
+      expect(resolveUniqueSlug('node_modules', [])).toBe('node')
+    })
+
+    it('appends -2, -3 on sibling slug collisions', () => {
+      expect(resolveUniqueSlug('stack', [])).toBe('stack')
+      expect(resolveUniqueSlug('stack', ['stack'])).toBe('stack-2')
+      expect(resolveUniqueSlug('stack', ['stack', 'stack-2'])).toBe('stack-3')
+      expect(resolveUniqueSlug('assets', ['node'])).toBe('node-2')
+    })
+  })
+
+  describe('buildTree and bad-input resilience', () => {
+    it('builds hierarchy from flat parsed entries, sorts by (order, id), and repairs duplicate IDs deterministically', () => {
+      const idA = makeUlid(1)
+      const idB = makeUlid(2)
+      const dupId = makeUlid(3)
+
+      const entries: TreeBuildEntry[] = [
+        { path: 'pwn/b-node', node: makeNodeMeta(idB, 'B', 'a1'), hasCanvas: true },
+        { path: 'pwn/a-node', node: makeNodeMeta(dupId, 'A', 'a0'), hasCanvas: true },
+        { path: 'pwn', node: makeNodeMeta(idA, 'PWN', 'a0'), hasCanvas: true },
+        { path: 'zzz', node: makeNodeMeta(dupId, 'ZZZ', 'a1'), hasCanvas: true },
+      ]
+
+      const built = buildTree(entries, { generateId: makeIdGenerator(100) })
+      expect(built.issues.some((i) => i.code === 'duplicate_id_repaired')).toBe(true)
+
+      const repairIssue = built.issues.find((i) => i.code === 'duplicate_id_repaired')!
+      expect(repairIssue.path).toBe('zzz')
+      expect(repairIssue.oldId).toBe(dupId)
+      expect(repairIssue.newId).toBe(makeUlid(100))
+
+      // First path ('pwn/a-node') keeps dupId; later path ('zzz') gets repaired ID
+      expect(built.state.nodes[dupId]?.path).toBe('pwn/a-node')
+      expect(built.state.nodes[makeUlid(100)]?.path).toBe('zzz')
+      expect(built.changeset.upserts).toHaveLength(1)
+      expect(built.changeset.upserts[0]?.path).toBe('zzz/node.json')
+      expect(built.state.nodes[idA]?.childrenIds).toEqual([dupId, idB])
+      assertTreeInvariants(built.state)
+    })
+
+    it('handles invalid fractional-indexing order strings and preserves corrupt nodes as read-only', () => {
+      const id1 = makeUlid(1)
+      const id2 = makeUlid(2)
+      const entries: TreeBuildEntry[] = [
+        { path: 'alpha', node: makeNodeMeta(id1, 'Alpha', '001-bad-order!'), hasCanvas: true },
+        { path: 'beta', node: makeNodeMeta(id2, 'Beta', 'a00'), hasCanvas: true },
+        {
+          path: 'broken-node',
+          corrupt: true,
+          corruptErrors: [{ path: 'id', code: 'invalid_string', message: 'Invalid ULID' }],
+          hasCanvas: true,
+        },
+      ]
+
+      const built = buildTree(entries, { generateId: makeIdGenerator(50) })
+      expect(built.issues.some((i) => i.code === 'corrupt_node')).toBe(true)
+      assertTreeInvariants(built.state)
+
+      const corruptNode = Object.values(built.state.nodes).find((n) => n.corrupt)!
+      expect(corruptNode.slug).toBe('broken-node')
+
+      // Operations targeting corrupt node are rejected without modifying state or changeset
+      const r1 = renameNode(built.state, {
+        nodeId: corruptNode.id,
+        title: 'Hack',
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(r1.ok).toBe(false)
+      if (!r1.ok) expect(r1.reason).toBe('corrupt_node')
+
+      const r2 = deleteNode(built.state, { nodeId: corruptNode.id })
+      expect(r2.ok).toBe(false)
+
+      const r3 = moveNode(built.state, {
+        nodeId: id1,
+        newParentId: corruptNode.id,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(r3.ok).toBe(false)
+
+      // Sibling reorder next to malformed order strings still succeeds deterministically
+      const r4 = reorderNode(built.state, {
+        nodeId: id2,
+        targetIndex: 0,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(r4.ok).toBe(true)
+      if (r4.ok) {
+        assertTreeInvariants(r4.state)
+        expect(r4.state.rootIds[0]).toBe(id2)
+        expect(r4.state.nodes[id2]!.meta.order < r4.state.nodes[id1]!.meta.order).toBe(true)
+      }
+    })
+  })
+
+  describe('pure tree operations (create, rename, move, reorder, delete)', () => {
+    it('creates nodes with unique slugs, default fields, canvas.json, and fractional order', () => {
+      const gen = makeIdGenerator(1)
+      const now = '2026-11-18T10:00:00Z'
+      let state = buildTree([]).state
+
+      const c1 = createNode(state, { title: 'PWN', parentId: null, now, generateId: gen })
+      expect(c1.ok).toBe(true)
+      state = c1.state
+      expect(c1.changeset.upserts.map((u) => u.path)).toEqual(['pwn/node.json', 'pwn/canvas.json'])
+      expect(c1.changeset.moves).toEqual([])
+      expect(c1.changeset.deletes).toEqual([])
+
+      const c2 = createNode(state, { title: 'PWN', parentId: null, now, generateId: gen })
+      expect(c2.ok).toBe(true)
+      state = c2.state
+      if (c2.ok) {
+        expect(state.nodes[c2.nodeId]?.slug).toBe('pwn-2')
+        expect(state.nodes[c2.nodeId]?.path).toBe('pwn-2')
+        const parsed = parseNodeJson(c2.changeset.upserts[0]!.content)
+        expect(parsed.status).toBe('ok')
+      }
+
+      const c3 = createNode(state, {
+        title: 'Stack',
+        type: 'category',
+        parentId: c1.ok ? c1.nodeId : null,
+        now,
+        generateId: gen,
+      })
+      expect(c3.ok).toBe(true)
+      state = c3.state
+      if (c3.ok) {
+        expect(state.nodes[c3.nodeId]?.path).toBe('pwn/stack')
+      }
+      assertTreeInvariants(state)
+    })
+
+    it('renames only title and updatedAt without changing slug or path', () => {
+      const gen = makeIdGenerator(1)
+      const c1 = createNode(buildTree([]).state, {
+        title: 'Old Title',
+        parentId: null,
+        now: '2026-11-18T10:00:00Z',
+        generateId: gen,
+      })
+      expect(c1.ok).toBe(true)
+      if (!c1.ok) return
+
+      const renamed = renameNode(c1.state, {
+        nodeId: c1.nodeId,
+        title: 'New Completely Different Title',
+        now: '2026-11-18T11:00:00Z',
+      })
+      expect(renamed.ok).toBe(true)
+      const node = renamed.state.nodes[c1.nodeId]!
+      expect(node.meta.title).toBe('New Completely Different Title')
+      expect(node.meta.updatedAt).toBe('2026-11-18T11:00:00Z')
+      expect(node.meta.createdAt).toBe('2026-11-18T10:00:00Z')
+      expect(node.slug).toBe('old-title')
+      expect(node.path).toBe('old-title')
+      expect(renamed.changeset.upserts.map((u) => u.path)).toEqual(['old-title/node.json'])
+      expect(renamed.changeset.moves).toEqual([])
+      expect(renamed.changeset.deletes).toEqual([])
+      assertTreeInvariants(renamed.state)
+    })
+
+    it('moves subtree with {from, to} moves, resolves slug collisions, and prevents cycles', () => {
+      const idPwn = makeUlid(1)
+      const idStack = makeUlid(2)
+      const idRet = makeUlid(3)
+      const idRe = makeUlid(4)
+      const idReStack = makeUlid(5)
+
+      const built = buildTree([
+        { path: 'pwn', node: makeNodeMeta(idPwn, 'PWN', 'a0'), hasCanvas: true },
+        {
+          path: 'pwn/stack',
+          node: makeNodeMeta(idStack, 'Stack', 'a0'),
+          hasCanvas: true,
+          assets: ['assets/1234567890abcdef.png'],
+        },
+        { path: 'pwn/stack/ret2win', node: makeNodeMeta(idRet, 'ret2win', 'a0'), hasCanvas: true },
+        { path: 're', node: makeNodeMeta(idRe, 'RE', 'a1'), hasCanvas: true },
+        { path: 're/stack', node: makeNodeMeta(idReStack, 'Stack', 'a0'), hasCanvas: true },
+      ])
+
+      // Cycle checks: self and descendant must be rejected
+      const selfMove = moveNode(built.state, {
+        nodeId: idPwn,
+        newParentId: idPwn,
+        now: '2026-11-18T11:00:00Z',
+      })
+      expect(selfMove.ok).toBe(false)
+      if (!selfMove.ok) expect(selfMove.reason).toBe('cycle_detected')
+
+      const descendantMove = moveNode(built.state, {
+        nodeId: idPwn,
+        newParentId: idRet,
+        now: '2026-11-18T11:00:00Z',
+      })
+      expect(descendantMove.ok).toBe(false)
+      if (!descendantMove.ok) expect(descendantMove.reason).toBe('cycle_detected')
+
+      // Move pwn/stack under re (which already has 'stack')
+      const prevFiles = stateToVirtualRepo(built.state)
+      const moved = moveNode(built.state, {
+        nodeId: idStack,
+        newParentId: idRe,
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(moved.ok).toBe(true)
+      expect(moved.state.nodes[idStack]?.slug).toBe('stack-2')
+      expect(moved.state.nodes[idStack]?.path).toBe('re/stack-2')
+      expect(moved.state.nodes[idRet]?.path).toBe('re/stack-2/ret2win')
+      expect(moved.changeset.deletes).toEqual([])
+      expect(moved.changeset.upserts.map((u) => u.path)).toEqual(['re/stack-2/node.json'])
+      expect(moved.changeset.moves).toEqual(
+        expect.arrayContaining([
+          { from: 'pwn/stack/node.json', to: 're/stack-2/node.json' },
+          { from: 'pwn/stack/canvas.json', to: 're/stack-2/canvas.json' },
+          {
+            from: 'pwn/stack/assets/1234567890abcdef.png',
+            to: 're/stack-2/assets/1234567890abcdef.png',
+          },
+          { from: 'pwn/stack/ret2win/node.json', to: 're/stack-2/ret2win/node.json' },
+          { from: 'pwn/stack/ret2win/canvas.json', to: 're/stack-2/ret2win/canvas.json' },
+        ]),
+      )
+      expect(applyChangeset(prevFiles, moved.changeset)).toEqual(stateToVirtualRepo(moved.state))
+      assertTreeInvariants(moved.state)
+    })
+
+    it('reorders siblings earlier/later/by index and updates only the moved node.json', () => {
+      const idA = makeUlid(1)
+      const idB = makeUlid(2)
+      const idC = makeUlid(3)
+      const built = buildTree([
+        { path: 'a', node: makeNodeMeta(idA, 'A', 'a0'), hasCanvas: true },
+        { path: 'b', node: makeNodeMeta(idB, 'B', 'a1'), hasCanvas: true },
+        { path: 'c', node: makeNodeMeta(idC, 'C', 'a2'), hasCanvas: true },
+      ])
+
+      const moveEarlier = reorderNode(built.state, {
+        nodeId: idC,
+        direction: 'earlier',
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(moveEarlier.ok).toBe(true)
+      expect(moveEarlier.state.rootIds).toEqual([idA, idC, idB])
+      expect(moveEarlier.changeset.upserts.map((u) => u.path)).toEqual(['c/node.json'])
+      expect(moveEarlier.changeset.moves).toEqual([])
+      expect(moveEarlier.changeset.deletes).toEqual([])
+      assertTreeInvariants(moveEarlier.state)
+
+      const moveLater = reorderNode(moveEarlier.state, {
+        nodeId: idA,
+        direction: 'later',
+        now: '2026-11-18T12:01:00Z',
+      })
+      expect(moveLater.ok).toBe(true)
+      expect(moveLater.state.rootIds).toEqual([idC, idA, idB])
+      expect(moveLater.changeset.upserts.map((u) => u.path)).toEqual(['a/node.json'])
+      assertTreeInvariants(moveLater.state)
+
+      const moveToStart = reorderNode(moveLater.state, {
+        nodeId: idB,
+        targetIndex: 0,
+        now: '2026-11-18T12:02:00Z',
+      })
+      expect(moveToStart.ok).toBe(true)
+      expect(moveToStart.state.rootIds).toEqual([idB, idC, idA])
+      assertTreeInvariants(moveToStart.state)
+    })
+
+    it('deletes subtree, emits all subtree files in deletes, and leaves remaining links intact', () => {
+      const idA = makeUlid(1)
+      const idB = makeUlid(2)
+      const idC = makeUlid(3)
+      const metaC = {
+        ...makeNodeMeta(idC, 'C', 'a1'),
+        links: [{ to: idA, label: 'parent' }],
+      }
+      const built = buildTree([
+        {
+          path: 'a',
+          node: makeNodeMeta(idA, 'A', 'a0'),
+          hasCanvas: true,
+          assets: ['assets/1111222233334444.webp'],
+        },
+        { path: 'a/b', node: makeNodeMeta(idB, 'B', 'a0'), hasCanvas: true },
+        { path: 'c', node: metaC, hasCanvas: true },
+      ])
+
+      const prevFiles = stateToVirtualRepo(built.state)
+      const deleted = deleteNode(built.state, { nodeId: idA })
+      expect(deleted.ok).toBe(true)
+      expect(deleted.state.rootIds).toEqual([idC])
+      expect(deleted.state.nodes[idA]).toBeUndefined()
+      expect(deleted.state.nodes[idB]).toBeUndefined()
+      expect(deleted.state.nodes[idC]?.meta.links).toEqual([{ to: idA, label: 'parent' }])
+      expect(deleted.changeset.deletes.sort()).toEqual([
+        'a/assets/1111222233334444.webp',
+        'a/b/canvas.json',
+        'a/b/node.json',
+        'a/canvas.json',
+        'a/node.json',
+      ])
+      expect(applyChangeset(prevFiles, deleted.changeset)).toEqual(
+        stateToVirtualRepo(deleted.state),
+      )
+      assertTreeInvariants(deleted.state)
+    })
+
+    it('lexicographical ordering wrapper never throws on pathological bounds', () => {
+      const k1 = generateOrderBetween(null, '001')
+      expect(k1 < '001').toBe(true)
+      const k2 = generateOrderBetween('a00', 'a01')
+      expect(k2 > 'a00' && k2 < 'a01').toBe(true)
+      const k3 = generateOrderBetween('bad key', null)
+      expect(k3 > 'bad key').toBe(true)
+    })
+  })
+
+  describe('model-based property test with fast-check', () => {
+    it('maintains all tree invariants and exact changeset diffs across random operation sequences', () => {
+      type OpCmd =
+        | { kind: 'create'; parentIdx: number; title: string; type: NodeJson['type'] }
+        | { kind: 'rename'; nodeIdx: number; title: string }
+        | { kind: 'move'; nodeIdx: number; parentIdx: number }
+        | { kind: 'reorder'; nodeIdx: number; direction: 'earlier' | 'later' }
+        | { kind: 'delete'; nodeIdx: number }
+
+      const titleArb = fc.oneof(
+        fc.constantFrom('PWN', 'Stack', 'Heap', 'ROP', 'assets', '.git', 'Café', 'A'),
+        fc.string({ minLength: 1, maxLength: 60 }),
+      )
+
+      const opArb: fc.Arbitrary<OpCmd> = fc.oneof(
+        fc.record({
+          kind: fc.constant('create' as const),
+          parentIdx: fc.integer({ min: -1, max: 20 }),
+          title: titleArb,
+          type: fc.constantFrom('category', 'concept', 'technique', 'challenge'),
+        }),
+        fc.record({
+          kind: fc.constant('rename' as const),
+          nodeIdx: fc.integer({ min: 0, max: 20 }),
+          title: titleArb,
+        }),
+        fc.record({
+          kind: fc.constant('move' as const),
+          nodeIdx: fc.integer({ min: 0, max: 20 }),
+          parentIdx: fc.integer({ min: -1, max: 20 }),
+        }),
+        fc.record({
+          kind: fc.constant('reorder' as const),
+          nodeIdx: fc.integer({ min: 0, max: 20 }),
+          direction: fc.constantFrom('earlier' as const, 'later' as const),
+        }),
+        fc.record({
+          kind: fc.constant('delete' as const),
+          nodeIdx: fc.integer({ min: 0, max: 20 }),
+        }),
+      )
+
+      fc.assert(
+        fc.property(fc.array(opArb, { minLength: 1, maxLength: 40 }), (ops) => {
+          const gen = makeIdGenerator(1)
+          const corruptId = makeUlid(9000)
+          const initialBuilt = buildTree([
+            {
+              path: 'locked-corrupt',
+              corrupt: true,
+              corruptErrors: [{ path: 'schema', code: 'invalid_schema', message: 'bad' }],
+              hasCanvas: true,
+            },
+            {
+              path: 'seed-root',
+              node: makeNodeMeta(
+                corruptId === makeUlid(1) ? makeUlid(2) : makeUlid(1000),
+                'Seed',
+                'a0',
+              ),
+              hasCanvas: true,
+              assets: ['assets/abcdef0123456789.png'],
+            },
+          ])
+          let state = initialBuilt.state
+          let virtualRepo = stateToVirtualRepo(state)
+
+          for (let step = 0; step < ops.length; step += 1) {
+            const op = ops[step]!
+            const now = new Date(Date.UTC(2026, 10, 18, 10, 0, step)).toISOString()
+            const allIds = Object.keys(state.nodes).sort()
+            const prevState = state
+
+            let result
+            if (op.kind === 'create') {
+              const parentId =
+                op.parentIdx < 0 || allIds.length === 0
+                  ? null
+                  : allIds[op.parentIdx % allIds.length]!
+              result = createNode(state, {
+                title: op.title,
+                type: op.type,
+                parentId,
+                now,
+                generateId: gen,
+              })
+            } else if (allIds.length === 0) {
+              continue
+            } else if (op.kind === 'rename') {
+              const nodeId = allIds[op.nodeIdx % allIds.length]!
+              result = renameNode(state, { nodeId, title: op.title, now })
+            } else if (op.kind === 'move') {
+              const nodeId = allIds[op.nodeIdx % allIds.length]!
+              const newParentId = op.parentIdx < 0 ? null : allIds[op.parentIdx % allIds.length]!
+              result = moveNode(state, { nodeId, newParentId, now })
+            } else if (op.kind === 'reorder') {
+              const nodeId = allIds[op.nodeIdx % allIds.length]!
+              const target = prevState.nodes[nodeId]!
+              const prevSiblings =
+                target.parentId === null
+                  ? prevState.rootIds
+                  : prevState.nodes[target.parentId]!.childrenIds
+              const prevIdx = prevSiblings.indexOf(nodeId)
+              const expectedIdx =
+                op.direction === 'earlier'
+                  ? Math.max(0, prevIdx - 1)
+                  : Math.min(prevSiblings.length - 1, prevIdx + 1)
+              result = reorderNode(state, { nodeId, direction: op.direction, now })
+              if (result.ok) {
+                const nextSiblings =
+                  target.parentId === null
+                    ? result.state.rootIds
+                    : result.state.nodes[target.parentId]!.childrenIds
+                expect(nextSiblings.indexOf(nodeId)).toBe(expectedIdx)
+              }
+            } else {
+              const nodeId = allIds[op.nodeIdx % allIds.length]!
+              result = deleteNode(state, { nodeId })
+            }
+
+            state = result.state
+            assertTreeInvariants(state)
+
+            const nextVirtualRepo = applyChangeset(virtualRepo, result.changeset)
+            expect(nextVirtualRepo).toEqual(stateToVirtualRepo(state))
+            virtualRepo = nextVirtualRepo
+
+            if (!result.ok) {
+              expect(state).toBe(prevState)
+              expect(result.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+            }
+          }
+        }),
+        { numRuns: 100 },
+      )
+    })
+  })
+})

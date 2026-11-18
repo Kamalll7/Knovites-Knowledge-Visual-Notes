@@ -142,10 +142,10 @@ describe('ESLint layer boundaries and hard rules', () => {
     expect(explicitAny.some((m) => m.ruleId === '@typescript-eslint/no-explicit-any')).toBe(true)
   })
 
-  it('allows zod across domain/ and restricts fast-check/vitest to domain test files', async () => {
+  it('allows zod and fractional-indexing across domain/ and restricts fast-check/vitest to domain test files', async () => {
     const allowedInDomainProd = await lintSnippet(
       'src/domain/schema/sample.ts',
-      "import { z } from 'zod'\nexport { z }\n",
+      "import { z } from 'zod'\nimport { generateKeyBetween } from 'fractional-indexing'\nexport { z, generateKeyBetween }\n",
     )
     expect(allowedInDomainProd).toEqual([])
 
