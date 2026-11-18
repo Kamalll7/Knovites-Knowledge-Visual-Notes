@@ -12,6 +12,7 @@ test('loads empty app shell without console errors', async ({ page }) => {
   })
 
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Knovites' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Knovites' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Knowledge Map' })).toBeVisible()
   expect(errors).toEqual([])
 })
