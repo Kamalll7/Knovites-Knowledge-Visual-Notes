@@ -46,6 +46,7 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
   4. Buktikan update ref ditolak saat non-fast-forward (catat kode status dan bentuk pesan error).
   5. Periksa CORS dari browser, header rate limit, dan perilaku ETag (`If-None-Match` mengembalikan 304).
   6. Ukur latensi untuk sekitar 50 file.
+  7. Apakah git tree dengan sha null untuk path yang tidak ada ditolak GitHub?
   - **Done when:** `docs/spikes/s1-github.md` memuat hasil tiap butir (berhasil atau gagal, kode status, catatan) dan daftar perbedaan dari `spec-storage-sync.md` §6.1 dan §6.11.
 - **S2 — TipTap di dalam React Flow.** Halaman uji dengan satu kanvas React Flow, banyak elemen teks statis, dan satu editor TipTap aktif.
   - **Done when:** mengetik, memilih teks dengan mouse, memakai toolbar melayang, dan scroll di dalam kotak tidak menggeser kotak atau mengubah zoom; gagang drag memindahkan; pan dan zoom kanvas tetap berfungsi; 100 elemen statis + 1 editor tetap lancar. Laporan `docs/spikes/s2-tiptap-reactflow.md` mencatat solusi yang dipilih.
@@ -89,6 +90,15 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
 ### M6 — GitHub (paling berisiko, kerjakan berurutan)
 
 Semua task M6 mengikuti hasil spike S1 (`docs/spikes/s1-github.md`). Jika ada perbedaan dari spec, hasil spike menang.
+
+#### Prasyarat M6
+
+1. Setelah push sukses: set `baseBlobSha` dan `basePath = path` untuk file yang terkirim, hapus `pendingDeletes` yang terkirim, bersihkan `dirty` hanya untuk file yang tidak berubah sejak snapshot.
+2. Planner push hanya menghapus path yang ada di tree remote (verifikasi di spike S1: apakah tree dengan `sha: null` untuk path yang tidak ada ditolak?).
+3. Operasi `normalizeSiblingOrders` di `domain/tree`: order kembar (dua perangkat menyisipkan setelah sibling yang sama) harus diberi ulang kunci, hanya `node.json` sibling yang terdampak yang berubah (`reorderNode` kini menolak `order_collision`).
+4. Take over saat tab lama punya `hasUnsavedChanges`: tentukan perilakunya.
+5. Dataset besar hanya dimuat lewat `import()` dinamis di route dev; cek `check:bundle`.
+6. Ukur `hydrate` di browser sungguhan (bukan `fake-indexeddb`) di M3.
 
 - **T6.1** Fake GitHub (msw) dengan semantik Git Data API dan fault injection (`testing.md` §9.3). **Done when:** ada tes bahwa fake menolak non-fast-forward dan menghitung SHA dengan benar.
 - **T6.2** Klien GitHub terbungkus di `sync/` (typed, retry dan backoff, rate limit, ETag).
