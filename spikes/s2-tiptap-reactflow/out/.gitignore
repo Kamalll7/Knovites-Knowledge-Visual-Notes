@@ -1,0 +1,8 @@
+*
+!.gitignore
+!canvas-static-dark.png
+!canvas-edit-dark.png
+!canvas-static-light.png
+!canvas-edit-light.png
+!stress-300-dark.png
+

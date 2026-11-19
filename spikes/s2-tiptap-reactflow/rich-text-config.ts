@@ -32,7 +32,20 @@ export const TEXT_COLOR_SWATCHES = [
   { label: 'Violet', value: '#a78bfa' },
 ] as const
 
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) {
+      return true
+    }
+  }
+  return false
+}
+
 export function isAllowedSpikeHref(href: string): boolean {
+  if (href.length === 0 || href !== href.trim() || hasControlCharacter(href)) {
+    return false
+  }
   if (KNOVITES_HREF_REGEX.test(href)) {
     return true
   }

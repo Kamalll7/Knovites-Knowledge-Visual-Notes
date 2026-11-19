@@ -29,16 +29,20 @@ interface CanvasSnapshot {
   }>
 }
 
+type FpsMotionMode = 'pan' | 'zoom' | 'zoom-out-all'
+
 interface FpsBenchmarkOptions {
   count: 100 | 300
   activeEditor: boolean
-  zoomOutAllVisible?: boolean
+  mode: FpsMotionMode
+  onlyRenderVisibleElements?: boolean
 }
 
 interface FpsBenchmarkResult {
   staticNodes: number
   activeEditor: boolean
-  zoomOutAllVisible: boolean
+  mode: FpsMotionMode
+  onlyRenderVisibleElements: boolean
   durationMs: number
   frameCount: number
   meanMs: number
@@ -70,6 +74,12 @@ declare global {
       getActiveEditorCount: () => number
       getTool: () => CanvasTool
       getCanvasUndoCount: () => number
+      getLeakedCanvasKeydowns: () => number
+      resetLeakedCanvasKeydowns: () => void
+      setNodeDragConfigForTest: (
+        id: string,
+        cfg: { draggable?: boolean; dragHandle?: string | undefined },
+      ) => void
       enterEdit: (id: string) => void
       exitEdit: () => void
       validateWithDomainSchema: (doc: TipTapDoc) => ParseResult<CanvasJson>
@@ -261,8 +271,10 @@ function SpikeCanvasInner() {
   const [staticCountMode, setStaticCountMode] = useState<4 | 100 | 300>(4)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [activeEditorCount, setActiveEditorCount] = useState(0)
+  const [onlyRenderVisible, setOnlyRenderVisible] = useState(true)
   const [lastFpsBench, setLastFpsBench] = useState<FpsBenchmarkResult | null>(null)
 
+  const leakedCanvasKeydownsRef = useRef(0)
   const undoStackRef = useRef<CanvasSnapshot[]>([])
   const [undoCount, setUndoCount] = useState(0)
   const editSessionStartRef = useRef<CanvasSnapshot | null>(null)
@@ -491,8 +503,10 @@ function SpikeCanvasInner() {
     async ({
       count,
       activeEditor,
-      zoomOutAllVisible = false,
+      mode,
+      onlyRenderVisibleElements = true,
     }: FpsBenchmarkOptions): Promise<FpsBenchmarkResult> => {
+      setOnlyRenderVisible(onlyRenderVisibleElements)
       applyNodeDataset(count)
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
       if (activeEditor) {
@@ -502,8 +516,13 @@ function SpikeCanvasInner() {
         )
       }
 
-      if (zoomOutAllVisible) {
+      if (mode === 'zoom-out-all') {
         void reactFlow.setViewport({ x: 60, y: 40, zoom: 0.21 })
+        await new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        )
+      } else if (mode === 'zoom') {
+        void reactFlow.setViewport({ x: -180, y: -60, zoom: 0.72 })
         await new Promise<void>((r) =>
           requestAnimationFrame(() => requestAnimationFrame(() => r())),
         )
@@ -534,16 +553,20 @@ function SpikeCanvasInner() {
           const progress = Math.min(1, elapsed / minDurationMs)
           const angle = (elapsed / minDurationMs) * Math.PI * 4
 
-          if (zoomOutAllVisible) {
+          if (mode === 'zoom-out-all') {
             const zoom = 0.2 + 0.015 * Math.sin(angle)
             const x = 60 + 25 * Math.cos(angle)
             const y = 35 + 15 * Math.sin(angle)
             void reactFlow.setViewport({ x, y, zoom })
+          } else if (mode === 'zoom') {
+            // Pure zoom with constant pan translation
+            const zoom = 0.72 + 0.36 * Math.sin(angle)
+            void reactFlow.setViewport({ x: -180, y: -60, zoom })
           } else {
-            const zoom = 0.72 + 0.32 * Math.sin(angle)
-            const x = -360 * Math.sin(progress * Math.PI) + 80 * Math.cos(angle)
-            const y = -180 * Math.sin(progress * Math.PI) + 50 * Math.sin(angle)
-            void reactFlow.setViewport({ x, y, zoom })
+            // Pure pan with constant 1.0 zoom across populated stress grid
+            const x = -1200 * Math.sin(progress * Math.PI) + 120 * Math.cos(angle)
+            const y = -480 * Math.sin(progress * Math.PI) + 80 * Math.sin(angle)
+            void reactFlow.setViewport({ x, y, zoom: 1 })
           }
 
           if ((elapsed < minDurationMs || deltas.length < minFrames) && elapsed < maxDurationMs) {
@@ -564,7 +587,8 @@ function SpikeCanvasInner() {
       const res: FpsBenchmarkResult = {
         staticNodes: count,
         activeEditor,
-        zoomOutAllVisible,
+        mode,
+        onlyRenderVisibleElements,
         durationMs: Number((prev - start).toFixed(1)),
         frameCount: sorted.length,
         meanMs: Number(meanMs.toFixed(2)),
@@ -604,6 +628,26 @@ function SpikeCanvasInner() {
       getActiveEditorCount: () => activeEditorCount,
       getTool: () => tool,
       getCanvasUndoCount: () => undoStackRef.current.length,
+      getLeakedCanvasKeydowns: () => leakedCanvasKeydownsRef.current,
+      resetLeakedCanvasKeydowns: () => {
+        leakedCanvasKeydownsRef.current = 0
+      },
+      setNodeDragConfigForTest: (
+        id: string,
+        cfg: { draggable?: boolean; dragHandle?: string | undefined },
+      ) => {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  ...(cfg.draggable !== undefined ? { draggable: cfg.draggable } : {}),
+                  ...('dragHandle' in cfg ? { dragHandle: cfg.dragHandle } : {}),
+                }
+              : n,
+          ),
+        )
+      },
       enterEdit: enterEditMode,
       exitEdit: exitEditMode,
       validateWithDomainSchema: (doc: TipTapDoc) =>
@@ -634,6 +678,7 @@ function SpikeCanvasInner() {
     exitEditMode,
     measurePanZoomFps,
     reactFlow,
+    setNodes,
     tool,
   ])
 
@@ -749,7 +794,15 @@ function SpikeCanvasInner() {
       </header>
 
       {/* Main React Flow Canvas */}
-      <main className="relative flex-1 overflow-hidden">
+      <main
+        data-testid="canvas-stage"
+        onKeyDown={() => {
+          if (editingNodeIdRef.current !== null) {
+            leakedCanvasKeydownsRef.current += 1
+          }
+        }}
+        className="relative flex-1 overflow-hidden"
+      >
         <ReactFlow<TextBoxNode>
           nodes={nodes}
           edges={[]}
@@ -768,7 +821,7 @@ function SpikeCanvasInner() {
               exitEditMode()
             }
           }}
-          onlyRenderVisibleElements
+          onlyRenderVisibleElements={onlyRenderVisible}
           panOnDrag={tool === 'hand' ? true : [1, 2]}
           selectionOnDrag={tool === 'select'}
           panOnScroll

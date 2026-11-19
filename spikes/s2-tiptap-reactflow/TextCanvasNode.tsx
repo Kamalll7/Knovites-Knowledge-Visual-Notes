@@ -44,7 +44,7 @@ export const TextCanvasNode = memo(function TextCanvasNode({
 
   const handleWheelCapture = (event: React.WheelEvent<HTMLDivElement>) => {
     const el = event.currentTarget
-    // Prevent canvas zoom/pan whenever the card is scrollable (`.nowheel` also reinforces this)
+    // Prevent canvas zoom/pan whenever the card itself overflows/scrolls
     if (maxHeight !== undefined || el.scrollHeight > el.clientHeight + 1) {
       event.stopPropagation()
     }
@@ -85,8 +85,8 @@ export const TextCanvasNode = memo(function TextCanvasNode({
         data-testid={`card-surface-${id}`}
         onWheelCapture={handleWheelCapture}
         className={`rounded-xl border p-3.5 shadow-sm transition-shadow ${
-          maxHeight !== undefined ? 'nowheel overflow-y-auto' : ''
-        } ${isEditing ? 'nodrag nopan cursor-text select-text' : 'select-none'}`}
+          maxHeight !== undefined ? 'overflow-y-auto' : ''
+        } ${isEditing ? 'nodrag nowheel nopan cursor-text select-text' : 'select-none'}`}
         style={{
           backgroundColor: bg ?? 'var(--card)',
           borderColor: border ?? 'var(--border)',

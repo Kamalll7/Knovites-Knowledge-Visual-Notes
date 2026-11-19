@@ -20,11 +20,13 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
 
     const viewportBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
+    await page.evaluate(() => window.__S2_API__?.resetLeakedCanvasKeydowns())
 
     // Type spaces, tool letters H/T/I, and bracket z-order shortcuts ] / [
     await page.keyboard.type(' hello h t i H T I ] [', { delay: 10 })
 
-    // Verify tool stayed 'select', zIndex stayed 3, viewport stayed identical, text was inserted
+    // Verify tool stayed 'select', zIndex stayed 3, viewport stayed identical, text was inserted, and no keydown leaked
+    expect(await page.evaluate(() => window.__S2_API__?.getLeakedCanvasKeydowns())).toBe(0)
     expect(await page.evaluate(() => window.__S2_API__?.getTool())).toBe('select')
     const state = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
     expect(state?.zIndex).toBe(3)
@@ -98,18 +100,49 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     const afterState = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
     expect(afterState?.x).toBe(beforeState!.x)
     expect(afterState?.y).toBe(beforeState!.y)
+
+    // Verify `.nodrag` behaviorally: even when draggable=true and dragHandle=undefined, dragging on card padding (outside EditorContent onMouseDown) MUST NOT move the node
+    await page.evaluate(() =>
+      window.__S2_API__?.setNodeDragConfigForTest('box-edit', {
+        draggable: true,
+        dragHandle: undefined,
+      }),
+    )
+    const editSurfaceBox = await page.getByTestId('card-surface-box-edit').boundingBox()
+    expect(editSurfaceBox).not.toBeNull()
+    await page.mouse.move(editSurfaceBox!.x + 5, editSurfaceBox!.y + 5)
+    await page.mouse.down()
+    await page.mouse.move(editSurfaceBox!.x + 145, editSurfaceBox!.y + 55, { steps: 8 })
+    await page.mouse.up()
+    const afterNodragState = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(afterNodragState?.x).toBe(beforeState!.x)
+    expect(afterNodragState?.y).toBe(beforeState!.y)
   })
 
-  test('4. scroll di dalam kotak tidak mengubah zoom atau pan kanvas', async ({ page }) => {
+  test('4. scroll/wheel/nopan di dalam kotak tidak mengubah zoom atau pan kanvas', async ({
+    page,
+  }) => {
     await page.goto('/')
     const scrollCard = page.getByTestId('card-surface-box-scroll')
     await expect(scrollCard).toBeVisible()
 
-    // Check overflow exists in box-scroll before and while editing
+    // (a) Static scrollable card relies on `onWheelCapture` (without `.nowheel`) to isolate wheel scrolling
+    const staticBox = await scrollCard.boundingBox()
+    expect(staticBox).not.toBeNull()
+    const vpStaticBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
+    const scrollStaticBefore = await scrollCard.evaluate((el) => el.scrollTop)
+    await page.mouse.move(staticBox!.x + staticBox!.width / 2, staticBox!.y + staticBox!.height / 2)
+    await page.mouse.wheel(0, 180)
+    await page.waitForTimeout(80)
+    const scrollStaticAfter = await scrollCard.evaluate((el) => el.scrollTop)
+    const vpStaticAfter = await page.evaluate(() => window.__S2_API__?.getViewport())
+    expect(scrollStaticAfter).toBeGreaterThan(scrollStaticBefore)
+    expect(vpStaticAfter).toEqual(vpStaticBefore)
+
+    // (b) Edited scrollable box stays isolated too
     await page.getByTestId('text-box-box-scroll').dblclick()
     await expect(page.getByTestId('active-tiptap-editor')).toBeVisible()
     await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeFocused()
-    // Reset inner scrollTop to 0 after autofocus:'end' so downward wheel always has overflow room
     await scrollCard.evaluate((el) => {
       el.scrollTop = 0
     })
@@ -128,6 +161,33 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
 
     expect(scrollTopAfter).toBeGreaterThan(scrollTopBefore)
     expect(viewportAfter).toEqual(viewportBefore)
+
+    // (c) Active NON-scrollable box relies exclusively on `.nowheel` (handleWheelCapture skips non-overflowing card)
+    await page.getByTestId('text-box-box-edit').dblclick()
+    await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeFocused()
+    const editSurface = page.getByTestId('card-surface-box-edit')
+    const editBox = await editSurface.boundingBox()
+    expect(editBox).not.toBeNull()
+    const vpEditBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
+    await page.mouse.move(editBox!.x + editBox!.width / 2, editBox!.y + editBox!.height / 2)
+    await page.mouse.wheel(0, 240)
+    await page.keyboard.down('Control')
+    await page.mouse.wheel(0, -180)
+    await page.keyboard.up('Control')
+    await page.waitForTimeout(80)
+    const vpEditAfterWheel = await page.evaluate(() => window.__S2_API__?.getViewport())
+    expect(vpEditAfterWheel).toEqual(vpEditBefore)
+
+    // (d) In Hand tool (panOnDrag=true), dragging on card-surface padding (outside ProseMirror) relies on `.nopan`
+    await page.getByTestId('tool-hand').click()
+    expect(await page.evaluate(() => window.__S2_API__?.getTool())).toBe('hand')
+    const vpBeforePaddingDrag = await page.evaluate(() => window.__S2_API__?.getViewport())
+    await page.mouse.move(editBox!.x + 5, editBox!.y + 5)
+    await page.mouse.down()
+    await page.mouse.move(editBox!.x + 125, editBox!.y + 65, { steps: 6 })
+    await page.mouse.up()
+    const vpAfterPaddingDrag = await page.evaluate(() => window.__S2_API__?.getViewport())
+    expect(vpAfterPaddingDrag).toEqual(vpBeforePaddingDrag)
   })
 
   test('5. toolbar: klik tombol tidak menghilangkan seleksi teks dan menerapkan format', async ({
@@ -137,6 +197,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.getByTestId('text-box-box-edit').dblclick()
     const editorEl = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
     await expect(editorEl).toBeVisible()
+    await expect(page.getByTestId('floating-toolbar')).toBeVisible()
     await expect(editorEl).toBeFocused()
 
     // Select the first word "Alpha" via Shift+ArrowRight
@@ -284,7 +345,21 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     const editorEl = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
     await expect(editorEl).toBeVisible()
 
-    // Select all and dispatch synthetic HTML paste with dangerous inline styles, on* handlers, external <img>, script, javascript: href
+    // First record whether editing an unaligned plain paragraph emits `{ textAlign: null }`
+    await page.keyboard.press('End')
+    await page.keyboard.type(' check')
+    const plainDocCheck = await page.evaluate(() => {
+      const state = window.__S2_API__?.getNodeState('box-edit')
+      if (!state) return null
+      return {
+        firstParaAttrs: state.doc.content?.[0]?.attrs ?? null,
+        schemaResult: window.__S2_API__!.validateWithDomainSchema(state.doc),
+      }
+    })
+    console.log('S2_PLAIN_PARAGRAPH_CHECK=' + JSON.stringify(plainDocCheck))
+    expect(plainDocCheck).not.toBeNull()
+
+    // Select all and dispatch synthetic HTML paste with dangerous inline styles, on* handlers, external <img>, script, and malicious href variants
     await page.keyboard.press('Control+a')
     await editorEl.evaluate((el) => {
       const dt = new DataTransfer()
@@ -295,8 +370,14 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
           '<h5>HeadingFive</h5>' +
           '<p onclick="window.__XSS=3" onload="window.__XSS=4" onmouseover="window.__XSS=5" ' +
           'style="background:url(http://evil.test/bg.png);background-image:url(javascript:alert(1));width:expression(alert(1));color:notacolor;position:fixed">CleanedAttrs</p>' +
-          '<p><a href="javascript:alert(1)">BadLink</a> and ' +
-          '<a href="https://example.com/safe">SafeLink</a> ' +
+          '<p><a href="JaVaScRiPt:alert(1)">BadCase</a> ' +
+          '<a href="java\nscript:alert(2)">BadNewline</a> ' +
+          '<a href=" javascript:alert(3)">BadLeadingSpace</a> ' +
+          '<a href="data:text/html,<script>alert(4)</script>">BadData</a> ' +
+          '<a href="vbscript:msgbox(5)">BadVbs</a> | ' +
+          '<a href="http://example.org/http">SafeHttp</a> ' +
+          '<a href="https://example.com/safe">SafeHttps</a> ' +
+          '<a href="mailto:user@example.com">SafeMailto</a> ' +
           '<span style="background-color:notabg;color:rgb(255, 0, 0);font-size:24px" onclick="alert(1)"><strong>KeptBold</strong></span></p>',
       )
       dt.setData('text/plain', 'fallback plain')
@@ -328,22 +409,98 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('url(')
     expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('expression(')
     expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('fixed')
-    expect(editorHtmlAudit.hrefs.every((h) => !h.startsWith('javascript:'))).toBe(true)
+    expect(editorHtmlAudit.hrefs.sort()).toEqual(
+      ['http://example.org/http', 'https://example.com/safe', 'mailto:user@example.com'].sort(),
+    )
 
     const doc = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit')?.doc)
     const serialized = JSON.stringify(doc)
-    expect(serialized).not.toContain('javascript:')
+    expect(serialized.toLowerCase()).not.toContain('javascript:')
+    expect(serialized.toLowerCase()).not.toContain('vbscript:')
+    expect(serialized.toLowerCase()).not.toContain('data:text/html')
     expect(serialized).not.toContain('onerror')
     expect(serialized).not.toContain('onclick')
-    expect(serialized).not.toContain('script')
     expect(serialized).not.toContain('evil.test')
-    expect(serialized).toContain('BadLink')
+    expect(serialized).toContain('BadCase')
     expect(serialized).toContain('CleanedAttrs')
     expect(serialized).toContain('https://example.com/safe')
     expect(serialized).toContain('#ff0000')
     expect(serialized).toContain('24px')
     expect(serialized).toContain('"type":"bold"')
     expect(serialized).not.toContain('"level":5')
+
+    // Direct crafted-JSON validation through real `parseCanvasJson` (WITHOUT paste) for malicious href payloads + allowlist
+    const craftedValidation = await page.evaluate(() => {
+      const craftedDoc = {
+        type: 'doc' as const,
+        content: [
+          {
+            type: 'paragraph' as const,
+            content: [
+              {
+                type: 'text' as const,
+                text: 'bad1',
+                marks: [{ type: 'link' as const, attrs: { href: 'JaVaScRiPt:alert(1)' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'bad2',
+                marks: [{ type: 'link' as const, attrs: { href: 'java\nscript:alert(2)' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'bad3',
+                marks: [{ type: 'link' as const, attrs: { href: ' javascript:alert(3)' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'bad4',
+                marks: [
+                  {
+                    type: 'link' as const,
+                    attrs: { href: 'data:text/html,<script>alert(4)</script>' },
+                  },
+                ],
+              },
+              {
+                type: 'text' as const,
+                text: 'bad5',
+                marks: [{ type: 'link' as const, attrs: { href: 'vbscript:msgbox(5)' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'okHttp',
+                marks: [{ type: 'link' as const, attrs: { href: 'http://example.org/path' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'okHttps',
+                marks: [{ type: 'link' as const, attrs: { href: 'https://example.com/safe' } }],
+              },
+              {
+                type: 'text' as const,
+                text: 'okMailto',
+                marks: [{ type: 'link' as const, attrs: { href: 'mailto:user@example.com' } }],
+              },
+            ],
+          },
+        ],
+      }
+      const parsed = window.__S2_API__!.validateWithDomainSchema(craftedDoc)
+      const parsedJson = JSON.stringify(parsed)
+      return {
+        parsed,
+        parsedJson,
+      }
+    })
+    console.log('S2_CRAFTED_HREF_SCHEMA=' + craftedValidation.parsedJson)
+    expect(craftedValidation.parsed.status).toBe('ok')
+    expect(craftedValidation.parsedJson.toLowerCase()).not.toContain('javascript')
+    expect(craftedValidation.parsedJson.toLowerCase()).not.toContain('vbscript')
+    expect(craftedValidation.parsedJson.toLowerCase()).not.toContain('data:text/html')
+    expect(craftedValidation.parsedJson).toContain('http://example.org/path')
+    expect(craftedValidation.parsedJson).toContain('https://example.com/safe')
+    expect(craftedValidation.parsedJson).toContain('mailto:user@example.com')
 
     // Validate live TipTap editor output with the real Zod schema from src/domain/schema
     const schemaCheck = await page.evaluate(() => {
@@ -418,6 +575,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.mouse.move(10, 10)
     await page.waitForTimeout(80)
 
+    // 0) Static-rendered anchor must include rel="noopener noreferrer"
+    const staticAnchor = page.getByTestId('richtext-body-box-rich').locator('a')
+    await expect(staticAnchor).toHaveAttribute('href', 'https://example.com/heap')
+    await expect(staticAnchor).toHaveAttribute('rel', 'noopener noreferrer')
+
     // 1) Dark theme parity (static vs active edit, caret/selection kept natural)
     const staticDarkShot = await page.getByTestId('richtext-body-box-rich').screenshot()
     await page.screenshot({ path: path.join(OUT_DIR, 'canvas-static-dark.png') })
@@ -470,7 +632,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(diffLight.diffPercent).toBeLessThan(1.0)
   })
 
-  test('benchmark FPS pan dan zoom dengan 100 dan 300 elemen statis + 1 editor aktif', async ({
+  test('benchmark FPS pan-only, zoom-only, and culling toggle across 100 and 300 nodes', async ({
     page,
   }) => {
     test.setTimeout(120_000)
@@ -478,24 +640,74 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
 
     const scenarios = [
       {
-        key: 's100_baseline_0editor',
+        key: 's100_pan_0editor_cullOn',
         count: 100 as const,
         activeEditor: false,
-        zoomOutAllVisible: false,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: true,
       },
-      { key: 's100_1editor', count: 100 as const, activeEditor: true, zoomOutAllVisible: false },
       {
-        key: 's300_baseline_0editor',
+        key: 's100_pan_1editor_cullOn',
+        count: 100 as const,
+        activeEditor: true,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's100_zoom_1editor_cullOn',
+        count: 100 as const,
+        activeEditor: true,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's300_pan_0editor_cullOn',
         count: 300 as const,
         activeEditor: false,
-        zoomOutAllVisible: false,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: true,
       },
-      { key: 's300_1editor', count: 300 as const, activeEditor: true, zoomOutAllVisible: false },
+      {
+        key: 's300_pan_1editor_cullOn',
+        count: 300 as const,
+        activeEditor: true,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's300_zoom_0editor_cullOn',
+        count: 300 as const,
+        activeEditor: false,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's300_zoom_1editor_cullOn',
+        count: 300 as const,
+        activeEditor: true,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's300_pan_1editor_cullOff',
+        count: 300 as const,
+        activeEditor: true,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: false,
+      },
+      {
+        key: 's300_zoom_1editor_cullOff',
+        count: 300 as const,
+        activeEditor: true,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: false,
+      },
       {
         key: 's300_zoom_out_all_visible_1editor',
         count: 300 as const,
         activeEditor: true,
-        zoomOutAllVisible: true,
+        mode: 'zoom-out-all' as const,
+        onlyRenderVisibleElements: true,
       },
     ]
 
@@ -504,7 +716,8 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       const res = await page.evaluate((opts) => window.__S2_API__?.measurePanZoomFps(opts), {
         count: sc.count,
         activeEditor: sc.activeEditor,
-        zoomOutAllVisible: sc.zoomOutAllVisible,
+        mode: sc.mode,
+        onlyRenderVisibleElements: sc.onlyRenderVisibleElements,
       })
       expect(res).toBeDefined()
       expect(res!.durationMs).toBeGreaterThanOrEqual(3000)
@@ -512,8 +725,8 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
         sc.activeEditor ? 1 : 0,
       )
-      if (sc.zoomOutAllVisible) {
-        expect(res!.renderedDomNodesMin).toBe(300)
+      if (!sc.onlyRenderVisibleElements || sc.mode === 'zoom-out-all') {
+        expect(res!.renderedDomNodesMin).toBe(sc.count)
       }
       results[sc.key] = res
     }
