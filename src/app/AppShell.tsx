@@ -1,6 +1,7 @@
 import { CloudOff, Compass, FileText, Moon, Settings, Sun } from 'lucide-react'
 import { NavLink } from 'react-router'
 import type { ReactNode } from 'react'
+import { StorageStatusBanner } from '@/app/StorageStatusBanner'
 import { useTheme } from '@/app/theme-context'
 import { en } from '@/i18n/en'
 import { Button } from '@/ui/components/button'
@@ -99,6 +100,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
+
+      <StorageStatusBanner />
 
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col outline-none">
         {children}

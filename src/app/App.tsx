@@ -1,12 +1,21 @@
+import { useEffect, useState } from 'react'
 import { HashRouter, Link, Route, Routes, useLocation } from 'react-router'
 import { AppShell } from '@/app/AppShell'
 import { ErrorBoundary } from '@/app/ErrorBoundary'
 import { ThemeProvider } from '@/app/ThemeProvider'
 import { ToastHost } from '@/app/ToastHost'
+import {
+  createDexieWorkspaceAdapter,
+  createUnavailableStorageAdapter,
+  createWorkspaceStore,
+  type WorkspaceStoreApi,
+} from '@/app/store'
+import { WorkspaceStoreContext } from '@/app/workspace-context'
 import { MapPlaceholder } from '@/features/map/MapPlaceholder'
 import { NodePagePlaceholder } from '@/features/page/NodePagePlaceholder'
 import { SettingsPlaceholder } from '@/features/settings/SettingsPlaceholder'
 import { en } from '@/i18n/en'
+import { createKnovitesDatabase } from '@/storage'
 import { Button } from '@/ui/components/button'
 
 function NotFoundPlaceholder() {
@@ -62,16 +71,66 @@ function AppRoutes() {
   )
 }
 
-export function App() {
+function detectIndexedDb(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.indexedDB != null
+  } catch {
+    return false
+  }
+}
+
+function createDefaultWorkspaceStore(): {
+  store: WorkspaceStoreApi
+  shouldHydrateOnMount: boolean
+} {
+  if (!detectIndexedDb()) {
+    return {
+      store: createWorkspaceStore({
+        storage: createUnavailableStorageAdapter('IndexedDB is unavailable in this environment.'),
+      }),
+      shouldHydrateOnMount: false,
+    }
+  }
+
+  return {
+    store: createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(createKnovitesDatabase()),
+    }),
+    shouldHydrateOnMount: true,
+  }
+}
+
+export interface AppProps {
+  workspaceStore?: WorkspaceStoreApi
+}
+
+export function App({ workspaceStore }: AppProps) {
+  const [{ store, shouldHydrateOnMount }] = useState(() => {
+    if (workspaceStore) {
+      return { store: workspaceStore, shouldHydrateOnMount: false }
+    }
+    return createDefaultWorkspaceStore()
+  })
+
+  useEffect(() => {
+    if (!shouldHydrateOnMount || store.getState().hydrated) return
+    void store.getState().hydrate()
+    return () => {
+      store.getState().dispose()
+    }
+  }, [store, shouldHydrateOnMount])
+
   return (
-    <ThemeProvider defaultTheme="dark">
-      <ToastHost>
-        <HashRouter>
-          <AppShell>
-            <AppRoutes />
-          </AppShell>
-        </HashRouter>
-      </ToastHost>
-    </ThemeProvider>
+    <WorkspaceStoreContext.Provider value={store}>
+      <ThemeProvider defaultTheme="dark">
+        <ToastHost>
+          <HashRouter>
+            <AppShell>
+              <AppRoutes />
+            </AppShell>
+          </HashRouter>
+        </ToastHost>
+      </ThemeProvider>
+    </WorkspaceStoreContext.Provider>
   )
 }

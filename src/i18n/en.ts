@@ -79,4 +79,14 @@ export const en = {
     description: 'The requested route does not exist. Return to the knowledge map.',
     backToMap: 'Back to map',
   },
+  storageBanner: {
+    errorTitle: 'Local storage unavailable',
+    errorDescription:
+      'Changes are kept in memory and not yet saved to browser storage. Free disk space or enable IndexedDB before closing.',
+    unsavedBadge: 'Unsaved in memory',
+    readonlyTitle: 'Read-only tab',
+    readonlyDescription:
+      'Another tab currently holds write access to this workspace. Editing is disabled here to prevent data conflicts.',
+    takeOverButton: 'Take over',
+  },
 } as const
