@@ -10,6 +10,8 @@ export type IndexedFlag = 0 | 1
 export interface StoredNodeRecord {
   id: string
   path: string
+  /** Last synced folder path (`null` if never synced to remote). Preserved across local moves/undos. */
+  basePath: string | null
   parentId: string | null
   meta: NodeJson
   rawNodeJson: string
@@ -27,6 +29,8 @@ export interface StoredNodeRecord {
 export interface StoredCanvasRecord {
   nodeId: string
   path: string
+  /** Last synced node folder path (`null` if never synced to remote). */
+  basePath: string | null
   doc: CanvasJson | null
   rawJson: string
   baseBlobSha: string | null
@@ -43,6 +47,8 @@ export interface StoredAssetRecord {
   nodeId: string
   /** Relative to the node folder, e.g. `assets/3fa9c1d2e4b5a671.webp` */
   path: string
+  /** Full repo-relative asset path at last sync (`null` if never synced). */
+  basePath: string | null
   blob: Uint8Array | Blob
   sha: string | null
   dirty: IndexedFlag
@@ -130,4 +136,15 @@ export interface CollectedDirtyFiles {
   canvases: DirtyCanvasFile[]
   assets: DirtyAssetFile[]
   pendingDeletes: PendingDeleteRecord[]
+}
+
+export interface RestoreSoftDeleteResult {
+  restored: boolean
+  rootNodeId: string | null
+  oldPath: string | null
+  restoredPath: string | null
+  parentId: string | null
+  promotedToRoot: boolean
+  slugChanged: boolean
+  parentPathChanged: boolean
 }

@@ -93,4 +93,13 @@ export const en = {
     locksUnsupportedDescription:
       'Multi-tab lock protection is unsupported in this browser context. Avoid editing in multiple tabs at the same time.',
   },
+  undoToast: {
+    deletedPrefix: 'Deleted',
+    undoButton: 'Undo',
+    restoredPrefix: 'Restored to',
+    restoredSlugChangedDescription:
+      'Assigned a unique slug because the original path was occupied.',
+    restoredParentMovedDescription:
+      'Placed under the parent at its updated path or promoted to root.',
+  },
 } as const

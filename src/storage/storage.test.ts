@@ -142,6 +142,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     await saveAsset(db, {
       nodeId: makeUlid(2),
       path: 'assets/deadbeef12345678.png',
+      basePath: 'pwn/rop/assets/deadbeef12345678.png',
       blob: new Uint8Array([137, 80, 78, 71]),
       sha: 'assetsha1',
       dirty: 0,
@@ -150,9 +151,14 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     await db.nodes.update(makeUlid(2), {
       dirty: 0,
       baseBlobSha: 'nodesha2',
+      basePath: 'pwn/rop',
       extraFiles: ['exploit.py'],
     })
-    await db.canvases.update(makeUlid(2), { dirty: 0, baseBlobSha: 'canvassha2' })
+    await db.canvases.update(makeUlid(2), {
+      dirty: 0,
+      baseBlobSha: 'canvassha2',
+      basePath: 'pwn/rop',
+    })
 
     // Re-load from storage -> buildTree -> rename & move ROP under RE
     const loadedEntries = await loadTreeBuildEntries(db)
@@ -175,15 +181,18 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
 
     const movedNode = await db.nodes.get(makeUlid(2))
     expect(movedNode?.path).toBe('re/rop')
+    expect(movedNode?.basePath).toBe('pwn/rop')
     expect(movedNode?.parentId).toBe(makeUlid(3))
     expect(movedNode?.dirty).toBe(1)
     expect(movedNode?.extraFiles).toEqual(['exploit.py'])
 
     const movedCanvas = await db.canvases.get(makeUlid(2))
     expect(movedCanvas?.path).toBe('re/rop')
+    expect(movedCanvas?.basePath).toBe('pwn/rop')
     expect(movedCanvas?.dirty).toBe(1)
 
     const movedAsset = await db.assets.get([makeUlid(2), 'assets/deadbeef12345678.png'])
+    expect(movedAsset?.basePath).toBe('pwn/rop/assets/deadbeef12345678.png')
     expect(movedAsset?.dirty).toBe(1)
 
     // Delete RE subtree (including RE + re/rop + canvas + asset + exploit.py)
@@ -392,13 +401,16 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     const migratedNode = await migratedDb.table('nodes').get(nodeId)
     expect(migratedNode?.meta).toEqual(legacyMeta)
     expect(migratedNode?.baseBlobSha).toBe('legacysha1')
+    expect(migratedNode?.basePath).toBe('legacy-stack-note')
     expect(migratedNode?.dirty).toBe(1)
     expect(migratedNode?.extraFiles).toEqual([])
+    expect(migratedNode?.hasCanvas).toBe(true)
     expect(migratedNode?.deletedAt).toBe(0)
     expect(migratedNode?.rawNodeJson).toBe(serializeNodeJson(legacyMeta))
 
     const migratedCanvas = await migratedDb.table('canvases').get(nodeId)
     expect(migratedCanvas?.doc).toEqual(legacyCanvas)
+    expect(migratedCanvas?.basePath).toBe('legacy-stack-note')
     expect(migratedCanvas?.dirty).toBe(0)
     expect(migratedCanvas?.deletedAt).toBe(0)
     expect(migratedCanvas?.rawJson).toBe(serializeCanvasJson(legacyCanvas))
@@ -431,12 +443,17 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     await saveAsset(db, {
       nodeId: idChild,
       path: 'assets/0011223344556677.png',
+      basePath: 'pwn/rop/assets/0011223344556677.png',
       blob: new Uint8Array([1, 2, 3]),
       sha: 'assetsha99',
       dirty: 0,
       deletedAt: 0,
     })
-    await db.nodes.update(idChild, { baseBlobSha: 'nodesha99', extraFiles: ['notes.txt'] })
+    await db.nodes.update(idChild, {
+      baseBlobSha: 'nodesha99',
+      basePath: 'pwn/rop',
+      extraFiles: ['notes.txt'],
+    })
 
     await softDeleteSubtree(db, { nodeIds: [idRoot, idChild], deletedAt: '2026-11-19T09:05:00Z' })
     // Soft-deleted records are excluded from active tree load, but still retained in IDB
@@ -483,6 +500,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     const nodeRows = nodeList.map((n, index) => ({
       id: n.id,
       path: n.path,
+      basePath: index < 25 ? null : n.path,
       parentId: n.parentId,
       meta: n.meta,
       rawNodeJson: serializeNodeJson(n.meta),
@@ -498,6 +516,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     const canvasRows = nodeList.map((n, index) => ({
       nodeId: n.id,
       path: n.path,
+      basePath: index < 10 ? null : n.path,
       doc: emptyCanvas,
       rawJson: rawCanvasJson,
       baseBlobSha: `csha-${index}`,

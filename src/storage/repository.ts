@@ -14,6 +14,7 @@ import {
   type ErrorLogRecord,
   type InvalidNodeInput,
   type PendingDeleteRecord,
+  type RestoreSoftDeleteResult,
   type SoftDeleteInput,
   type StoredAssetRecord,
   type StoredCanvasRecord,
@@ -170,6 +171,13 @@ export async function applyChangeset(
           baseBlobSha: existing?.baseBlobSha ?? null,
           deletedAt: now,
         })
+        if (existing?.basePath && existing.basePath !== nodePath) {
+          await db.pendingDeletes.put({
+            path: `${existing.basePath}/node.json`,
+            baseBlobSha: existing.baseBlobSha,
+            deletedAt: now,
+          })
+        }
         if (existing) {
           await db.nodes.delete(existing.id)
           nodeByPath.delete(nodePath)
@@ -189,6 +197,13 @@ export async function applyChangeset(
           baseBlobSha: existingCanvas?.baseBlobSha ?? null,
           deletedAt: now,
         })
+        if (existingCanvas?.basePath && existingCanvas.basePath !== nodePath) {
+          await db.pendingDeletes.put({
+            path: `${existingCanvas.basePath}/canvas.json`,
+            baseBlobSha: existingCanvas.baseBlobSha,
+            deletedAt: now,
+          })
+        }
         if (existingCanvas) {
           await db.canvases.delete(existingCanvas.nodeId)
           canvasByPath.delete(nodePath)
@@ -211,6 +226,23 @@ export async function applyChangeset(
         baseBlobSha: assetRec?.sha ?? null,
         deletedAt: now,
       })
+      if (assetRec?.basePath && assetRec.basePath !== filePath) {
+        await db.pendingDeletes.put({
+          path: assetRec.basePath,
+          baseBlobSha: assetRec.sha,
+          deletedAt: now,
+        })
+      } else if (
+        !assetRec &&
+        ownerInfo?.owner.basePath &&
+        ownerInfo.owner.basePath !== ownerInfo.owner.path
+      ) {
+        await db.pendingDeletes.put({
+          path: `${ownerInfo.owner.basePath}/${ownerInfo.relativePath}`,
+          baseBlobSha: null,
+          deletedAt: now,
+        })
+      }
 
       if (assetRec) {
         await db.assets.delete([assetRec.nodeId, assetRec.path])
@@ -229,7 +261,6 @@ export async function applyChangeset(
 
     // 2. MOVES (stage reads first so subtree / permutation moves never clobber each other)
     if (changeset.moves.length > 0) {
-      const moveTargets = new Set(changeset.moves.map((mv) => mv.to))
       const movedNodes: Array<{ oldPath: string; newPath: string; record: StoredNodeRecord }> = []
       const movedCanvases: Array<{
         oldPath: string
@@ -254,8 +285,6 @@ export async function applyChangeset(
       }
 
       for (const mv of changeset.moves) {
-        await db.pendingDeletes.delete(mv.to)
-
         if (mv.from.endsWith('/node.json') && mv.to.endsWith('/node.json')) {
           const oldNodePath = mv.from.slice(0, -'/node.json'.length)
           const newNodePath = mv.to.slice(0, -'/node.json'.length)
@@ -264,9 +293,10 @@ export async function applyChangeset(
           assertWritableNode(nodeByPath.get(newNodePath), mv.to)
 
           if (source) {
-            if (source.baseBlobSha !== null && !moveTargets.has(mv.from)) {
+            if (source.baseBlobSha !== null || source.basePath !== null) {
+              const remoteOldPath = source.basePath ?? oldNodePath
               pendingMoveDeletes.push({
-                path: mv.from,
+                path: `${remoteOldPath}/node.json`,
                 baseBlobSha: source.baseBlobSha,
                 deletedAt: now,
               })
@@ -277,6 +307,7 @@ export async function applyChangeset(
               record: {
                 ...source,
                 path: newNodePath,
+                basePath: source.basePath,
                 dirty: 1,
               },
             })
@@ -292,9 +323,10 @@ export async function applyChangeset(
           assertWritableCanvas(canvasByPath.get(newNodePath), mv.to)
 
           if (source) {
-            if (source.baseBlobSha !== null && !moveTargets.has(mv.from)) {
+            if (source.baseBlobSha !== null || source.basePath !== null) {
+              const remoteOldPath = source.basePath ?? oldNodePath
               pendingMoveDeletes.push({
-                path: mv.from,
+                path: `${remoteOldPath}/canvas.json`,
                 baseBlobSha: source.baseBlobSha,
                 deletedAt: now,
               })
@@ -305,6 +337,7 @@ export async function applyChangeset(
               record: {
                 ...source,
                 path: newNodePath,
+                basePath: source.basePath,
                 dirty: 1,
               },
             })
@@ -316,9 +349,9 @@ export async function applyChangeset(
         if (assetSource) {
           const oldOwner = nodeById.get(assetSource.nodeId)
           assertWritableNode(oldOwner, mv.from)
-          if (assetSource.sha !== null && !moveTargets.has(mv.from)) {
+          if (assetSource.sha !== null || assetSource.basePath !== null) {
             pendingMoveDeletes.push({
-              path: mv.from,
+              path: assetSource.basePath ?? mv.from,
               baseBlobSha: assetSource.sha,
               deletedAt: now,
             })
@@ -337,8 +370,24 @@ export async function applyChangeset(
             record: {
               ...assetSource,
               path: newRelPath,
+              basePath: assetSource.basePath,
               dirty: 1,
             },
+          })
+          continue
+        }
+
+        // Handle extraFiles moved with a synced node
+        const extraOwnerInfo = findOwnerByFilePath(mv.from, nodeByPath)
+        if (
+          extraOwnerInfo &&
+          (extraOwnerInfo.owner.baseBlobSha !== null || extraOwnerInfo.owner.basePath !== null)
+        ) {
+          const remoteBaseDir = extraOwnerInfo.owner.basePath ?? extraOwnerInfo.owner.path
+          pendingMoveDeletes.push({
+            path: `${remoteBaseDir}/${extraOwnerInfo.relativePath}`,
+            baseBlobSha: null,
+            deletedAt: now,
           })
         }
       }
@@ -395,8 +444,6 @@ export async function applyChangeset(
 
     // 3. UPSERTS
     for (const upsert of changeset.upserts) {
-      await db.pendingDeletes.delete(upsert.path)
-
       if (upsert.path.endsWith('/node.json')) {
         const nodePath = upsert.path.slice(0, -'/node.json'.length)
         const existingAtPath = nodeByPath.get(nodePath)
@@ -416,10 +463,11 @@ export async function applyChangeset(
         const nextRecord: StoredNodeRecord = {
           id: parsed.data.id,
           path: nodePath,
+          basePath: existingById?.basePath ?? null,
           parentId,
           meta: parsed.data,
           rawNodeJson: upsert.content,
-          baseBlobSha: existingById?.baseBlobSha ?? existingAtPath?.baseBlobSha ?? null,
+          baseBlobSha: existingById?.baseBlobSha ?? null,
           dirty: 1,
           corrupt: false,
           extraFiles: existingById?.extraFiles ?? existingAtPath?.extraFiles ?? [],
@@ -448,12 +496,15 @@ export async function applyChangeset(
           throw new Error(`Invalid canvas.json upsert at "${upsert.path}".`)
         }
 
+        const existingCanvasById = existingCanvas ?? (await db.canvases.get(ownerNode.id))
+
         const nextCanvas: StoredCanvasRecord = {
           nodeId: ownerNode.id,
           path: nodePath,
+          basePath: existingCanvasById?.basePath ?? null,
           doc: parsed.data,
           rawJson: upsert.content,
-          baseBlobSha: existingCanvas?.baseBlobSha ?? null,
+          baseBlobSha: existingCanvasById?.baseBlobSha ?? null,
           dirty: 1,
           loaded: true,
           corrupt: false,
@@ -501,6 +552,7 @@ export async function saveInvalidNode(
     const record: StoredNodeRecord = {
       id,
       path: input.path,
+      basePath: input.baseBlobSha ? input.path : (existing?.basePath ?? null),
       parentId: parent?.id ?? null,
       meta: makePlaceholderMeta(id),
       rawNodeJson: input.rawNodeJson,
@@ -644,172 +696,196 @@ export async function softDeleteSubtree(
   })
 }
 
+const EMPTY_RESTORE_RESULT: RestoreSoftDeleteResult = {
+  restored: false,
+  rootNodeId: null,
+  oldPath: null,
+  restoredPath: null,
+  parentId: null,
+  promotedToRoot: false,
+  slugChanged: false,
+  parentPathChanged: false,
+}
+
 /**
  * Restores a previously soft-deleted subtree (Undo within 10s window) atomically.
- * If another active node occupied the restored root's path during the window,
- * assigns a unique sibling slug (`resolveUniqueSlug`) and rewrites subtree paths
- * so two active nodes never share the same path.
+ * - If the original parent still exists by ID (even at a new path), restores under that parent.
+ * - Only promotes to root (`parentId: null`) when the parent no longer exists.
+ * - Resolves any sibling slug collision with `resolveUniqueSlug`, records old synced remote paths
+ *   (`basePath`) into `pendingDeletes` when paths change, and returns details for Undo UI toasts.
  */
 export async function restoreSoftDeletedSubtree(
   db: KnovitesDatabase,
   nodeIds: readonly string[],
   now: string = new Date().toISOString(),
-): Promise<void> {
-  if (nodeIds.length === 0) return
+): Promise<RestoreSoftDeleteResult> {
+  if (nodeIds.length === 0) return EMPTY_RESTORE_RESULT
 
-  await db.transaction('rw', [db.nodes, db.canvases, db.assets, db.pendingDeletes], async () => {
-    const targetIdSet = new Set(nodeIds)
-    const [activeNodes, softDeletedCandidates] = await Promise.all([
-      db.nodes.where('deletedAt').equals(0).toArray(),
-      db.nodes.bulkGet([...targetIdSet]),
-    ])
-    const softDeletedNodes = softDeletedCandidates.filter(
-      (n): n is StoredNodeRecord => n !== undefined && n.deletedAt > 0,
-    )
+  return db.transaction(
+    'rw',
+    [db.nodes, db.canvases, db.assets, db.pendingDeletes],
+    async (): Promise<RestoreSoftDeleteResult> => {
+      const targetIdSet = new Set(nodeIds)
+      const [activeNodes, softDeletedCandidates] = await Promise.all([
+        db.nodes.where('deletedAt').equals(0).toArray(),
+        db.nodes.bulkGet([...targetIdSet]),
+      ])
+      const softDeletedNodes = softDeletedCandidates.filter(
+        (n): n is StoredNodeRecord => n !== undefined && n.deletedAt > 0,
+      )
 
-    if (softDeletedNodes.length === 0) return
+      if (softDeletedNodes.length === 0) return EMPTY_RESTORE_RESULT
 
-    const activeById = new Map(activeNodes.map((n) => [n.id, n]))
-    const activeNodePaths = new Set(activeNodes.map((n) => n.path))
-    const restoredIdSet = new Set(softDeletedNodes.map((n) => n.id))
+      const activeById = new Map(activeNodes.map((n) => [n.id, n]))
+      const restoredIdSet = new Set(softDeletedNodes.map((n) => n.id))
 
-    const rootNode =
-      softDeletedNodes.find((n) => n.parentId === null || !restoredIdSet.has(n.parentId)) ??
-      softDeletedNodes[0]!
+      const rootNode =
+        softDeletedNodes.find((n) => n.parentId === null || !restoredIdSet.has(n.parentId)) ??
+        softDeletedNodes[0]!
 
-    const originalParentPath = resolveParentPath(rootNode.path)
-    const activeParent = rootNode.parentId !== null ? activeById.get(rootNode.parentId) : undefined
-    const parentIntact = activeParent !== undefined && activeParent.path === originalParentPath
-    const effectiveParentId = parentIntact ? activeParent.id : null
-    const parentPath = parentIntact ? activeParent.path : null
+      const originalParentPath = resolveParentPath(rootNode.path)
+      const activeParent =
+        rootNode.parentId !== null ? activeById.get(rootNode.parentId) : undefined
+      const effectiveParentId = activeParent ? activeParent.id : null
+      const parentPath = activeParent ? activeParent.path : null
+      const promotedToRoot = rootNode.parentId !== null && activeParent === undefined
+      const parentPathChanged =
+        activeParent !== undefined && activeParent.path !== originalParentPath
 
-    const activeSiblingSlugs = activeNodes
-      .filter((n) => n.parentId === effectiveParentId)
-      .map((n) => {
-        const slash = n.path.lastIndexOf('/')
-        return slash === -1 ? n.path : n.path.slice(slash + 1)
-      })
+      const activeSiblingSlugs = activeNodes
+        .filter((n) => n.parentId === effectiveParentId)
+        .map((n) => {
+          const slash = n.path.lastIndexOf('/')
+          return slash === -1 ? n.path : n.path.slice(slash + 1)
+        })
 
-    const lastSlash = rootNode.path.lastIndexOf('/')
-    const originalSlug = lastSlash === -1 ? rootNode.path : rootNode.path.slice(lastSlash + 1)
-    const uniqueSlug = resolveUniqueSlug(originalSlug, activeSiblingSlugs)
-    const oldRootPath = rootNode.path
-    const targetRootPath = deriveNodePath(parentPath, uniqueSlug)
-    const pathChanged = targetRootPath !== oldRootPath
+      const lastSlash = rootNode.path.lastIndexOf('/')
+      const originalSlug = lastSlash === -1 ? rootNode.path : rootNode.path.slice(lastSlash + 1)
+      const uniqueSlug = resolveUniqueSlug(originalSlug, activeSiblingSlugs)
+      const oldRootPath = rootNode.path
+      const targetRootPath = deriveNodePath(parentPath, uniqueSlug)
+      const pathChanged = targetRootPath !== oldRootPath
 
-    const remapPath = (path: string): string => {
-      if (!pathChanged) return path
-      if (path === oldRootPath) return targetRootPath
-      if (path.startsWith(`${oldRootPath}/`)) {
-        return `${targetRootPath}${path.slice(oldRootPath.length)}`
+      const remapPath = (path: string): string => {
+        if (!pathChanged) return path
+        if (path === oldRootPath) return targetRootPath
+        if (path.startsWith(`${oldRootPath}/`)) {
+          return `${targetRootPath}${path.slice(oldRootPath.length)}`
+        }
+        return path
       }
-      return path
-    }
 
-    const oldPathsToPendingDelete: PendingDeleteRecord[] = []
-    const restoredNodes: StoredNodeRecord[] = softDeletedNodes.map((node) => {
-      const nextPath = remapPath(node.path)
-      const moved = nextPath !== node.path
-      if (moved && node.baseBlobSha !== null && !activeNodePaths.has(node.path)) {
-        oldPathsToPendingDelete.push({
-          path: `${node.path}/node.json`,
-          baseBlobSha: node.baseBlobSha,
-          deletedAt: now,
+      const oldPathsToPendingDelete: PendingDeleteRecord[] = []
+      const restoredNodes: StoredNodeRecord[] = softDeletedNodes.map((node) => {
+        const nextPath = remapPath(node.path)
+        const moved = nextPath !== node.path
+        if (moved && (node.baseBlobSha !== null || node.basePath !== null)) {
+          const remoteOldPath = node.basePath ?? node.path
+          oldPathsToPendingDelete.push({
+            path: `${remoteOldPath}/node.json`,
+            baseBlobSha: node.baseBlobSha,
+            deletedAt: now,
+          })
+          for (const extraFile of node.extraFiles) {
+            oldPathsToPendingDelete.push({
+              path: `${remoteOldPath}/${extraFile}`,
+              baseBlobSha: null,
+              deletedAt: now,
+            })
+          }
+        }
+        return {
+          ...node,
+          parentId: node.id === rootNode.id ? effectiveParentId : node.parentId,
+          path: nextPath,
+          basePath: node.basePath,
+          dirty: moved ? 1 : node.dirty,
+          deletedAt: 0,
+        }
+      })
+      await db.nodes.bulkPut(restoredNodes)
+
+      const canvases = await db.canvases.bulkGet([...targetIdSet])
+      const restoredCanvases: StoredCanvasRecord[] = []
+      for (const canvas of canvases) {
+        if (!canvas || canvas.deletedAt === 0) continue
+        const nextPath = remapPath(canvas.path)
+        const moved = nextPath !== canvas.path
+        if (moved && (canvas.baseBlobSha !== null || canvas.basePath !== null)) {
+          const remoteOldPath = canvas.basePath ?? canvas.path
+          oldPathsToPendingDelete.push({
+            path: `${remoteOldPath}/canvas.json`,
+            baseBlobSha: canvas.baseBlobSha,
+            deletedAt: now,
+          })
+        }
+        restoredCanvases.push({
+          ...canvas,
+          path: nextPath,
+          basePath: canvas.basePath,
+          dirty: moved ? 1 : canvas.dirty,
+          deletedAt: 0,
         })
       }
+      if (restoredCanvases.length > 0) {
+        await db.canvases.bulkPut(restoredCanvases)
+      }
+
+      const assets = await db.assets
+        .where('nodeId')
+        .anyOf([...targetIdSet])
+        .toArray()
+      const nodeByIdAfterRestore = new Map(restoredNodes.map((n) => [n.id, n]))
+      const restoredAssets: StoredAssetRecord[] = []
+      for (const asset of assets) {
+        if (asset.deletedAt === 0) continue
+        const restoredOwner = nodeByIdAfterRestore.get(asset.nodeId)
+        const oldOwner = softDeletedNodes.find((n) => n.id === asset.nodeId)
+        const ownerPathChanged =
+          restoredOwner !== undefined &&
+          oldOwner !== undefined &&
+          restoredOwner.path !== oldOwner.path
+        if (ownerPathChanged && oldOwner && (asset.sha !== null || asset.basePath !== null)) {
+          oldPathsToPendingDelete.push({
+            path: asset.basePath ?? `${oldOwner.path}/${asset.path}`,
+            baseBlobSha: asset.sha,
+            deletedAt: now,
+          })
+        }
+        restoredAssets.push({
+          ...asset,
+          basePath: asset.basePath,
+          dirty: ownerPathChanged ? 1 : asset.dirty,
+          deletedAt: 0,
+        })
+      }
+      if (restoredAssets.length > 0) {
+        await db.assets.bulkPut(restoredAssets)
+      }
+
+      if (oldPathsToPendingDelete.length > 0) {
+        await db.pendingDeletes.bulkPut(oldPathsToPendingDelete)
+      }
+
       return {
-        ...node,
-        parentId: node.id === rootNode.id ? effectiveParentId : node.parentId,
-        path: nextPath,
-        dirty: moved ? 1 : node.dirty,
-        deletedAt: 0,
+        restored: true,
+        rootNodeId: rootNode.id,
+        oldPath: oldRootPath,
+        restoredPath: targetRootPath,
+        parentId: effectiveParentId,
+        promotedToRoot,
+        slugChanged: uniqueSlug !== originalSlug,
+        parentPathChanged,
       }
-    })
-    await db.nodes.bulkPut(restoredNodes)
-
-    const [canvases, activeCanvases] = await Promise.all([
-      db.canvases.bulkGet([...targetIdSet]),
-      db.canvases.where('deletedAt').equals(0).toArray(),
-    ])
-    const activeCanvasPaths = new Set(activeCanvases.map((c) => c.path))
-
-    const restoredCanvases: StoredCanvasRecord[] = []
-    for (const canvas of canvases) {
-      if (!canvas || canvas.deletedAt === 0) continue
-      const nextPath = remapPath(canvas.path)
-      const moved = nextPath !== canvas.path
-      if (moved && canvas.baseBlobSha !== null && !activeCanvasPaths.has(canvas.path)) {
-        oldPathsToPendingDelete.push({
-          path: `${canvas.path}/canvas.json`,
-          baseBlobSha: canvas.baseBlobSha,
-          deletedAt: now,
-        })
-      }
-      restoredCanvases.push({
-        ...canvas,
-        path: nextPath,
-        dirty: moved ? 1 : canvas.dirty,
-        deletedAt: 0,
-      })
-    }
-    if (restoredCanvases.length > 0) {
-      await db.canvases.bulkPut(restoredCanvases)
-    }
-
-    const assets = await db.assets
-      .where('nodeId')
-      .anyOf([...targetIdSet])
-      .toArray()
-    const nodeByIdAfterRestore = new Map(restoredNodes.map((n) => [n.id, n]))
-    const restoredAssets: StoredAssetRecord[] = []
-    for (const asset of assets) {
-      if (asset.deletedAt === 0) continue
-      const restoredOwner = nodeByIdAfterRestore.get(asset.nodeId)
-      const oldOwner = softDeletedNodes.find((n) => n.id === asset.nodeId)
-      const ownerPathChanged =
-        restoredOwner !== undefined &&
-        oldOwner !== undefined &&
-        restoredOwner.path !== oldOwner.path
-      if (
-        ownerPathChanged &&
-        oldOwner &&
-        asset.sha !== null &&
-        !activeNodePaths.has(oldOwner.path)
-      ) {
-        oldPathsToPendingDelete.push({
-          path: `${oldOwner.path}/${asset.path}`,
-          baseBlobSha: asset.sha,
-          deletedAt: now,
-        })
-      }
-      restoredAssets.push({
-        ...asset,
-        dirty: ownerPathChanged ? 1 : asset.dirty,
-        deletedAt: 0,
-      })
-    }
-    if (restoredAssets.length > 0) {
-      await db.assets.bulkPut(restoredAssets)
-    }
-
-    for (const node of restoredNodes) {
-      await db.pendingDeletes.delete(`${node.path}/node.json`)
-    }
-    for (const canvas of restoredCanvases) {
-      await db.pendingDeletes.delete(`${canvas.path}/canvas.json`)
-    }
-    if (oldPathsToPendingDelete.length > 0) {
-      await db.pendingDeletes.bulkPut(oldPathsToPendingDelete)
-    }
-  })
+    },
+  )
 }
 
 /**
  * Finalizes all soft-deleted rows (or only the specified `nodeIds`) into `pendingDeletes`
  * and removes their soft-deleted records in one atomic transaction.
- * Unconditionally records every path of the finalized subtree (including descendants, canvases,
- * extra files, and assets) in `pendingDeletes` even if a new active node now uses the same path;
- * call `getEffectiveDeletes(db)` during sync to subtract active paths from the final state.
+ * Unconditionally records both current paths and any prior synced `basePath` paths
+ * so sync (`getEffectiveDeletes`) can clean up all obsolete remote files.
  */
 export async function finalizeSoftDeletes(
   db: KnovitesDatabase,
@@ -875,6 +951,27 @@ export async function finalizeSoftDeletes(
           deletedAt,
         })
       }
+      if (node.basePath !== null && node.basePath !== node.path) {
+        pendingMap.set(`${node.basePath}/node.json`, {
+          path: `${node.basePath}/node.json`,
+          baseBlobSha: node.baseBlobSha,
+          deletedAt,
+        })
+        if (node.hasCanvas) {
+          pendingMap.set(`${node.basePath}/canvas.json`, {
+            path: `${node.basePath}/canvas.json`,
+            baseBlobSha: null,
+            deletedAt,
+          })
+        }
+        for (const extraFile of node.extraFiles) {
+          pendingMap.set(`${node.basePath}/${extraFile}`, {
+            path: `${node.basePath}/${extraFile}`,
+            baseBlobSha: null,
+            deletedAt,
+          })
+        }
+      }
     }
 
     for (const canvas of canvasesToFinalize) {
@@ -884,17 +981,32 @@ export async function finalizeSoftDeletes(
         baseBlobSha: canvas.baseBlobSha,
         deletedAt,
       })
+      if (canvas.basePath !== null && canvas.basePath !== canvas.path) {
+        pendingMap.set(`${canvas.basePath}/canvas.json`, {
+          path: `${canvas.basePath}/canvas.json`,
+          baseBlobSha: canvas.baseBlobSha,
+          deletedAt,
+        })
+      }
     }
 
     for (const asset of assetsToFinalize) {
       const owner = nodeById.get(asset.nodeId)
       if (!owner) continue
       const fullPath = `${owner.path}/${asset.path}`
+      const deletedAt = toIsoUtc(asset.deletedAt, now)
       pendingMap.set(fullPath, {
         path: fullPath,
         baseBlobSha: asset.sha,
-        deletedAt: toIsoUtc(asset.deletedAt, now),
+        deletedAt,
       })
+      if (asset.basePath !== null && asset.basePath !== fullPath) {
+        pendingMap.set(asset.basePath, {
+          path: asset.basePath,
+          baseBlobSha: asset.sha,
+          deletedAt,
+        })
+      }
     }
 
     const finalized = [...pendingMap.values()]
@@ -921,21 +1033,13 @@ export async function getPendingDeletes(db: KnovitesDatabase): Promise<PendingDe
   return db.pendingDeletes.orderBy('path').toArray()
 }
 
-/**
- * Computes the effective remote deletions (`pendingDeletes` minus paths present in the current
- * active local state).
- *
- * `finalizeSoftDeletes` records every deleted subtree path into `pendingDeletes` unconditionally,
- * even when a new node was created at the same path during the 10-second Undo window (because the
- * replacement node might later be moved or deleted before sync runs). Sync calls
- * `getEffectiveDeletes` so remote commits only delete paths that are truly absent in the final state.
- */
-export async function getEffectiveDeletes(db: KnovitesDatabase): Promise<PendingDeleteRecord[]> {
-  const pendingDeletes = await db.pendingDeletes.orderBy('path').toArray()
-  if (pendingDeletes.length === 0) {
-    return []
-  }
-
+async function loadActiveStateForDiff(db: KnovitesDatabase): Promise<{
+  nodes: StoredNodeRecord[]
+  canvases: StoredCanvasRecord[]
+  assets: StoredAssetRecord[]
+  activeNodeById: Map<string, StoredNodeRecord>
+  activePaths: Set<string>
+}> {
   const [nodes, canvases, assets] = await Promise.all([
     db.nodes.toArray(),
     db.canvases.toArray(),
@@ -969,7 +1073,63 @@ export async function getEffectiveDeletes(db: KnovitesDatabase): Promise<Pending
     }
   }
 
+  return { nodes, canvases, assets, activeNodeById, activePaths }
+}
+
+/**
+ * Computes the effective remote deletions (`pendingDeletes` minus paths present in the current
+ * active local state).
+ *
+ * `finalizeSoftDeletes`, moves of synced records (`basePath`), and path-changing Undos record
+ * obsolete remote paths into `pendingDeletes` unconditionally, even when a new node later occupies
+ * the same path (because the replacement node might subsequently be moved or deleted before sync).
+ * Sync calls `getEffectiveDeletes` so remote commits only delete paths absent in the final state.
+ */
+export async function getEffectiveDeletes(db: KnovitesDatabase): Promise<PendingDeleteRecord[]> {
+  const pendingDeletes = await db.pendingDeletes.orderBy('path').toArray()
+  if (pendingDeletes.length === 0) {
+    return []
+  }
+
+  const { activePaths } = await loadActiveStateForDiff(db)
   return pendingDeletes.filter((entry) => !activePaths.has(entry.path))
+}
+
+/**
+ * Returns old remote `basePath` file paths for active records whose current path differs
+ * from `basePath` and whose old path is not occupied by any active file in the final state.
+ */
+export async function getMovedBasePaths(db: KnovitesDatabase): Promise<string[]> {
+  const { nodes, canvases, assets, activeNodeById, activePaths } = await loadActiveStateForDiff(db)
+  const movedPaths = new Set<string>()
+
+  for (const node of nodes) {
+    if (node.deletedAt !== 0 || node.basePath === null || node.basePath === node.path) continue
+    const nodeJsonPath = `${node.basePath}/node.json`
+    if (!activePaths.has(nodeJsonPath)) movedPaths.add(nodeJsonPath)
+    for (const extraFile of node.extraFiles) {
+      const extraPath = `${node.basePath}/${extraFile}`
+      if (!activePaths.has(extraPath)) movedPaths.add(extraPath)
+    }
+  }
+
+  for (const canvas of canvases) {
+    if (canvas.deletedAt !== 0 || canvas.basePath === null || canvas.basePath === canvas.path)
+      continue
+    const canvasPath = `${canvas.basePath}/canvas.json`
+    if (!activePaths.has(canvasPath)) movedPaths.add(canvasPath)
+  }
+
+  for (const asset of assets) {
+    const owner = activeNodeById.get(asset.nodeId)
+    if (!owner || asset.basePath === null) continue
+    const currentFullPath = `${owner.path}/${asset.path}`
+    if (asset.basePath !== currentFullPath && !activePaths.has(asset.basePath)) {
+      movedPaths.add(asset.basePath)
+    }
+  }
+
+  return [...movedPaths].sort(compareLexicographical)
 }
 
 /**

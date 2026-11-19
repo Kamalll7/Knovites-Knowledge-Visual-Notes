@@ -40,11 +40,21 @@ function toDeletedEpochMs(value: unknown): number {
 
 async function upgradeV1ToV2(tx: Transaction): Promise<void> {
   const canvasNodeIds = new Set<unknown>(await tx.table('canvases').toCollection().primaryKeys())
+  const nodePathById = new Map<unknown, string>()
 
   await tx
     .table('nodes')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
+      if (typeof record['path'] === 'string') {
+        nodePathById.set(record['id'], record['path'])
+      }
+      if (record['basePath'] === undefined) {
+        record['basePath'] =
+          record['baseBlobSha'] != null && typeof record['path'] === 'string'
+            ? record['path']
+            : null
+      }
       record['dirty'] = toIndexedFlag(record['dirty'])
       record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
       if (record['extraFiles'] === undefined) {
@@ -62,6 +72,12 @@ async function upgradeV1ToV2(tx: Transaction): Promise<void> {
     .table('canvases')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
+      if (record['basePath'] === undefined) {
+        record['basePath'] =
+          record['baseBlobSha'] != null && typeof record['path'] === 'string'
+            ? record['path']
+            : null
+      }
       record['dirty'] = toIndexedFlag(record['dirty'])
       record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
       if (record['corrupt'] === undefined) {
@@ -78,6 +94,13 @@ async function upgradeV1ToV2(tx: Transaction): Promise<void> {
     .table('assets')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
+      if (record['basePath'] === undefined) {
+        const ownerPath = nodePathById.get(record['nodeId'])
+        record['basePath'] =
+          record['sha'] != null && ownerPath && typeof record['path'] === 'string'
+            ? `${ownerPath}/${record['path']}`
+            : null
+      }
       record['dirty'] = toIndexedFlag(record['dirty'])
       record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
     })

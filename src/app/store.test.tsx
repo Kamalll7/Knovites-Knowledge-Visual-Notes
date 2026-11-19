@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb'
+import fc from 'fast-check'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '@/app/App'
 import {
@@ -11,10 +12,12 @@ import {
 } from '@/app/store'
 import { serializeCanvasJson } from '@/domain/serialize'
 import {
+  collectDirtyFiles,
   createBrowserTabLockCoordinator,
   createFakeTabLockRegistry,
   createKnovitesDatabase,
   getEffectiveDeletes,
+  getMovedBasePaths,
   getPendingDeletes,
   loadTreeBuildEntries,
   saveAsset,
@@ -130,6 +133,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     await saveAsset(db, {
       nodeId: child.nodeId,
       path: 'assets/abcdef0123456789.png',
+      basePath: null,
       blob: new Uint8Array([1, 2, 3, 4]),
       sha: 'assetsha',
       dirty: 0,
@@ -427,6 +431,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     await saveAsset(db, {
       nodeId: origStack.nodeId,
       path: 'assets/1122334455667788.png',
+      basePath: null,
       blob: new Uint8Array([1, 2, 3]),
       sha: 'stackassetsha',
       dirty: 0,
@@ -514,7 +519,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     db.close()
   })
 
-  it('restores soft-deleted child to root with a unique slug when its parent is moved or deleted during the 10s undo window', async () => {
+  it('restores soft-deleted child under moved parent at new path, or to root with unique slug if parent was deleted, returning restore details', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const indexedDB = new IDBFactory()
     const db = createKnovitesDatabase('store-parent-moved-undo-test', { indexedDB, IDBKeyRange })
@@ -538,6 +543,13 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     expect(gadget.ok).toBe(true)
     if (!gadget.ok) return
 
+    // Simulate childRop was previously synced at 'pwn/rop'
+    await db.nodes.update(childRop.nodeId, { baseBlobSha: 'sha-rop', basePath: 'pwn/rop' })
+    await db.nodes.update(gadget.nodeId, {
+      baseBlobSha: 'sha-gadget',
+      basePath: 'pwn/rop/gadget',
+    })
+
     // Case 1: soft-delete 'pwn/rop', move parent 'pwn' -> 'archive/pwn', then Undo
     expect((await store.getState().deleteNode(childRop.nodeId)).ok).toBe(true)
     await vi.advanceTimersByTimeAsync(1500)
@@ -549,12 +561,25 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     expect(store.getState().tree.nodes[pwn.nodeId]?.path).toBe('archive/pwn')
 
     expect(await store.getState().undoDelete()).toBe(true)
-    // Because parent 'pwn' moved to 'archive/pwn' and root 'rop' already exists, child restores to root as 'rop-2'
-    expect(store.getState().tree.nodes[childRop.nodeId]?.parentId).toBeNull()
-    expect(store.getState().tree.nodes[childRop.nodeId]?.path).toBe('rop-2')
-    expect(store.getState().tree.nodes[gadget.nodeId]?.path).toBe('rop-2/gadget')
+    // Parent still exists by ID -> child restores under moved parent at 'archive/pwn/rop'
+    expect(store.getState().tree.nodes[childRop.nodeId]?.parentId).toBe(pwn.nodeId)
+    expect(store.getState().tree.nodes[childRop.nodeId]?.path).toBe('archive/pwn/rop')
+    expect(store.getState().tree.nodes[gadget.nodeId]?.path).toBe('archive/pwn/rop/gadget')
+    expect(store.getState().lastUndoResult).toEqual({
+      restored: true,
+      rootNodeId: childRop.nodeId,
+      oldPath: 'pwn/rop',
+      restoredPath: 'archive/pwn/rop',
+      parentId: pwn.nodeId,
+      promotedToRoot: false,
+      slugChanged: false,
+      parentPathChanged: true,
+    })
+    expect((await getEffectiveDeletes(db)).map((d) => d.path)).toEqual(
+      expect.arrayContaining(['pwn/rop/node.json', 'pwn/rop/gadget/node.json']),
+    )
 
-    // Case 2: parent is missing (deleted) when child subtree Undo executes -> restores to root with unique slug 'rop-3'
+    // Case 2: parent is missing (deleted) when child subtree Undo executes -> promotes to root with unique slug 'rop-2'
     const folder = await store.getState().createNode({ title: 'Folder', parentId: null })
     expect(folder.ok).toBe(true)
     if (!folder.ok) return
@@ -568,11 +593,314 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
 
     expect(await store.getState().undoDelete()).toBe(true)
     expect(store.getState().tree.nodes[leafRop.nodeId]?.parentId).toBeNull()
-    expect(store.getState().tree.nodes[leafRop.nodeId]?.path).toBe('rop-3')
+    expect(store.getState().tree.nodes[leafRop.nodeId]?.path).toBe('rop-2')
+    expect(store.getState().lastUndoResult).toEqual({
+      restored: true,
+      rootNodeId: leafRop.nodeId,
+      oldPath: 'folder/rop',
+      restoredPath: 'rop-2',
+      parentId: null,
+      promotedToRoot: true,
+      slugChanged: true,
+      parentPathChanged: false,
+    })
     expect(store.getState().issues).toEqual([])
 
     store.getState().dispose()
     db.close()
+  })
+
+  it('dismisses first Undo toast when a second delete finalizes it and shows relocation toast on Undo', async () => {
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-undo-toast-lifecycle-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+    })
+
+    await store.getState().hydrate()
+    const cryptoNode = await store.getState().createNode({ title: 'Crypto', parentId: null })
+    const webNode = await store.getState().createNode({ title: 'Web', parentId: null })
+    expect(cryptoNode.ok && webNode.ok).toBe(true)
+    if (!cryptoNode.ok || !webNode.ok) return
+
+    render(<App workspaceStore={store} />)
+
+    // Delete #1 -> shows Undo toast for Crypto
+    expect((await store.getState().deleteNode(cryptoNode.nodeId)).ok).toBe(true)
+    expect(await screen.findByText('Deleted "Crypto"')).toBeInTheDocument()
+
+    // Delete #2 -> finalizes #1 and MUST dismiss Crypto's Undo toast immediately
+    expect((await store.getState().deleteNode(webNode.nodeId)).ok).toBe(true)
+    await waitFor(() => {
+      expect(screen.queryByText('Deleted "Crypto"')).toBeNull()
+      expect(screen.getByText('Deleted "Web"')).toBeInTheDocument()
+    })
+
+    // Occupy 'web' while Undo window is open, then Undo -> relocation toast shown
+    const replacementWeb = await store.getState().createNode({ title: 'Web', parentId: null })
+    expect(replacementWeb.ok).toBe(true)
+    expect(await store.getState().undoDelete()).toBe(true)
+
+    await waitFor(() => {
+      expect(screen.queryByText('Deleted "Web"')).toBeNull()
+      expect(screen.getByText('Restored to "web-2"')).toBeInTheDocument()
+    })
+
+    store.getState().dispose()
+    db.close()
+  })
+
+  it('model-based (fast-check): random sequences of create, rename, move, reorder, delete, undo, and finalize preserve remote snapshot invariants', async () => {
+    type SimCmd =
+      | { kind: 'create'; parentChoice: number; titleChoice: number }
+      | { kind: 'rename'; targetChoice: number; titleChoice: number }
+      | { kind: 'move'; targetChoice: number; parentChoice: number }
+      | { kind: 'reorder'; targetChoice: number; direction: 'earlier' | 'later' }
+      | { kind: 'delete'; targetChoice: number }
+      | { kind: 'undo' }
+      | { kind: 'finalize' }
+
+    const cmdArb: fc.Arbitrary<SimCmd> = fc.oneof(
+      fc.record({
+        kind: fc.constant('create' as const),
+        parentChoice: fc.nat(20),
+        titleChoice: fc.nat(10),
+      }),
+      fc.record({
+        kind: fc.constant('rename' as const),
+        targetChoice: fc.nat(20),
+        titleChoice: fc.nat(10),
+      }),
+      fc.record({
+        kind: fc.constant('move' as const),
+        targetChoice: fc.nat(20),
+        parentChoice: fc.nat(20),
+      }),
+      fc.record({
+        kind: fc.constant('reorder' as const),
+        targetChoice: fc.nat(20),
+        direction: fc.constantFrom('earlier' as const, 'later' as const),
+      }),
+      fc.record({
+        kind: fc.constant('delete' as const),
+        targetChoice: fc.nat(20),
+      }),
+      fc.record({ kind: fc.constant('undo' as const) }),
+      fc.record({ kind: fc.constant('finalize' as const) }),
+    )
+
+    const TITLES = ['PWN', 'ROP', 'Gadget', 'Heap', 'Kernel', 'Crypto', 'Reverse', 'Notes']
+
+    let runIdx = 0
+    await fc.assert(
+      fc.asyncProperty(fc.array(cmdArb, { minLength: 5, maxLength: 24 }), async (cmds) => {
+        runIdx += 1
+        const indexedDB = new IDBFactory()
+        const db = createKnovitesDatabase(`store-model-check-${runIdx}`, {
+          indexedDB,
+          IDBKeyRange,
+        })
+        const seedClock = createDeterministicClock('2026-11-19T14:00:00Z')
+        let idCounter = 0
+        const generateId = () => {
+          idCounter += 1
+          const crockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+          let v = idCounter
+          let suffix = ''
+          for (let i = 0; i < 10; i += 1) {
+            suffix = crockford[v % 32]! + suffix
+            v = Math.floor(v / 32)
+          }
+          return `01KN0V1TE5000000${suffix}`
+        }
+
+        const initialStore = createWorkspaceStore({
+          storage: createDexieWorkspaceAdapter(db),
+          now: seedClock,
+          generateId,
+        })
+        await initialStore.getState().hydrate()
+
+        // Seed 5 initial nodes across 3 levels (including an asset and extraFile)
+        const nPwn = await initialStore.getState().createNode({ title: 'PWN', parentId: null })
+        const nRe = await initialStore.getState().createNode({ title: 'RE', parentId: null })
+        const nCrypto = await initialStore
+          .getState()
+          .createNode({ title: 'Crypto', parentId: null })
+        if (!nPwn.ok || !nRe.ok || !nCrypto.ok) throw new Error('Seed root failed')
+        const nRop = await initialStore
+          .getState()
+          .createNode({ title: 'ROP', parentId: nPwn.nodeId })
+        if (!nRop.ok) throw new Error('Seed child failed')
+        const nGadget = await initialStore
+          .getState()
+          .createNode({ title: 'Gadget', parentId: nRop.nodeId })
+        if (!nGadget.ok) throw new Error('Seed grandchild failed')
+
+        await saveAsset(db, {
+          nodeId: nRop.nodeId,
+          path: 'assets/0102030405060708.png',
+          basePath: 'pwn/rop/assets/0102030405060708.png',
+          blob: new Uint8Array([1, 2, 3, 4]),
+          sha: 'asset-sha-1',
+          dirty: 0,
+          deletedAt: 0,
+        })
+
+        // Mark all initial rows as synced with baseBlobSha and basePath = path
+        const seedNodes = await db.nodes.toArray()
+        for (const rec of seedNodes) {
+          await db.nodes.update(rec.id, {
+            dirty: 0,
+            baseBlobSha: `node-sha-${rec.id}`,
+            basePath: rec.path,
+            extraFiles: rec.id === nRop.nodeId ? ['exploit.py'] : [],
+          })
+        }
+        const seedCanvases = await db.canvases.toArray()
+        for (const rec of seedCanvases) {
+          await db.canvases.update(rec.nodeId, {
+            dirty: 0,
+            baseBlobSha: `canvas-sha-${rec.nodeId}`,
+            basePath: rec.path,
+          })
+        }
+        initialStore.getState().dispose()
+
+        // Snapshot initial remote baseline `pathBase`
+        interface RemoteEntry {
+          kind: 'node' | 'canvas' | 'asset' | 'extra'
+          nodeId: string
+        }
+        const pathBase = new Map<string, RemoteEntry>()
+        for (const rec of await db.nodes.toArray()) {
+          pathBase.set(`${rec.path}/node.json`, { kind: 'node', nodeId: rec.id })
+          pathBase.set(`${rec.path}/canvas.json`, { kind: 'canvas', nodeId: rec.id })
+          for (const extra of rec.extraFiles) {
+            pathBase.set(`${rec.path}/${extra}`, { kind: 'extra', nodeId: rec.id })
+          }
+        }
+        for (const asset of await db.assets.toArray()) {
+          if (asset.basePath) {
+            pathBase.set(asset.basePath, { kind: 'asset', nodeId: asset.nodeId })
+          }
+        }
+
+        // Re-hydrate live store from synced DB and execute random command sequence
+        const store = createWorkspaceStore({
+          storage: createDexieWorkspaceAdapter(db),
+          now: seedClock,
+          generateId,
+        })
+        await store.getState().hydrate()
+        const seenNodeIds = new Set(Object.keys(store.getState().tree.nodes))
+
+        for (const cmd of cmds) {
+          const activeIds = Object.keys(store.getState().tree.nodes).sort()
+          if (cmd.kind === 'create') {
+            const parentId =
+              activeIds.length === 0 || cmd.parentChoice % 3 === 0
+                ? null
+                : activeIds[cmd.parentChoice % activeIds.length]!
+            const res = await store.getState().createNode({
+              title: TITLES[cmd.titleChoice % TITLES.length]!,
+              parentId,
+            })
+            if (res.ok) seenNodeIds.add(res.nodeId)
+          } else if (cmd.kind === 'rename' && activeIds.length > 0) {
+            const nodeId = activeIds[cmd.targetChoice % activeIds.length]!
+            await store.getState().renameNode({
+              nodeId,
+              title: TITLES[cmd.titleChoice % TITLES.length]!,
+            })
+          } else if (cmd.kind === 'move' && activeIds.length > 0) {
+            const nodeId = activeIds[cmd.targetChoice % activeIds.length]!
+            const newParentId =
+              cmd.parentChoice % 4 === 0 ? null : activeIds[cmd.parentChoice % activeIds.length]!
+            await store.getState().moveNode({ nodeId, newParentId })
+          } else if (cmd.kind === 'reorder' && activeIds.length > 0) {
+            const nodeId = activeIds[cmd.targetChoice % activeIds.length]!
+            await store.getState().reorderNode({ nodeId, direction: cmd.direction })
+          } else if (cmd.kind === 'delete' && activeIds.length > 0) {
+            const nodeId = activeIds[cmd.targetChoice % activeIds.length]!
+            await store.getState().deleteNode(nodeId)
+          } else if (cmd.kind === 'undo') {
+            await store.getState().undoDelete()
+          } else if (cmd.kind === 'finalize') {
+            await store.getState().finalizePendingDelete()
+          }
+        }
+
+        await store.getState().finalizePendingDelete()
+
+        // Simulate remote commit snapshot:
+        // remoteAkhir = (pathBase - effectiveDeletes - pathLamaYangPindah) + upserts
+        // Note: effectiveDeletes MUST already contain all deleted & moved synced basePaths!
+        const effectiveDeletes = await getEffectiveDeletes(db)
+        const movedBasePaths = await getMovedBasePaths(db)
+        const effectiveDeletePaths = new Set(effectiveDeletes.map((d) => d.path))
+        for (const movedOldPath of movedBasePaths) {
+          expect(effectiveDeletePaths.has(movedOldPath)).toBe(true)
+        }
+
+        const dirty = await collectDirtyFiles(db)
+        const activeDbNodes = await db.nodes.where('deletedAt').equals(0).toArray()
+
+        const remoteAkhir = new Map(pathBase)
+        for (const del of effectiveDeletes) {
+          remoteAkhir.delete(del.path)
+        }
+        for (const n of dirty.nodes) {
+          remoteAkhir.set(n.path, { kind: 'node', nodeId: n.nodeId })
+        }
+        for (const c of dirty.canvases) {
+          remoteAkhir.set(c.path, { kind: 'canvas', nodeId: c.nodeId })
+        }
+        for (const a of dirty.assets) {
+          remoteAkhir.set(a.path, { kind: 'asset', nodeId: a.nodeId })
+        }
+        for (const n of activeDbNodes) {
+          if (n.basePath !== null && n.basePath !== n.path) {
+            for (const extra of n.extraFiles) {
+              remoteAkhir.set(`${n.path}/${extra}`, { kind: 'extra', nodeId: n.id })
+            }
+          }
+        }
+
+        const finalTreeNodes = store.getState().tree.nodes
+
+        // Invariant 1: Every active node ID appears at EXACTLY ONE path matching node.path
+        for (const activeNode of Object.values(finalTreeNodes)) {
+          const matchingNodeFiles = [...remoteAkhir.entries()].filter(
+            ([, entry]) => entry.kind === 'node' && entry.nodeId === activeNode.id,
+          )
+          expect(matchingNodeFiles).toHaveLength(1)
+          expect(matchingNodeFiles[0]?.[0]).toBe(`${activeNode.path}/node.json`)
+          expect(remoteAkhir.get(`${activeNode.path}/canvas.json`)?.nodeId).toBe(activeNode.id)
+          for (const assetRel of activeNode.assets) {
+            expect(remoteAkhir.get(`${activeNode.path}/${assetRel}`)?.nodeId).toBe(activeNode.id)
+          }
+          for (const extraRel of activeNode.extraFiles) {
+            expect(remoteAkhir.get(`${activeNode.path}/${extraRel}`)?.nodeId).toBe(activeNode.id)
+          }
+        }
+
+        // Invariant 2 & 3: Every remote path belongs to an existing active node at its current path
+        // (no deleted node file and no stale pre-move path remains)
+        const activeIdsSet = new Set(Object.keys(finalTreeNodes))
+        for (const [remotePath, entry] of remoteAkhir.entries()) {
+          expect(seenNodeIds.has(entry.nodeId)).toBe(true)
+          expect(activeIdsSet.has(entry.nodeId)).toBe(true)
+          const activeNode = finalTreeNodes[entry.nodeId]!
+          expect(remotePath.startsWith(`${activeNode.path}/`)).toBe(true)
+        }
+
+        store.getState().dispose()
+        await db.close()
+      }),
+      { numRuns: 35 },
+    )
   })
 
   it('displays single-session notice when navigator.locks is unavailable while permitting local edits', async () => {

@@ -1,8 +1,11 @@
 import { CloudOff, Compass, FileText, Moon, Settings, Sun } from 'lucide-react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { NavLink } from 'react-router'
-import type { ReactNode } from 'react'
 import { StorageStatusBanner } from '@/app/StorageStatusBanner'
+import { UNDO_DELETE_TIMEOUT_MS } from '@/app/store'
 import { useTheme } from '@/app/theme-context'
+import { useToast } from '@/app/toast-context'
+import { useWorkspaceStore } from '@/app/workspace-context'
 import { en } from '@/i18n/en'
 import { Button } from '@/ui/components/button'
 import { cn } from '@/ui/lib/utils'
@@ -16,6 +19,51 @@ const NAV_ITEMS = [
 export function AppShell({ children }: { children: ReactNode }) {
   const { resolvedTheme, toggleTheme } = useTheme()
   const isDark = resolvedTheme === 'dark'
+  const { notify, dismiss } = useToast()
+  const pendingUndoDelete = useWorkspaceStore((state) => state.pendingUndoDelete)
+  const lastUndoResult = useWorkspaceStore((state) => state.lastUndoResult)
+  const undoDelete = useWorkspaceStore((state) => state.undoDelete)
+  const clearLastUndoResult = useWorkspaceStore((state) => state.clearLastUndoResult)
+  const activeUndoToastIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (activeUndoToastIdRef.current !== null) {
+      dismiss(activeUndoToastIdRef.current)
+      activeUndoToastIdRef.current = null
+    }
+    if (pendingUndoDelete !== null) {
+      const label = pendingUndoDelete.title || pendingUndoDelete.rootNodeId
+      activeUndoToastIdRef.current = notify({
+        title: `${en.undoToast.deletedPrefix} "${label}"`,
+        durationMs: UNDO_DELETE_TIMEOUT_MS,
+        action: {
+          label: en.undoToast.undoButton,
+          altText: en.undoToast.undoButton,
+          onClick: () => {
+            void undoDelete()
+          },
+        },
+      })
+    }
+  }, [pendingUndoDelete, undoDelete, notify, dismiss])
+
+  useEffect(() => {
+    if (!lastUndoResult || !lastUndoResult.restored) return
+    if (
+      lastUndoResult.restoredPath &&
+      (lastUndoResult.slugChanged ||
+        lastUndoResult.promotedToRoot ||
+        lastUndoResult.parentPathChanged)
+    ) {
+      notify({
+        title: `${en.undoToast.restoredPrefix} "${lastUndoResult.restoredPath}"`,
+        description: lastUndoResult.slugChanged
+          ? en.undoToast.restoredSlugChangedDescription
+          : en.undoToast.restoredParentMovedDescription,
+      })
+    }
+    clearLastUndoResult()
+  }, [lastUndoResult, clearLastUndoResult, notify])
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">

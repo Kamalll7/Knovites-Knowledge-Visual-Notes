@@ -135,9 +135,9 @@ Index pencarian, backlink, daftar children, posisi node di peta, viewport, token
 
 ### 5.9 Skema database lokal (Dexie v2)
 
-- `nodes`: `id` (PK), `path` (indeks), `parentId` (indeks), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` bila aktif atau epoch ms saat menunggu jendela Undo 10 detik, indeks), `meta` (isi `node.json` hasil parse atau fallback read-only), `rawNodeJson` (teks mentah file agar node `corrupt` / `newer-schema` tidak pernah ditimpa), `baseBlobSha`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `extraFiles` (daftar file tak dikenal di folder node), `hasCanvas`.
-- `canvases`: `nodeId` (PK), `path` (indeks), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `doc`, `rawJson` (teks mentah bila `corrupt` / `newer-schema`), `baseBlobSha`, `loaded`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional).
-- `assets`: `[nodeId+path]` (PK), `nodeId`, `path` (relatif terhadap folder node, mis. `assets/<hash16>.<ext>`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `blob`, `sha`.
+- `nodes`: `id` (PK), `path` (indeks), `basePath` (path folder saat sync terakhir atau `null`), `parentId` (indeks), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` bila aktif atau epoch ms saat menunggu jendela Undo 10 detik, indeks), `meta` (isi `node.json` hasil parse atau fallback read-only), `rawNodeJson` (teks mentah file agar node `corrupt` / `newer-schema` tidak pernah ditimpa), `baseBlobSha`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `extraFiles` (daftar file tak dikenal di folder node), `hasCanvas`.
+- `canvases`: `nodeId` (PK), `path` (indeks), `basePath` (path folder node saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `doc`, `rawJson` (teks mentah bila `corrupt` / `newer-schema`), `baseBlobSha`, `loaded`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional).
+- `assets`: `[nodeId+path]` (PK), `nodeId`, `path` (relatif terhadap folder node, mis. `assets/<hash16>.<ext>`), `basePath` (path lengkap relatif repo saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `blob`, `sha`.
 - `pendingDeletes`: `path` (PK), `baseBlobSha`, `deletedAt` — path file yang harus dihapus pada commit berikutnya.
 - `syncState`: `id` (`'singleton'`, PK), `repo`, `branch`, `baseCommitSha`, `lastSyncedAt`, `pendingMerge`.
 - `settings`: `key` (PK), `value`, `updatedAt`.

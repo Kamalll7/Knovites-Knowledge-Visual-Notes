@@ -26,6 +26,7 @@ import {
   softDeleteSubtree,
   type ErrorLogRecord,
   type KnovitesDatabase,
+  type RestoreSoftDeleteResult,
 } from '@/storage'
 
 export const UNDO_DELETE_TIMEOUT_MS = 10_000
@@ -59,7 +60,10 @@ export interface WorkspaceStorageAdapter {
   loadEntries: () => Promise<TreeBuildEntry[]>
   applyChangeset: (changeset: Changeset, options?: { now?: string }) => Promise<void>
   softDeleteSubtree: (nodeIds: readonly string[], deletedAt: string) => Promise<void>
-  restoreSoftDeletedSubtree: (nodeIds: readonly string[], now?: string) => Promise<void>
+  restoreSoftDeletedSubtree: (
+    nodeIds: readonly string[],
+    now?: string,
+  ) => Promise<RestoreSoftDeleteResult>
   finalizeSoftDeletes: (now: string, nodeIds?: readonly string[]) => Promise<void>
   appendErrorLog: (entry: ErrorLogRecord) => Promise<void>
 }
@@ -79,6 +83,7 @@ export interface WorkspaceStoreState {
   tree: TreeState
   issues: TreeIssue[]
   pendingUndoDelete: PendingUndoDelete | null
+  lastUndoResult: RestoreSoftDeleteResult | null
   hasUnsavedChanges: boolean
   storageError: StorageErrorState | null
   isReadOnlyTab: boolean
@@ -100,6 +105,7 @@ export interface WorkspaceStoreState {
   ) => Promise<StoreOperationResult>
   deleteNode: (nodeId: string) => Promise<StoreOperationResult>
   undoDelete: () => Promise<boolean>
+  clearLastUndoResult: () => void
   finalizePendingDelete: () => Promise<void>
   retrySave: () => Promise<boolean>
   setReadOnlyTab: (readOnly: boolean) => void
@@ -254,6 +260,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
         tree: { nodes: {}, rootIds: [] },
         issues: [],
         pendingUndoDelete: null,
+        lastUndoResult: null,
         hasUnsavedChanges: false,
         storageError: null,
         isReadOnlyTab: deps.initialReadOnly ?? false,
@@ -276,6 +283,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
               draft.tree = castDraft(built.state)
               draft.issues = built.issues
               draft.pendingUndoDelete = null
+              draft.lastUndoResult = null
               draft.hydrated = true
               draft.storageError = null
               draft.hasUnsavedChanges = false
@@ -405,7 +413,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
           clearUndoTimer()
           const performRestore = async () => {
             const now = getNow()
-            await deps.storage.restoreSoftDeletedSubtree(pending.nodeIds, now)
+            const restoreResult = await deps.storage.restoreSoftDeletedSubtree(pending.nodeIds, now)
             const entries = await deps.storage.loadEntries()
             const built = buildTree(entries, { generateId })
             if (built.changeset.upserts.length > 0) {
@@ -415,6 +423,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
               draft.tree = castDraft(built.state)
               draft.issues = built.issues
               draft.pendingUndoDelete = null
+              draft.lastUndoResult = restoreResult
             })
           }
 
@@ -426,6 +435,12 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             await recordStorageFailure('storage_undo_failed', error)
             return false
           }
+        },
+
+        clearLastUndoResult: () => {
+          set((draft) => {
+            draft.lastUndoResult = null
+          })
         },
 
         finalizePendingDelete: async () => {
