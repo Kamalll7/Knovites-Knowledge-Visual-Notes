@@ -1,19 +1,33 @@
 import type { Editor } from '@tiptap/react'
 import { Bold, Highlighter, Italic, Underline } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, TEXT_COLOR_SWATCHES } from './rich-text-config'
 
 export interface FloatingToolbarProps {
   editor: Editor
+  position: { left: number; top: number }
+  toolbarRef?: React.RefObject<HTMLDivElement | null>
 }
 
 /**
- * Compact floating formatting toolbar anchored above the edited box.
+ * Screen-fixed floating formatting toolbar rendered OUTSIDE the React Flow viewport transform
+ * so its size, readability, and hit targets stay constant across all canvas zoom levels.
  * Uses `onMouseDown={(e) => e.preventDefault()}` on every control so clicking buttons or
  * opening font/size pickers keeps ProseMirror focus and text selection completely intact.
  */
-export function FloatingToolbar({ editor }: FloatingToolbarProps) {
+export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolbarProps) {
   const [openMenu, setOpenMenu] = useState<'size' | 'font' | null>(null)
+  const [, setTransactionTick] = useState(0)
+
+  useEffect(() => {
+    const bump = () => setTransactionTick((n) => n + 1)
+    editor.on('transaction', bump)
+    editor.on('selectionUpdate', bump)
+    return () => {
+      editor.off('transaction', bump)
+      editor.off('selectionUpdate', bump)
+    }
+  }, [editor])
 
   const currentAttrs = editor.getAttributes('textStyle')
   const currentFontSize =
@@ -39,11 +53,16 @@ export function FloatingToolbar({ editor }: FloatingToolbarProps) {
 
   return (
     <div
+      ref={toolbarRef}
       data-testid="floating-toolbar"
       data-editor-toolbar="true"
       onMouseDown={keepFocus}
       onClick={(e) => e.stopPropagation()}
-      className="nodrag nowheel nopan absolute bottom-[calc(100%+26px)] left-0 z-30 flex w-max items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs whitespace-nowrap shadow-lg"
+      style={{
+        left: `${Math.round(position.left)}px`,
+        top: `${Math.round(position.top)}px`,
+      }}
+      className="nodrag nowheel nopan absolute z-30 flex w-max items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs whitespace-nowrap shadow-lg"
     >
       <button
         type="button"

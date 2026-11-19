@@ -1,10 +1,9 @@
 import type { Editor } from '@tiptap/react'
 import type { Node, NodeProps } from '@xyflow/react'
 import { GripHorizontal } from 'lucide-react'
-import { memo, useState } from 'react'
+import { memo } from 'react'
 import type { TipTapDoc } from '@/domain/schema'
 import { ActiveTipTapEditor } from './ActiveTipTapEditor'
-import { FloatingToolbar } from './FloatingToolbar'
 import { StaticTextContent } from './StaticTextContent'
 
 export interface TextBoxNodeData extends Record<string, unknown> {
@@ -13,10 +12,12 @@ export interface TextBoxNodeData extends Record<string, unknown> {
   maxHeight?: number
   bg?: string | null
   border?: string | null
+  frameNone?: boolean
   isEditing: boolean
   onEnterEdit: (id: string) => void
   onExitEdit: (id: string) => void
   onDocChange: (id: string, doc: TipTapDoc, hasNetChange: boolean) => void
+  onEditorReady?: (id: string, editor: Editor | null) => void
   onEditorMountChange: (instanceId: string, mounted: boolean) => void
 }
 
@@ -33,14 +34,14 @@ export const TextCanvasNode = memo(function TextCanvasNode({
     maxHeight,
     bg,
     border,
+    frameNone = false,
     isEditing,
     onEnterEdit,
     onExitEdit,
     onDocChange,
+    onEditorReady,
     onEditorMountChange,
   } = data
-
-  const [activeEditor, setActiveEditor] = useState<Editor | null>(null)
 
   const handleWheelCapture = (event: React.WheelEvent<HTMLDivElement>) => {
     const el = event.currentTarget
@@ -64,9 +65,6 @@ export const TextCanvasNode = memo(function TextCanvasNode({
       className="group relative"
       style={{ width: `${width}px` }}
     >
-      {/* Floating formatting toolbar anchored outside `.knovites-richtext` so pre-wrap/word-break never affects it */}
-      {isEditing && activeEditor ? <FloatingToolbar editor={activeEditor} /> : null}
-
       {/* Top-edge drag handle (outside layout flow so card geometry never shifts in edit mode) */}
       {!isEditing ? (
         <div
@@ -83,13 +81,14 @@ export const TextCanvasNode = memo(function TextCanvasNode({
       {/* Card surface: identical padding, font, background, border between static & edit mode */}
       <div
         data-testid={`card-surface-${id}`}
+        data-frame-mode={frameNone ? 'none' : 'card'}
         onWheelCapture={handleWheelCapture}
-        className={`rounded-xl border p-3.5 shadow-sm transition-shadow ${
+        className={`rounded-xl border p-3.5 transition-shadow ${frameNone ? '' : 'shadow-sm'} ${
           maxHeight !== undefined ? 'overflow-y-auto' : ''
         } ${isEditing ? 'nodrag nowheel nopan cursor-text select-text' : 'select-none'}`}
         style={{
-          backgroundColor: bg ?? 'var(--card)',
-          borderColor: border ?? 'var(--border)',
+          backgroundColor: frameNone ? 'transparent' : (bg ?? 'var(--card)'),
+          borderColor: frameNone ? 'transparent' : (border ?? 'var(--border)'),
           maxHeight: maxHeight !== undefined ? `${maxHeight}px` : undefined,
           boxShadow: isEditing
             ? '0 0 0 2px var(--accent)'
@@ -107,7 +106,7 @@ export const TextCanvasNode = memo(function TextCanvasNode({
               doc={doc}
               onDocChange={(nextDoc, hasNetChange) => onDocChange(id, nextDoc, hasNetChange)}
               onExitEdit={() => onExitEdit(id)}
-              onEditorReady={setActiveEditor}
+              onEditorReady={(ed) => onEditorReady?.(id, ed)}
               onEditorMountChange={onEditorMountChange}
             />
           ) : (

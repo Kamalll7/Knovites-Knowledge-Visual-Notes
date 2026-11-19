@@ -199,6 +199,9 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await expect(editorEl).toBeVisible()
     await expect(page.getByTestId('floating-toolbar')).toBeVisible()
     await expect(editorEl).toBeFocused()
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
 
     // Select the first word "Alpha" via Shift+ArrowRight
     await page.keyboard.press('Home')
@@ -314,8 +317,9 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(movedPos!.x).toBeGreaterThan(beforePos!.x + 60)
     expect(await page.evaluate(() => window.__S2_API__?.getCanvasUndoCount())).toBe(1)
 
-    // Enter edit mode on box-edit, type extra text, then press Ctrl+Z
+    // Enter edit mode on box-edit, wait for focus before typing, then press Ctrl+Z
     await page.getByTestId('text-box-box-edit').dblclick()
+    await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeFocused()
     await page.keyboard.type(' EXTRA_WORD')
     await expect(page.getByTestId('active-tiptap-editor')).toContainText('EXTRA_WORD')
 
@@ -350,7 +354,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.keyboard.type(' check')
     const plainDocCheck = await page.evaluate(() => {
       const state = window.__S2_API__?.getNodeState('box-edit')
-      if (!state) return null
+      if (!state || !state.doc) return null
       return {
         firstParaAttrs: state.doc.content?.[0]?.attrs ?? null,
         schemaResult: window.__S2_API__!.validateWithDomainSchema(state.doc),
@@ -505,11 +509,12 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     // Validate live TipTap editor output with the real Zod schema from src/domain/schema
     const schemaCheck = await page.evaluate(() => {
       const state = window.__S2_API__?.getNodeState('box-edit')
-      if (!state) return null
+      if (!state || !state.doc) return null
       const first = window.__S2_API__!.validateWithDomainSchema(state.doc)
       if (first.status !== 'ok') return { firstStatus: first.status }
-      const sanitizedDoc = (first.data.elements['e_00000001'] as { content: typeof state.doc })
-        .content
+      const sanitizedDoc = (
+        first.data.elements['e_00000001'] as { content: NonNullable<typeof state.doc> }
+      ).content
       const recheck = window.__S2_API__!.validateWithDomainSchema(sanitizedDoc)
       return {
         firstStatus: first.status,
@@ -632,26 +637,289 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(diffLight.diffPercent).toBeLessThan(1.0)
   })
 
-  test('benchmark FPS pan-only, zoom-only, and culling toggle across 100 and 300 nodes', async ({
+  test('10. toolbar berukuran tetap di luar transform kanvas, terbaca di semua zoom, dan tidak menutupi node', async ({
     page,
   }) => {
-    test.setTimeout(120_000)
+    await page.goto('/')
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const toolbar = page.getByTestId('floating-toolbar')
+    await expect(toolbar).toBeVisible()
+
+    // Toolbar MUST sit outside `.react-flow__viewport` CSS transform
+    const insideViewportTransform = await toolbar.evaluate(
+      (el) => el.closest('.react-flow__viewport') !== null,
+    )
+    expect(insideViewportTransform).toBe(false)
+
+    const intersects = (
+      a: { x: number; y: number; width: number; height: number },
+      b: { x: number; y: number; width: number; height: number },
+    ) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+
+    const measuredZooms: Array<{
+      zoom: number
+      toolbarWidth: number
+      toolbarHeight: number
+      boldBtnHeight: number
+      overlapsNode: boolean
+    }> = []
+
+    // Measure at zoom 1.0, 0.25 (zoomed out), and 2.5 (zoomed in)
+    const testViewports = [
+      { zoom: 1, x: 0, y: 0 },
+      { zoom: 0.25, x: 200, y: 120 },
+      { zoom: 2.5, x: -120, y: -1020 },
+    ]
+
+    for (const vp of testViewports) {
+      await page.evaluate((nextVp) => window.__S2_API__?.setViewport(nextVp), vp)
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+
+      const tbBox = await toolbar.boundingBox()
+      const cardBox = await page.getByTestId('card-surface-box-edit').boundingBox()
+      const boldBox = await page.getByTestId('toolbar-bold').boundingBox()
+      expect(tbBox).not.toBeNull()
+      expect(cardBox).not.toBeNull()
+      expect(boldBox).not.toBeNull()
+
+      const overlaps = intersects(tbBox!, cardBox!)
+      measuredZooms.push({
+        zoom: vp.zoom,
+        toolbarWidth: Math.round(tbBox!.width),
+        toolbarHeight: Math.round(tbBox!.height),
+        boldBtnHeight: Math.round(boldBox!.height),
+        overlapsNode: overlaps,
+      })
+
+      // Toolbar stays screen-sized & readable (>= 28px button) and never overlaps edited box
+      expect(tbBox!.width).toBeGreaterThanOrEqual(260)
+      expect(tbBox!.width).toBeLessThanOrEqual(420)
+      expect(tbBox!.height).toBeGreaterThanOrEqual(34)
+      expect(tbBox!.height).toBeLessThanOrEqual(48)
+      expect(boldBox!.height).toBeGreaterThanOrEqual(26)
+      expect(overlaps).toBe(false)
+    }
+
+    // Width & height remain constant across 10x zoom change (0.25 -> 2.5)
+    const widths = measuredZooms.map((m) => m.toolbarWidth)
+    const heights = measuredZooms.map((m) => m.toolbarHeight)
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(2)
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(2)
+
+    // Near top edge of canvas -> toolbar flips below node cleanly without overlapping
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: -460, zoom: 1 }))
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    const tbFlip = await toolbar.boundingBox()
+    const cardTopEdge = await page.getByTestId('card-surface-box-edit').boundingBox()
+    expect(tbFlip).not.toBeNull()
+    expect(cardTopEdge).not.toBeNull()
+    expect(tbFlip!.y).toBeGreaterThanOrEqual(cardTopEdge!.y + cardTopEdge!.height - 1)
+    expect(intersects(tbFlip!, cardTopEdge!)).toBe(false)
+
+    console.log('S2_TOOLBAR_ZOOM_INVARIANCE=' + JSON.stringify(measuredZooms))
+  })
+
+  test('11. ukur rasio kontras WCAG 2.1 untuk mark color & highlight di tema dark/light dan frame card/none', async ({
+    page,
+  }) => {
     await page.goto('/')
 
+    const contrastDoc = {
+      type: 'doc' as const,
+      content: [
+        {
+          type: 'paragraph' as const,
+          content: [
+            { type: 'text' as const, text: 'AutoText' },
+            {
+              type: 'text' as const,
+              text: 'AccentBlue',
+              marks: [{ type: 'textStyle' as const, attrs: { color: '#7c9cff' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'AmberText',
+              marks: [{ type: 'textStyle' as const, attrs: { color: '#fbbf24' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'EmeraldText',
+              marks: [{ type: 'textStyle' as const, attrs: { color: '#34d399' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'RoseText',
+              marks: [{ type: 'textStyle' as const, attrs: { color: '#f87171' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'VioletText',
+              marks: [{ type: 'textStyle' as const, attrs: { color: '#a78bfa' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'HighlightAmber',
+              marks: [{ type: 'highlight' as const, attrs: { color: '#fbbf24' } }],
+            },
+          ],
+        },
+      ],
+    }
+
+    await page.evaluate((doc) => window.__S2_API__?.setNodeDocForTest('box-edit', doc), contrastDoc)
+
+    const measureThemeAndFrame = async (theme: 'dark' | 'light', frameNone: boolean) => {
+      await page.evaluate(
+        ({ t, fn }) => {
+          window.__S2_API__?.setTheme(t)
+          window.__S2_API__?.setNodeFrameModeForTest('box-edit', fn)
+        },
+        { t: theme, fn: frameNone },
+      )
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+          ),
+        )
+        .toBe(theme === 'dark' ? '#0b0e14' : '#f6f8fc')
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+
+      return page.evaluate(() => {
+        const parseRgb = (css: string): [number, number, number] => {
+          const m = /rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)/i.exec(css)
+          if (!m) return [0, 0, 0]
+          return [Number(m[1]), Number(m[2]), Number(m[3])]
+        }
+        const isTransparent = (css: string) =>
+          css === 'transparent' || /rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/i.test(css)
+        const relLum = ([r, g, b]: [number, number, number]) => {
+          const lin = [r, g, b].map((v) => {
+            const s = v / 255
+            return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+          })
+          return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!
+        }
+        const contrastRatio = (fg: [number, number, number], bg: [number, number, number]) => {
+          const l1 = relLum(fg)
+          const l2 = relLum(bg)
+          const hi = Math.max(l1, l2)
+          const lo = Math.min(l1, l2)
+          return Number(((hi + 0.05) / (lo + 0.05)).toFixed(2))
+        }
+        const effectiveBgCss = (el: HTMLElement): string => {
+          let cur: HTMLElement | null = el
+          while (cur) {
+            const bg = getComputedStyle(cur).backgroundColor
+            if (!isTransparent(bg)) return bg
+            cur = cur.parentElement
+          }
+          return getComputedStyle(document.body).backgroundColor
+        }
+
+        const root = document.querySelector('[data-testid="richtext-body-box-edit"]')!
+        const p = root.querySelector('p')!
+        const surfaceBgCss = effectiveBgCss(p)
+        const results: Array<{
+          sample: string
+          fgCss: string
+          bgCss: string
+          ratio: number
+          passAA: boolean
+        }> = []
+
+        const nodes = Array.from(p.childNodes)
+        for (const node of nodes) {
+          if (node instanceof HTMLElement) {
+            const fgCss = getComputedStyle(node).color
+            const bgCss = effectiveBgCss(node)
+            const ratio = contrastRatio(parseRgb(fgCss), parseRgb(bgCss))
+            results.push({
+              sample: node.textContent ?? '',
+              fgCss,
+              bgCss,
+              ratio,
+              passAA: ratio >= 4.5,
+            })
+          } else if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) {
+            const fgCss = getComputedStyle(p).color
+            const ratio = contrastRatio(parseRgb(fgCss), parseRgb(surfaceBgCss))
+            results.push({
+              sample: node.textContent.trim(),
+              fgCss,
+              bgCss: surfaceBgCss,
+              ratio,
+              passAA: ratio >= 4.5,
+            })
+          }
+        }
+        return results
+      })
+    }
+
+    const report = {
+      dark_card: await measureThemeAndFrame('dark', false),
+      dark_frame_none: await measureThemeAndFrame('dark', true),
+      light_card: await measureThemeAndFrame('light', false),
+      light_frame_none: await measureThemeAndFrame('light', true),
+    }
+    console.log('S2_CONTRAST_RATIOS=' + JSON.stringify(report))
+
+    // Dark text swatches & Auto pass AA >= 4.5; HighlightAmber fails on dark due to light inherited fg on #fbbf24
+    const darkCardColors = report.dark_card.filter((r) => r.sample !== 'HighlightAmber')
+    expect(darkCardColors.every((r) => r.passAA)).toBe(true)
+    const darkHighlight = report.dark_card.find((r) => r.sample === 'HighlightAmber')
+    expect(darkHighlight!.ratio).toBeLessThan(2.0)
+
+    // Light AutoText & HighlightAmber pass AA >= 4.5, while fixed dark-palette hex swatches fail AA (< 3.0) on light surface & frame:none
+    expect(report.light_card.find((r) => r.sample === 'AutoText')!.passAA).toBe(true)
+    expect(report.light_card.find((r) => r.sample === 'HighlightAmber')!.passAA).toBe(true)
+    const lightFixedHexes = report.light_card.filter(
+      (r) => r.sample !== 'AutoText' && r.sample !== 'HighlightAmber',
+    )
+    expect(lightFixedHexes.every((r) => !r.passAA)).toBe(true)
+    const lightNoneHexes = report.light_frame_none.filter(
+      (r) => r.sample !== 'AutoText' && r.sample !== 'HighlightAmber',
+    )
+    expect(lightNoneHexes.every((r) => !r.passAA)).toBe(true)
+  })
+
+  test('benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (rich text + 50 images)', async ({
+    page,
+  }) => {
+    test.setTimeout(360_000)
+    await page.goto('/')
+
+    // Verify dataset composition first (100 nodes -> 17 images; 300 nodes -> 50 images + rich nodes)
+    await page.evaluate(() => window.__S2_API__?.setStaticNodeCount(100))
+    expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(100)
+    expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(17)
+    await page.evaluate(() => window.__S2_API__?.setStaticNodeCount(300))
+    expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(300)
+    expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(50)
+
     const scenarios = [
-      {
-        key: 's100_pan_0editor_cullOn',
-        count: 100 as const,
-        activeEditor: false,
-        mode: 'pan' as const,
-        onlyRenderVisibleElements: true,
-      },
       {
         key: 's100_pan_1editor_cullOn',
         count: 100 as const,
         activeEditor: true,
         mode: 'pan' as const,
         onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's100_pan_1editor_cullOff',
+        count: 100 as const,
+        activeEditor: true,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: false,
       },
       {
         key: 's100_zoom_1editor_cullOn',
@@ -661,11 +929,25 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
+        key: 's100_zoom_1editor_cullOff',
+        count: 100 as const,
+        activeEditor: true,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: false,
+      },
+      {
         key: 's300_pan_0editor_cullOn',
         count: 300 as const,
         activeEditor: false,
         mode: 'pan' as const,
         onlyRenderVisibleElements: true,
+      },
+      {
+        key: 's300_pan_0editor_cullOff',
+        count: 300 as const,
+        activeEditor: false,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: false,
       },
       {
         key: 's300_pan_1editor_cullOn',
@@ -675,6 +957,13 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
+        key: 's300_pan_1editor_cullOff',
+        count: 300 as const,
+        activeEditor: true,
+        mode: 'pan' as const,
+        onlyRenderVisibleElements: false,
+      },
+      {
         key: 's300_zoom_0editor_cullOn',
         count: 300 as const,
         activeEditor: false,
@@ -682,18 +971,18 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
+        key: 's300_zoom_0editor_cullOff',
+        count: 300 as const,
+        activeEditor: false,
+        mode: 'zoom' as const,
+        onlyRenderVisibleElements: false,
+      },
+      {
         key: 's300_zoom_1editor_cullOn',
         count: 300 as const,
         activeEditor: true,
         mode: 'zoom' as const,
         onlyRenderVisibleElements: true,
-      },
-      {
-        key: 's300_pan_1editor_cullOff',
-        count: 300 as const,
-        activeEditor: true,
-        mode: 'pan' as const,
-        onlyRenderVisibleElements: false,
       },
       {
         key: 's300_zoom_1editor_cullOff',
@@ -711,25 +1000,72 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       },
     ]
 
+    const summarize = (vals: number[]) => {
+      const sorted = [...vals].sort((a, b) => a - b)
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length
+      const median = sorted[Math.floor(sorted.length / 2)]!
+      return {
+        mean: Number(mean.toFixed(1)),
+        median: Number(median.toFixed(1)),
+        min: sorted[0]!,
+        max: sorted[sorted.length - 1]!,
+      }
+    }
+
     const results: Record<string, unknown> = {}
     for (const sc of scenarios) {
-      const res = await page.evaluate((opts) => window.__S2_API__?.measurePanZoomFps(opts), {
-        count: sc.count,
-        activeEditor: sc.activeEditor,
-        mode: sc.mode,
-        onlyRenderVisibleElements: sc.onlyRenderVisibleElements,
-      })
-      expect(res).toBeDefined()
-      expect(res!.durationMs).toBeGreaterThanOrEqual(3000)
-      expect(res!.frameCount).toBeGreaterThanOrEqual(150)
-      expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
-        sc.activeEditor ? 1 : 0,
-      )
-      if (!sc.onlyRenderVisibleElements || sc.mode === 'zoom-out-all') {
-        expect(res!.renderedDomNodesMin).toBe(sc.count)
+      const runs = []
+      for (let r = 0; r < 3; r += 1) {
+        const res = await page.evaluate((opts) => window.__S2_API__?.measurePanZoomFps(opts), {
+          count: sc.count,
+          activeEditor: sc.activeEditor,
+          mode: sc.mode,
+          onlyRenderVisibleElements: sc.onlyRenderVisibleElements,
+        })
+        expect(res).toBeDefined()
+        expect(res!.durationMs).toBeGreaterThanOrEqual(3000)
+        expect(res!.frameCount).toBeGreaterThanOrEqual(150)
+        if (!sc.onlyRenderVisibleElements || sc.mode !== 'pan') {
+          expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
+            sc.activeEditor ? 1 : 0,
+          )
+        }
+        if (!sc.onlyRenderVisibleElements || sc.mode === 'zoom-out-all') {
+          expect(res!.renderedDomNodesMin).toBe(sc.count)
+        }
+        runs.push(res!)
       }
-      results[sc.key] = res
+      results[sc.key] = {
+        runs,
+        summary: {
+          meanFps: summarize(runs.map((x) => x.meanFps)),
+          p50Fps: summarize(runs.map((x) => x.p50Fps)),
+          p95Fps: summarize(runs.map((x) => x.p95Fps)),
+          maxMs: summarize(runs.map((x) => x.maxMs)),
+          domMin: Math.min(...runs.map((x) => x.renderedDomNodesMin)),
+          domMax: Math.max(...runs.map((x) => x.renderedDomNodesMax)),
+          activeEditorMinDuringRun: Math.min(...runs.map((x) => x.activeEditorMinDuringRun)),
+        },
+      }
     }
+
+    // Verify FPS HUD sits in bottom footer completely outside canvas-stage & attribution
+    const hud = page.getByTestId('s2-fps-hud')
+    const stage = page.getByTestId('canvas-stage')
+    const attribution = page.locator('.react-flow__attribution')
+    await expect(hud).toBeVisible()
+    const hudBox = await hud.boundingBox()
+    const stageBox = await stage.boundingBox()
+    const attrBox = await attribution.boundingBox()
+    expect(hudBox).not.toBeNull()
+    expect(stageBox).not.toBeNull()
+    expect(attrBox).not.toBeNull()
+    const overlaps = (
+      a: { x: number; y: number; width: number; height: number },
+      b: { x: number; y: number; width: number; height: number },
+    ) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+    expect(overlaps(hudBox!, stageBox!)).toBe(false)
+    expect(overlaps(hudBox!, attrBox!)).toBe(false)
 
     await page.screenshot({ path: path.join(OUT_DIR, 'stress-300-dark.png') })
     console.log('S2_FPS_BENCHMARKS=' + JSON.stringify(results))
