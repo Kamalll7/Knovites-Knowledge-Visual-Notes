@@ -7,6 +7,7 @@
   word-break: break-word;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  -webkit-font-smoothing: antialiased;
 }
 
 .knovites-richtext p:empty::before {
@@ -118,6 +119,55 @@
 .knovites-richtext mark {
   padding: 0 2px;
   border-radius: 3px;
+  background-color: #fde68a !important;
+  color: #0f172a;
+}
+
+.knovites-richtext mark[data-color='#34d399'],
+.knovites-richtext mark[style*='#34d399'],
+.knovites-richtext mark[style*='52, 211, 153'] {
+  background-color: #a7f3d0 !important;
+  color: #0f172a;
+}
+
+.knovites-richtext mark[data-color='#7c9cff'],
+.knovites-richtext mark[style*='#7c9cff'],
+.knovites-richtext mark[style*='124, 156, 255'] {
+  background-color: #dbeafe !important;
+  color: #0f172a;
+}
+
+.knovites-richtext mark[data-color='#f87171'],
+.knovites-richtext mark[style*='#f87171'],
+.knovites-richtext mark[style*='248, 113, 113'] {
+  background-color: #fecdd3 !important;
+  color: #0f172a;
+}
+
+.dark .knovites-richtext mark {
+  background-color: #4a350a !important;
+  color: #fde68a;
+}
+
+.dark .knovites-richtext mark[data-color='#34d399'],
+.dark .knovites-richtext mark[style*='#34d399'],
+.dark .knovites-richtext mark[style*='52, 211, 153'] {
+  background-color: #0d3b2e !important;
+  color: #a7f3d0;
+}
+
+.dark .knovites-richtext mark[data-color='#7c9cff'],
+.dark .knovites-richtext mark[style*='#7c9cff'],
+.dark .knovites-richtext mark[style*='124, 156, 255'] {
+  background-color: #1e2d5a !important;
+  color: #dbeafe;
+}
+
+.dark .knovites-richtext mark[data-color='#f87171'],
+.dark .knovites-richtext mark[style*='#f87171'],
+.dark .knovites-richtext mark[style*='248, 113, 113'] {
+  background-color: #4c1722 !important;
+  color: #fecdd3;
 }
 
 /* Override React Flow's default wrapper styling so our card border/padding stay crisp and identical */
@@ -130,4 +180,9 @@
 
 .react-flow__node-textBox.selected {
   box-shadow: none;
+}
+
+/* When the edited node is rendered inside ViewportPortal, let pointer/wheel events pass cleanly through its culled placeholder */
+.react-flow__node:has([data-portal-placeholder='true']) {
+  pointer-events: none !important;
 }

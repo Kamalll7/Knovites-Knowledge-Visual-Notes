@@ -7,16 +7,28 @@ import {
   useNodesState,
   useReactFlow,
   useViewport,
+  useViewportStore,
+  ViewportPortal,
   type NodeTypes,
   type Viewport,
 } from '@xyflow/react'
 import { Hand, Image as ImageIcon, MousePointer, RotateCcw, Sun, Moon, Type } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { parseCanvasJson, type CanvasJson, type ParseResult, type TipTapDoc } from '@/domain/schema'
 import { Button } from '@/ui/components/button'
 import { ImageCanvasNode, type ImageBoxNode } from './ImageCanvasNode'
-import { createPlainParagraphDoc } from './rich-text-config'
-import { TextCanvasNode, type TextBoxNode } from './TextCanvasNode'
+import { createPlainParagraphDoc, LOD_ZOOM_THRESHOLD, LodZoomContext } from './rich-text-config'
+import { TextBoxSurface, TextCanvasNode, type TextBoxNode } from './TextCanvasNode'
 
 type CanvasNode = TextBoxNode | ImageBoxNode
 type CanvasTool = 'select' | 'hand' | 'text' | 'image'
@@ -33,6 +45,7 @@ interface CanvasSnapshot {
     maxHeight?: number
     frameNone?: boolean
     src?: string
+    thumbSrc?: string
     alt?: string
     height?: number
   }>
@@ -96,6 +109,7 @@ declare global {
       ) => void
       setNodeDocForTest: (id: string, doc: TipTapDoc) => void
       setNodeFrameModeForTest: (id: string, frameNone: boolean) => void
+      setMitigateActiveEditorUnmount: (enabled: boolean) => void
       enterEdit: (id: string) => void
       exitEdit: () => void
       validateWithDomainSchema: (doc: TipTapDoc) => ParseResult<CanvasJson>
@@ -215,13 +229,17 @@ type NodeSpec =
       height: number
       zIndex: number
       src: string
+      thumbSrc: string
       alt: string
     }
 
 let cachedImageUrls: string[] | null = null
+let cachedThumbUrls: string[] | null = null
 
-function getLocalSampleImageUrls(): string[] {
-  if (cachedImageUrls) return cachedImageUrls
+function generateLocalSampleBitmaps(): { full: string[]; thumb: string[] } {
+  if (cachedImageUrls && cachedThumbUrls) {
+    return { full: cachedImageUrls, thumb: cachedThumbUrls }
+  }
   const palettes = [
     ['#1d4ed8', '#7c9cff', 'Heap Layout'],
     ['#047857', '#34d399', 'Stack Frame'],
@@ -231,35 +249,50 @@ function getLocalSampleImageUrls(): string[] {
     ['#0369a1', '#38bdf8', 'Syscall Table'],
   ] as const
 
-  cachedImageUrls = palettes.map(([c1, c2, label], idx) => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 480
-    canvas.height = 300
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      const grad = ctx.createLinearGradient(0, 0, 480, 300)
-      grad.addColorStop(0, c1)
-      grad.addColorStop(1, '#11151d')
-      ctx.fillStyle = grad
-      ctx.fillRect(0, 0, 480, 300)
-      ctx.strokeStyle = 'rgba(255,255,255,0.16)'
-      ctx.lineWidth = 1
-      for (let gx = 40; gx < 480; gx += 40) {
-        ctx.beginPath()
-        ctx.moveTo(gx, 0)
-        ctx.lineTo(gx, 300)
-        ctx.stroke()
+  const renderSample = (w: number, h: number, includeText: boolean) =>
+    palettes.map(([c1, c2, label], idx) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        const grad = ctx.createLinearGradient(0, 0, w, h)
+        grad.addColorStop(0, c1)
+        grad.addColorStop(1, '#11151d')
+        ctx.fillStyle = grad
+        ctx.fillRect(0, 0, w, h)
+        const scaleX = w / 480
+        const scaleY = h / 300
+        if (includeText) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.16)'
+          ctx.lineWidth = 1
+          for (let gx = 40; gx < 480; gx += 40) {
+            ctx.beginPath()
+            ctx.moveTo(gx, 0)
+            ctx.lineTo(gx, 300)
+            ctx.stroke()
+          }
+        }
+        ctx.fillStyle = c2
+        ctx.fillRect(
+          28 * scaleX,
+          (36 + (idx % 3) * 20) * scaleY,
+          140 * scaleX,
+          Math.max(4, 26 * scaleY),
+        )
+        ctx.fillRect(28 * scaleX, 120 * scaleY, 220 * scaleX, Math.max(3, 18 * scaleY))
+        if (includeText) {
+          ctx.fillStyle = '#ffffff'
+          ctx.font = 'bold 22px system-ui, sans-serif'
+          ctx.fillText(`Figure ${idx + 1}: ${label}`, 28, 250)
+        }
       }
-      ctx.fillStyle = c2
-      ctx.fillRect(28, 36 + (idx % 3) * 20, 140, 26)
-      ctx.fillRect(28, 120, 220, 18)
-      ctx.fillStyle = '#ffffff'
-      ctx.font = 'bold 22px system-ui, sans-serif'
-      ctx.fillText(`Figure ${idx + 1}: ${label}`, 28, 250)
-    }
-    return canvas.toDataURL('image/png')
-  })
-  return cachedImageUrls
+      return canvas.toDataURL('image/png')
+    })
+
+  cachedImageUrls = renderSample(480, 300, true)
+  cachedThumbUrls = renderSample(64, 40, false)
+  return { full: cachedImageUrls, thumb: cachedThumbUrls }
 }
 
 function makeRichBenchmarkDoc(variant: number, index: number): TipTapDoc {
@@ -366,7 +399,7 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
   const extraTotal = staticCount - base.length
   const targetImages = staticCount === 300 ? 50 : 17
   const cols = 15
-  const sampleUrls = getLocalSampleImageUrls()
+  const { full: sampleUrls, thumb: sampleThumbUrls } = generateLocalSampleBitmaps()
   let imageCount = 0
 
   for (let i = 0; i < extraTotal; i += 1) {
@@ -379,6 +412,7 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
 
     if (shouldBeImage) {
       const src = sampleUrls[imageCount % sampleUrls.length]!
+      const thumbSrc = sampleThumbUrls[imageCount % sampleThumbUrls.length]!
       imageCount += 1
       base.push({
         kind: 'imageBox',
@@ -389,6 +423,7 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
         height: 150,
         zIndex: 10 + i,
         src,
+        thumbSrc,
         alt: `Benchmark figure #${imageCount}`,
       })
     } else if (i % 2 === 0) {
@@ -431,9 +466,84 @@ function percentile(sorted: readonly number[], p: number): number {
   return sorted[idx]!
 }
 
+function LodZoomProvider({ children }: { children: ReactNode }) {
+  const isLodZoom = useViewportStore((s) => s.transform[2] < LOD_ZOOM_THRESHOLD)
+  return <LodZoomContext.Provider value={isLodZoom}>{children}</LodZoomContext.Provider>
+}
+
+const FooterZoomLabel = memo(function FooterZoomLabel({ nodeCount }: { nodeCount: number }) {
+  const viewport = useViewport()
+  return (
+    <span className="font-mono text-[11px] text-muted-foreground">
+      Zoom: {Math.round(viewport.zoom * 100)}% · Nodes: {nodeCount}
+    </span>
+  )
+})
+
+function FloatingToolbarOverlay({
+  editor,
+  editingNode,
+  stageRef,
+}: {
+  editor: Editor
+  editingNode: TextBoxNode
+  stageRef: RefObject<HTMLElement | null>
+}) {
+  const viewport = useViewport()
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number }>({
+    w: editingNode.data.width,
+    h: 120,
+  })
+  const [tbSize, setTbSize] = useState<{ w: number; h: number }>({ w: 374, h: 38 })
+  const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 1280, h: 720 })
+
+  // Measure node, toolbar & stage dimensions only when node identity/content changes — never force reflow during pan/zoom
+  useLayoutEffect(() => {
+    const stageEl = stageRef.current
+    if (!stageEl) return
+    setStageSize({ w: stageEl.clientWidth, h: stageEl.clientHeight })
+    const cardEl = stageEl.querySelector<HTMLElement>(
+      `[data-testid="card-surface-${editingNode.id}"]`,
+    )
+    if (cardEl) {
+      setBoxSize({ w: cardEl.offsetWidth, h: cardEl.offsetHeight })
+    }
+    if (toolbarRef.current) {
+      setTbSize({ w: toolbarRef.current.offsetWidth, h: toolbarRef.current.offsetHeight })
+    }
+  }, [editingNode.id, editingNode.data.doc, editingNode.data.width, stageRef])
+
+  const { w: stageW, h: stageH } = stageSize
+  const gap = 10
+  const pad = 8
+  const cardLeft = viewport.x + editingNode.position.x * viewport.zoom
+  const cardTop = viewport.y + editingNode.position.y * viewport.zoom
+  const cardBottom = cardTop + boxSize.h * viewport.zoom
+
+  const aboveTop = cardTop - tbSize.h - gap
+  const belowTop = cardBottom + gap
+  let top: number
+  if (aboveTop >= pad) {
+    top = aboveTop
+  } else if (belowTop + tbSize.h <= stageH - pad) {
+    top = belowTop
+  } else {
+    top = pad
+  }
+  const left = Math.max(pad, Math.min(cardLeft, Math.max(pad, stageW - tbSize.w - pad)))
+
+  return (
+    <FloatingToolbar
+      editor={editor}
+      position={{ left: Math.round(left), top: Math.round(top) }}
+      toolbarRef={toolbarRef}
+    />
+  )
+}
+
 function SpikeCanvasInner() {
   const reactFlow = useReactFlow<CanvasNode>()
-  const viewport = useViewport()
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [tool, setTool] = useState<CanvasTool>('select')
   const [staticCountMode, setStaticCountMode] = useState<4 | 100 | 300>(4)
@@ -441,11 +551,14 @@ function SpikeCanvasInner() {
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null)
   const [activeEditorCount, setActiveEditorCount] = useState(0)
   const [onlyRenderVisible, setOnlyRenderVisible] = useState(true)
+  const [mitigateActiveEditorUnmount, setMitigateActiveEditorUnmount] = useState(true)
+  const mitigateRef = useRef(mitigateActiveEditorUnmount)
+  useEffect(() => {
+    mitigateRef.current = mitigateActiveEditorUnmount
+  }, [mitigateActiveEditorUnmount])
   const [lastFpsBench, setLastFpsBench] = useState<FpsBenchmarkResult | null>(null)
-  const [toolbarPos, setToolbarPos] = useState<{ left: number; top: number }>({ left: 8, top: 8 })
 
   const canvasStageRef = useRef<HTMLElement | null>(null)
-  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const leakedCanvasKeydownsRef = useRef(0)
   const undoStackRef = useRef<CanvasSnapshot[]>([])
   const [undoCount, setUndoCount] = useState(0)
@@ -479,6 +592,7 @@ function SpikeCanvasInner() {
               width: n.data.width,
               height: n.data.height,
               src: n.data.src,
+              thumbSrc: n.data.thumbSrc,
               alt: n.data.alt,
               nodeKind: 'imageBox',
             }
@@ -533,6 +647,7 @@ function SpikeCanvasInner() {
             deletable: true,
             data: {
               src: s.src,
+              thumbSrc: s.thumbSrc,
               alt: s.alt,
               width: s.width,
               height: s.height,
@@ -617,7 +732,11 @@ function SpikeCanvasInner() {
     setNodes((prev) =>
       prev.map((n) =>
         n.id === currentEditing && n.type === 'textBox'
-          ? { ...n, draggable: true, data: { ...n.data, isEditing: false } }
+          ? {
+              ...n,
+              draggable: true,
+              data: { ...n.data, isEditing: false, renderInViewportPortal: false },
+            }
           : n,
       ),
     )
@@ -631,6 +750,7 @@ function SpikeCanvasInner() {
       editSessionStartRef.current = makeSnapshot(nodesRef.current)
       editSessionHasNetChangeRef.current = false
       setEditingNodeId(id)
+      const usePortal = mitigateRef.current
       setNodes((prev) =>
         prev.map((n) =>
           n.type === 'textBox'
@@ -641,6 +761,7 @@ function SpikeCanvasInner() {
                 data: {
                   ...n.data,
                   isEditing: n.id === id,
+                  renderInViewportPortal: n.id === id && usePortal,
                 },
               }
             : {
@@ -663,44 +784,24 @@ function SpikeCanvasInner() {
     }
   }, [enterEditMode, exitEditMode, handleDocChange, handleEditorMountChange, handleEditorReady])
 
-  useLayoutEffect(() => {
-    if (!editingNodeId || !activeEditor) return
-    const stageEl = canvasStageRef.current
-    if (!stageEl) return
-    const cardEl = stageEl.querySelector<HTMLElement>(
-      `[data-testid="card-surface-${editingNodeId}"]`,
-    )
-    if (!cardEl) return
+  const handleNodesDelete = useCallback(() => {
+    pushUndoSnapshot(makeSnapshot(nodesRef.current))
+  }, [makeSnapshot, pushUndoSnapshot])
 
-    const stageRect = stageEl.getBoundingClientRect()
-    const cardRect = cardEl.getBoundingClientRect()
-    const tbW = toolbarRef.current?.offsetWidth || 310
-    const tbH = toolbarRef.current?.offsetHeight || 38
-    const gap = 10
-    const pad = 8
-
-    const aboveTop = cardRect.top - stageRect.top - tbH - gap
-    const belowTop = cardRect.bottom - stageRect.top + gap
-    let nextTop: number
-    if (aboveTop >= pad) {
-      nextTop = aboveTop
-    } else if (belowTop + tbH <= stageRect.height - pad) {
-      nextTop = belowTop
-    } else {
-      nextTop = pad
+  const handlePaneClick = useCallback(() => {
+    if (editingNodeIdRef.current) {
+      exitEditMode()
     }
+  }, [exitEditMode])
 
-    const nextLeft = Math.max(
-      pad,
-      Math.min(cardRect.left - stageRect.left, Math.max(pad, stageRect.width - tbW - pad)),
-    )
-
-    setToolbarPos((prev) =>
-      prev.left === Math.round(nextLeft) && prev.top === Math.round(nextTop)
-        ? prev
-        : { left: Math.round(nextLeft), top: Math.round(nextTop) },
-    )
-  }, [activeEditor, editingNodeId, nodes, viewport])
+  const handleNodeClick = useCallback(
+    (_event: unknown, clicked: CanvasNode) => {
+      if (editingNodeIdRef.current && editingNodeIdRef.current !== clicked.id) {
+        exitEditMode()
+      }
+    },
+    [exitEditMode],
+  )
 
   const applyNodeDataset = useCallback(
     (count: 4 | 100 | 300) => {
@@ -732,6 +833,7 @@ function SpikeCanvasInner() {
                 height: s.height ?? 150,
                 zIndex: s.zIndex,
                 src: s.src ?? '',
+                thumbSrc: s.thumbSrc ?? s.src ?? '',
                 alt: s.alt ?? '',
               }
             : {
@@ -975,6 +1077,10 @@ function SpikeCanvasInner() {
           ),
         )
       },
+      setMitigateActiveEditorUnmount: (enabled: boolean) => {
+        mitigateRef.current = enabled
+        setMitigateActiveEditorUnmount(enabled)
+      },
       enterEdit: enterEditMode,
       exitEdit: exitEditMode,
       validateWithDomainSchema: (doc: TipTapDoc) =>
@@ -1023,6 +1129,12 @@ function SpikeCanvasInner() {
     },
     [makeSnapshot, onNodesChange, pushUndoSnapshot],
   )
+
+  const editingTextNode = useMemo(() => {
+    if (!editingNodeId) return null
+    const found = nodes.find((n) => n.id === editingNodeId && n.type === 'textBox')
+    return found?.type === 'textBox' ? found : null
+  }, [editingNodeId, nodes])
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
@@ -1131,44 +1243,61 @@ function SpikeCanvasInner() {
         }}
         className="relative flex-1 overflow-hidden"
       >
-        <ReactFlow<CanvasNode>
-          nodes={nodes}
-          edges={[]}
-          nodeTypes={NODE_TYPES}
-          onNodesChange={handleNodesChangeWrapped}
-          onNodesDelete={() => {
-            pushUndoSnapshot(makeSnapshot(nodesRef.current))
-          }}
-          onPaneClick={() => {
-            if (editingNodeIdRef.current) {
-              exitEditMode()
-            }
-          }}
-          onNodeClick={(_event, clicked) => {
-            if (editingNodeIdRef.current && editingNodeIdRef.current !== clicked.id) {
-              exitEditMode()
-            }
-          }}
-          onlyRenderVisibleElements={onlyRenderVisible}
-          panOnDrag={tool === 'hand' ? true : [1, 2]}
-          selectionOnDrag={tool === 'select'}
-          panOnScroll
-          zoomOnScroll={false}
-          zoomOnPinch
-          zoomActivationKeyCode="Control"
-          zoomOnDoubleClick={false}
-          panActivationKeyCode={editingNodeId ? null : 'Space'}
-          deleteKeyCode={editingNodeId ? null : ['Backspace', 'Delete']}
-          minZoom={0.05}
-          maxZoom={4}
-          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-        </ReactFlow>
+        <LodZoomProvider>
+          <ReactFlow<CanvasNode>
+            nodes={nodes}
+            edges={[]}
+            nodeTypes={NODE_TYPES}
+            onNodesChange={handleNodesChangeWrapped}
+            onNodesDelete={handleNodesDelete}
+            onPaneClick={handlePaneClick}
+            onNodeClick={handleNodeClick}
+            onlyRenderVisibleElements={onlyRenderVisible}
+            panOnDrag={tool === 'hand' ? true : [1, 2]}
+            selectionOnDrag={tool === 'select'}
+            panOnScroll
+            zoomOnScroll={false}
+            zoomOnPinch
+            zoomActivationKeyCode="Control"
+            zoomOnDoubleClick={false}
+            panActivationKeyCode={editingNodeId ? null : 'Space'}
+            deleteKeyCode={editingNodeId ? null : ['Backspace', 'Delete']}
+            minZoom={0.05}
+            maxZoom={4}
+            defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          >
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+            {mitigateActiveEditorUnmount && editingTextNode ? (
+              <ViewportPortal>
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    transform: `translate(${editingTextNode.position.x}px, ${editingTextNode.position.y}px)`,
+                    zIndex: Math.max(1000, editingTextNode.zIndex ?? 1),
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <TextBoxSurface
+                    id={editingTextNode.id}
+                    data={editingTextNode.data}
+                    selected={true}
+                    inPortal={true}
+                  />
+                </div>
+              </ViewportPortal>
+            ) : null}
+          </ReactFlow>
+        </LodZoomProvider>
 
         {/* Screen-space floating toolbar rendered OUTSIDE React Flow viewport transform */}
-        {editingNodeId && activeEditor ? (
-          <FloatingToolbar editor={activeEditor} position={toolbarPos} toolbarRef={toolbarRef} />
+        {editingTextNode && activeEditor ? (
+          <FloatingToolbarOverlay
+            editor={activeEditor}
+            editingNode={editingTextNode}
+            stageRef={canvasStageRef}
+          />
         ) : null}
       </main>
 
@@ -1177,9 +1306,7 @@ function SpikeCanvasInner() {
         data-testid="s2-status-footer"
         className="z-20 flex h-8 shrink-0 items-center justify-between border-t border-border bg-card/95 px-4 text-xs"
       >
-        <span className="font-mono text-[11px] text-muted-foreground">
-          Zoom: {Math.round(viewport.zoom * 100)}% · Nodes: {nodes.length}
-        </span>
+        <FooterZoomLabel nodeCount={nodes.length} />
 
         {lastFpsBench ? (
           <div data-testid="s2-fps-hud" className="flex items-center gap-2 font-mono text-[11px]">

@@ -1,9 +1,10 @@
 import type { Editor } from '@tiptap/react'
-import type { Node, NodeProps } from '@xyflow/react'
+import { type Node, type NodeProps } from '@xyflow/react'
 import { GripHorizontal } from 'lucide-react'
-import { memo } from 'react'
+import { memo, useContext } from 'react'
 import type { TipTapDoc } from '@/domain/schema'
 import { ActiveTipTapEditor } from './ActiveTipTapEditor'
+import { extractDocTitle, LodZoomContext } from './rich-text-config'
 import { StaticTextContent } from './StaticTextContent'
 
 export interface TextBoxNodeData extends Record<string, unknown> {
@@ -14,6 +15,7 @@ export interface TextBoxNodeData extends Record<string, unknown> {
   border?: string | null
   frameNone?: boolean
   isEditing: boolean
+  renderInViewportPortal?: boolean
   onEnterEdit: (id: string) => void
   onExitEdit: (id: string) => void
   onDocChange: (id: string, doc: TipTapDoc, hasNetChange: boolean) => void
@@ -23,11 +25,21 @@ export interface TextBoxNodeData extends Record<string, unknown> {
 
 export type TextBoxNode = Node<TextBoxNodeData, 'textBox'>
 
-export const TextCanvasNode = memo(function TextCanvasNode({
+export interface TextBoxSurfaceProps {
+  id: string
+  data: TextBoxNodeData
+  selected?: boolean
+  isLod?: boolean
+  inPortal?: boolean
+}
+
+export function TextBoxSurface({
   id,
   data,
-  selected,
-}: NodeProps<TextBoxNode>) {
+  selected = false,
+  isLod = false,
+  inPortal = false,
+}: TextBoxSurfaceProps) {
   const {
     doc,
     width,
@@ -51,11 +63,42 @@ export const TextCanvasNode = memo(function TextCanvasNode({
     }
   }
 
+  if (isLod && !isEditing) {
+    return (
+      <div
+        data-testid={`text-box-${id}`}
+        data-lod="true"
+        className="select-none"
+        style={{ width: `${width}px` }}
+      >
+        <div
+          data-testid={`card-surface-${id}`}
+          data-frame-mode={frameNone ? 'none' : 'card'}
+          className="rounded-xl border p-3.5"
+          style={{
+            backgroundColor: frameNone ? 'transparent' : (bg ?? 'var(--card)'),
+            borderColor: frameNone ? 'transparent' : (border ?? 'var(--border)'),
+            minHeight: '76px',
+          }}
+        >
+          <div
+            data-testid={`lod-text-${id}`}
+            className="truncate text-sm font-semibold text-foreground"
+          >
+            {extractDocTitle(doc)}
+          </div>
+          <div className="mt-2 h-2 w-2/3 rounded bg-muted" />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
-      data-testid={`text-box-${id}`}
+      data-testid={inPortal ? `portal-text-box-${id}` : `text-box-${id}`}
       data-editing={isEditing ? 'true' : 'false'}
       data-editor-root={isEditing ? 'true' : undefined}
+      data-lod="false"
       onDoubleClick={(event) => {
         event.stopPropagation()
         if (!isEditing) {
@@ -116,4 +159,40 @@ export const TextCanvasNode = memo(function TextCanvasNode({
       </div>
     </div>
   )
+}
+
+export const TextCanvasNode = memo(function TextCanvasNode({
+  id,
+  data,
+  selected,
+}: NodeProps<TextBoxNode>) {
+  const isZoomLod = useContext(LodZoomContext)
+
+  // When active editor is hosted in ViewportPortal (culling-resilient mitigation), keep a hidden layout placeholder
+  // inside React Flow's node slot so bounds/selection stay intact without duplicate TipTap instances or testids.
+  if (data.isEditing && data.renderInViewportPortal) {
+    return (
+      <div
+        data-testid={`text-box-${id}`}
+        data-editing="true"
+        data-portal-placeholder="true"
+        aria-hidden="true"
+        className="pointer-events-none invisible"
+        style={{ width: `${data.width}px` }}
+      >
+        <div
+          className="rounded-xl border p-3.5"
+          style={{
+            maxHeight: data.maxHeight !== undefined ? `${data.maxHeight}px` : undefined,
+          }}
+        >
+          <div className="knovites-richtext">
+            <StaticTextContent doc={data.doc} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return <TextBoxSurface id={id} data={data} selected={selected} isLod={isZoomLod} />
 })

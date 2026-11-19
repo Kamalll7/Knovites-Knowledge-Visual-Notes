@@ -1,9 +1,11 @@
-import type { Node, NodeProps } from '@xyflow/react'
+import { type Node, type NodeProps } from '@xyflow/react'
 import { GripHorizontal } from 'lucide-react'
-import { memo } from 'react'
+import { memo, useContext } from 'react'
+import { LodZoomContext } from './rich-text-config'
 
 export interface ImageBoxNodeData extends Record<string, unknown> {
   src: string
+  thumbSrc: string
   alt: string
   width: number
   height: number
@@ -16,11 +18,35 @@ export const ImageCanvasNode = memo(function ImageCanvasNode({
   data,
   selected,
 }: NodeProps<ImageBoxNode>) {
-  const { src, alt, width, height } = data
+  const { src, thumbSrc, alt, width, height } = data
+  const isLod = useContext(LodZoomContext)
+
+  if (isLod) {
+    return (
+      <div
+        data-testid={`image-box-${id}`}
+        data-lod="true"
+        className="select-none overflow-hidden rounded-xl border border-border bg-card"
+        style={{ width: `${width}px`, height: `${height}px` }}
+      >
+        <img
+          data-testid={`lod-image-${id}`}
+          src={thumbSrc}
+          alt={alt}
+          width={width}
+          height={height}
+          draggable={false}
+          decoding="sync"
+          className="block h-full w-full object-cover"
+        />
+      </div>
+    )
+  }
 
   return (
     <div
       data-testid={`image-box-${id}`}
+      data-lod="false"
       className="group relative select-none"
       style={{ width: `${width}px` }}
     >

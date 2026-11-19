@@ -8,6 +8,7 @@ import { FontSize } from '@tiptap/extension-text-style/font-size'
 import { Underline } from '@tiptap/extension-underline'
 import { Fragment, Mark, Node as PMNode, Slice } from '@tiptap/pm/model'
 import { StarterKit } from '@tiptap/starter-kit'
+import { createContext } from 'react'
 import { ULID_REGEX, type TipTapDoc } from '@/domain/schema'
 
 const KNOVITES_HREF_REGEX = new RegExp(`^knovites:${ULID_REGEX.source.slice(1, -1)}$`)
@@ -202,6 +203,28 @@ export function sanitizePastedSlice(slice: Slice): Slice {
   }
 
   return new Slice(sanitizeFragment(slice.content), slice.openStart, slice.openEnd)
+}
+
+// Set below normal 0.36..1.08 zoom sweep to avoid LOD DOM thrashing, while triggering overview/zoom-out-all (<0.35)
+export const LOD_ZOOM_THRESHOLD = 0.35
+export const LodZoomContext = createContext(false)
+
+export function extractDocTitle(doc: TipTapDoc): string {
+  const walk = (nodes?: TipTapDoc['content']): string => {
+    if (!nodes) return ''
+    for (const node of nodes) {
+      if (node.text && node.text.trim().length > 0) {
+        return node.text.trim()
+      }
+      if (node.content) {
+        const inner = walk(node.content)
+        if (inner.length > 0) return inner
+      }
+    }
+    return ''
+  }
+  const title = walk(doc.content)
+  return title.length > 0 ? title : 'Empty note'
 }
 
 export function createPlainParagraphDoc(text: string): TipTapDoc {

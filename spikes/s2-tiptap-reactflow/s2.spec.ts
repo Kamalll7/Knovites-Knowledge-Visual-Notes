@@ -63,7 +63,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.keyboard.press('Delete')
 
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(initialCount)
-    await expect(page.getByTestId('text-box-box-edit')).toBeVisible()
+    await expect(page.getByTestId('card-surface-box-edit')).toBeVisible()
 
     // Exit edit mode via Esc -> now Delete removes the selected element cleanly
     await page.keyboard.press('Escape')
@@ -101,13 +101,17 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(afterState?.x).toBe(beforeState!.x)
     expect(afterState?.y).toBe(beforeState!.y)
 
-    // Verify `.nodrag` behaviorally: even when draggable=true and dragHandle=undefined, dragging on card padding (outside EditorContent onMouseDown) MUST NOT move the node
-    await page.evaluate(() =>
+    // Verify `.nodrag` behaviorally on React Flow's native node slot: even when draggable=true and dragHandle=undefined, dragging on card padding (outside EditorContent onMouseDown) MUST NOT move the node
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => {
+      window.__S2_API__?.setMitigateActiveEditorUnmount(false)
+      window.__S2_API__?.enterEdit('box-edit')
       window.__S2_API__?.setNodeDragConfigForTest('box-edit', {
         draggable: true,
         dragHandle: undefined,
-      }),
-    )
+      })
+    })
+    await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeVisible()
     const editSurfaceBox = await page.getByTestId('card-surface-box-edit').boundingBox()
     expect(editSurfaceBox).not.toBeNull()
     await page.mouse.move(editSurfaceBox!.x + 5, editSurfaceBox!.y + 5)
@@ -199,6 +203,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await expect(editorEl).toBeVisible()
     await expect(page.getByTestId('floating-toolbar')).toBeVisible()
     await expect(editorEl).toBeFocused()
+    await expect(editorEl).toHaveClass(/ProseMirror-focused/)
     await page.evaluate(
       () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
     )
@@ -766,6 +771,21 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
               text: 'HighlightAmber',
               marks: [{ type: 'highlight' as const, attrs: { color: '#fbbf24' } }],
             },
+            {
+              type: 'text' as const,
+              text: 'HighlightEmerald',
+              marks: [{ type: 'highlight' as const, attrs: { color: '#34d399' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'HighlightBlue',
+              marks: [{ type: 'highlight' as const, attrs: { color: '#7c9cff' } }],
+            },
+            {
+              type: 'text' as const,
+              text: 'HighlightRose',
+              marks: [{ type: 'highlight' as const, attrs: { color: '#f87171' } }],
+            },
           ],
         },
       ],
@@ -873,38 +893,144 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     }
     console.log('S2_CONTRAST_RATIOS=' + JSON.stringify(report))
 
-    // Dark text swatches & Auto pass AA >= 4.5; HighlightAmber fails on dark due to light inherited fg on #fbbf24
-    const darkCardColors = report.dark_card.filter((r) => r.sample !== 'HighlightAmber')
-    expect(darkCardColors.every((r) => r.passAA)).toBe(true)
-    const darkHighlight = report.dark_card.find((r) => r.sample === 'HighlightAmber')
-    expect(darkHighlight!.ratio).toBeLessThan(2.0)
+    const isHighlight = (name: string) => name.startsWith('Highlight')
 
-    // Light AutoText & HighlightAmber pass AA >= 4.5, while fixed dark-palette hex swatches fail AA (< 3.0) on light surface & frame:none
+    // All text swatches + Auto + ALL paired Highlights MUST pass AA >= 4.5 on Dark (both card and frame:none)
+    expect(report.dark_card.every((r) => r.passAA)).toBe(true)
+    expect(report.dark_frame_none.every((r) => r.passAA)).toBe(true)
+
+    // Light AutoText & ALL paired Highlights pass AA >= 4.5, while fixed dark-palette hex text swatches still fail AA (< 3.0) on light surface & frame:none
     expect(report.light_card.find((r) => r.sample === 'AutoText')!.passAA).toBe(true)
-    expect(report.light_card.find((r) => r.sample === 'HighlightAmber')!.passAA).toBe(true)
+    expect(report.light_card.filter((r) => isHighlight(r.sample)).every((r) => r.passAA)).toBe(true)
+    expect(
+      report.light_frame_none.filter((r) => isHighlight(r.sample)).every((r) => r.passAA),
+    ).toBe(true)
     const lightFixedHexes = report.light_card.filter(
-      (r) => r.sample !== 'AutoText' && r.sample !== 'HighlightAmber',
+      (r) => r.sample !== 'AutoText' && !isHighlight(r.sample),
     )
     expect(lightFixedHexes.every((r) => !r.passAA)).toBe(true)
     const lightNoneHexes = report.light_frame_none.filter(
-      (r) => r.sample !== 'AutoText' && r.sample !== 'HighlightAmber',
+      (r) => r.sample !== 'AutoText' && !isHighlight(r.sample),
     )
     expect(lightNoneHexes.every((r) => !r.passAA)).toBe(true)
   })
 
-  test('benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (rich text + 50 images)', async ({
+  test('12. editor aktif bertahan saat di-pan keluar layar (culling ON): tanpa vs dengan mitigasi ViewportPortal', async ({
+    page,
+  }) => {
+    await page.goto('/')
+
+    // (a) WITHOUT mitigation (`ViewportPortal` disabled): panning edited box off-screen destroys TipTap selection & undo history
+    await page.evaluate(() => window.__S2_API__?.setMitigateActiveEditorUnmount(false))
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editorA = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editorA).toBeFocused()
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    await page.keyboard.type(' MID_EDIT')
+    await expect(editorA).toContainText('MID_EDIT')
+    await page.keyboard.press('Home')
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press('Shift+ArrowRight')
+    }
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
+
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: -1800, y: -1200, zoom: 1 }))
+    await expect
+      .poll(async () => page.evaluate(() => window.__S2_API__?.getActiveEditorCount()))
+      .toBe(0)
+
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeVisible()
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    const withoutMitigationSelection = await page.evaluate(
+      () => window.getSelection()?.toString() ?? '',
+    )
+    expect(withoutMitigationSelection).toBe('')
+    await page.keyboard.press('Control+z')
+    const withoutMitigationTextAfterUndo = await page
+      .getByTestId('active-tiptap-editor')
+      .innerText()
+    expect(withoutMitigationTextAfterUndo).toContain('MID_EDIT')
+
+    // (b) WITH ViewportPortal mitigation enabled: panning off-screen keeps TipTap instance, text, selection, focus, AND undo history intact
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => {
+      window.__S2_API__?.setMitigateActiveEditorUnmount(true)
+      window.__S2_API__?.setStaticNodeCount(4)
+    })
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editorB = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editorB).toBeFocused()
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    await page.keyboard.type(' MID_EDIT')
+    await expect(editorB).toContainText('MID_EDIT')
+    await page.keyboard.press('Home')
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press('Shift+ArrowRight')
+    }
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
+
+    // Pan far off-screen and wait 2 frames -> editor MUST remain mounted (1)
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: -1800, y: -1200, zoom: 1 }))
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+
+    // Pan back into view -> text, selection, focus, and Ctrl+Z undo MUST all survive intact
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
+    await expect(editorB).toBeFocused()
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
+    await expect(page.getByTestId('active-tiptap-editor')).toContainText('MID_EDIT')
+    await page.keyboard.press('Control+z')
+    await expect(page.getByTestId('active-tiptap-editor')).not.toContainText('MID_EDIT')
+
+    console.log(
+      'S2_EDITOR_UNMOUNT_RESILIENCE=' +
+        JSON.stringify({
+          withoutMitigation: {
+            unmountedOffscreen: true,
+            selectionPreserved: withoutMitigationSelection === 'Alpha',
+            undoPreserved: !withoutMitigationTextAfterUndo.includes('MID_EDIT'),
+          },
+          withViewportPortalMitigation: {
+            remainedMountedOffscreen: true,
+            selectionPreserved: true,
+            focusPreserved: true,
+            undoPreserved: true,
+          },
+        }),
+    )
+  })
+
+  test('benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (LOD + rich text + 50 images)', async ({
     page,
   }) => {
     test.setTimeout(360_000)
     await page.goto('/')
 
-    // Verify dataset composition first (100 nodes -> 17 images; 300 nodes -> 50 images + rich nodes)
+    // Verify dataset composition & LOD switching below zoom threshold (0.35)
     await page.evaluate(() => window.__S2_API__?.setStaticNodeCount(100))
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(100)
     expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(17)
     await page.evaluate(() => window.__S2_API__?.setStaticNodeCount(300))
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(300)
     expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(50)
+
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 35, zoom: 0.105 }))
+    await expect(page.getByTestId('lod-text-box-rich')).toBeVisible()
+    await expect(page.getByTestId('lod-image-box-img-1')).toBeVisible()
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await expect(page.getByTestId('richtext-body-box-rich')).toBeVisible()
 
     const scenarios = [
       {
@@ -1025,20 +1151,27 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         expect(res).toBeDefined()
         expect(res!.durationMs).toBeGreaterThanOrEqual(3000)
         expect(res!.frameCount).toBeGreaterThanOrEqual(150)
-        if (!sc.onlyRenderVisibleElements || sc.mode !== 'pan') {
-          expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
-            sc.activeEditor ? 1 : 0,
-          )
-        }
+        expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
+          sc.activeEditor ? 1 : 0,
+        )
+        expect(res!.activeEditorMinDuringRun).toBe(sc.activeEditor ? 1 : 0)
         if (!sc.onlyRenderVisibleElements || sc.mode === 'zoom-out-all') {
           expect(res!.renderedDomNodesMin).toBe(sc.count)
         }
+        // Enforce >= 30 fps CI threshold from docs/testing.md §9.5 for all cullOn scenarios (including zoom-out-all with LOD)
+        if (sc.onlyRenderVisibleElements) {
+          expect(res!.meanFps).toBeGreaterThanOrEqual(30)
+        }
         runs.push(res!)
+      }
+      const meanAcrossRuns = summarize(runs.map((x) => x.meanFps))
+      if (sc.onlyRenderVisibleElements) {
+        expect(meanAcrossRuns.mean).toBeGreaterThanOrEqual(30)
       }
       results[sc.key] = {
         runs,
         summary: {
-          meanFps: summarize(runs.map((x) => x.meanFps)),
+          meanFps: meanAcrossRuns,
           p50Fps: summarize(runs.map((x) => x.p50Fps)),
           p95Fps: summarize(runs.map((x) => x.p95Fps)),
           maxMs: summarize(runs.map((x) => x.maxMs)),
