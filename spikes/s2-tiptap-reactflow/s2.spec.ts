@@ -108,6 +108,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     // Check overflow exists in box-scroll before and while editing
     await page.getByTestId('text-box-box-scroll').dblclick()
     await expect(page.getByTestId('active-tiptap-editor')).toBeVisible()
+    await expect(page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')).toBeFocused()
+    // Reset inner scrollTop to 0 after autofocus:'end' so downward wheel always has overflow room
+    await scrollCard.evaluate((el) => {
+      el.scrollTop = 0
+    })
 
     const viewportBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
     const scrollTopBefore = await scrollCard.evaluate((el) => el.scrollTop)
@@ -248,11 +253,9 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(movedPos!.x).toBeGreaterThan(beforePos!.x + 60)
     expect(await page.evaluate(() => window.__S2_API__?.getCanvasUndoCount())).toBe(1)
 
-    // Enter edit mode on box-edit, type extra token, then press Ctrl+Z
+    // Enter edit mode on box-edit, type extra text, then press Ctrl+Z
     await page.getByTestId('text-box-box-edit').dblclick()
-    const editorEl = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
-    await expect(editorEl).toBeFocused()
-    await page.keyboard.type('EXTRA_WORD')
+    await page.keyboard.type(' EXTRA_WORD')
     await expect(page.getByTestId('active-tiptap-editor')).toContainText('EXTRA_WORD')
 
     await page.keyboard.press('Control+z')
@@ -281,18 +284,20 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     const editorEl = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
     await expect(editorEl).toBeVisible()
 
-    // Select all and dispatch synthetic HTML paste event containing disallowed tags/attributes + valid ones
+    // Select all and dispatch synthetic HTML paste with dangerous inline styles, on* handlers, external <img>, script, javascript: href
     await page.keyboard.press('Control+a')
     await editorEl.evaluate((el) => {
       const dt = new DataTransfer()
       dt.setData(
         'text/html',
         '<script>window.__XSS=1;</script>' +
-          '<img src="invalid" onerror="window.__XSS=2" />' +
+          '<img src="http://evil.test/tracker.png" onerror="window.__XSS=2" />' +
           '<h5>HeadingFive</h5>' +
+          '<p onclick="window.__XSS=3" onload="window.__XSS=4" onmouseover="window.__XSS=5" ' +
+          'style="background:url(http://evil.test/bg.png);background-image:url(javascript:alert(1));width:expression(alert(1));color:notacolor;position:fixed">CleanedAttrs</p>' +
           '<p><a href="javascript:alert(1)">BadLink</a> and ' +
           '<a href="https://example.com/safe">SafeLink</a> ' +
-          '<span style="position:fixed;color:rgb(255, 0, 0);font-size:24px" onclick="alert(1)"><strong>KeptBold</strong></span></p>',
+          '<span style="background-color:notabg;color:rgb(255, 0, 0);font-size:24px" onclick="alert(1)"><strong>KeptBold</strong></span></p>',
       )
       dt.setData('text/plain', 'fallback plain')
       const evt = new ClipboardEvent('paste', {
@@ -306,93 +311,133 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     const xssFlag = await page.evaluate(() => (window as unknown as { __XSS?: unknown }).__XSS)
     expect(xssFlag).toBeUndefined()
 
+    // Inspect rendered DOM inside editor: no img, script, inline on*, or dangerous CSS url()/expression()
+    const editorHtmlAudit = await editorEl.evaluate((el) => ({
+      imgCount: el.querySelectorAll('img').length,
+      scriptCount: el.querySelectorAll('script').length,
+      innerText: el.textContent ?? '',
+      hasOnClick: el.querySelectorAll('[onclick],[onload],[onmouseover],[onerror]').length,
+      inlineStyles: Array.from(el.querySelectorAll('[style]')).map(
+        (n) => n.getAttribute('style') ?? '',
+      ),
+      hrefs: Array.from(el.querySelectorAll('a')).map((a) => a.getAttribute('href') ?? ''),
+    }))
+    expect(editorHtmlAudit.imgCount).toBe(0)
+    expect(editorHtmlAudit.scriptCount).toBe(0)
+    expect(editorHtmlAudit.hasOnClick).toBe(0)
+    expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('url(')
+    expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('expression(')
+    expect(editorHtmlAudit.inlineStyles.join(';')).not.toContain('fixed')
+    expect(editorHtmlAudit.hrefs.every((h) => !h.startsWith('javascript:'))).toBe(true)
+
     const doc = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit')?.doc)
     const serialized = JSON.stringify(doc)
     expect(serialized).not.toContain('javascript:')
     expect(serialized).not.toContain('onerror')
+    expect(serialized).not.toContain('onclick')
     expect(serialized).not.toContain('script')
+    expect(serialized).not.toContain('evil.test')
     expect(serialized).toContain('BadLink')
+    expect(serialized).toContain('CleanedAttrs')
     expect(serialized).toContain('https://example.com/safe')
     expect(serialized).toContain('#ff0000')
     expect(serialized).toContain('24px')
     expect(serialized).toContain('"type":"bold"')
-    // Heading level 5 must be downgraded / excluded from heading level > 3
     expect(serialized).not.toContain('"level":5')
+
+    // Validate live TipTap editor output with the real Zod schema from src/domain/schema
+    const schemaCheck = await page.evaluate(() => {
+      const state = window.__S2_API__?.getNodeState('box-edit')
+      if (!state) return null
+      const first = window.__S2_API__!.validateWithDomainSchema(state.doc)
+      if (first.status !== 'ok') return { firstStatus: first.status }
+      const sanitizedDoc = (first.data.elements['e_00000001'] as { content: typeof state.doc })
+        .content
+      const recheck = window.__S2_API__!.validateWithDomainSchema(sanitizedDoc)
+      return {
+        firstStatus: first.status,
+        firstIssues: first.issues,
+        recheckStatus: recheck.status,
+        recheckIssues: recheck.status === 'ok' ? recheck.issues : [],
+      }
+    })
+    console.log('S2_SCHEMA_VALIDATION=' + JSON.stringify(schemaCheck))
+    expect(schemaCheck).not.toBeNull()
+    expect(schemaCheck!.firstStatus).toBe('ok')
+    expect(schemaCheck!.recheckStatus).toBe('ok')
+    expect(schemaCheck!.recheckIssues).toEqual([])
   })
 
   test('9. tampilan statis dan mode edit identik secara visual dan tangkap screenshot', async ({
     page,
   }) => {
+    const compareBodies = async (aBuf: Buffer, bBuf: Buffer) =>
+      page.evaluate(
+        async ({ aB64, bB64 }) => {
+          const load = async (b64: string) => {
+            const res = await fetch(`data:image/png;base64,${b64}`)
+            return createImageBitmap(await res.blob())
+          }
+          const imgA = await load(aB64)
+          const imgB = await load(bB64)
+          const w = Math.max(imgA.width, imgB.width)
+          const h = Math.max(imgA.height, imgB.height)
+          const cA = new OffscreenCanvas(w, h)
+          const cB = new OffscreenCanvas(w, h)
+          const ctxA = cA.getContext('2d')!
+          const ctxB = cB.getContext('2d')!
+          ctxA.drawImage(imgA, 0, 0)
+          ctxB.drawImage(imgB, 0, 0)
+          const dA = ctxA.getImageData(0, 0, w, h).data
+          const dB = ctxB.getImageData(0, 0, w, h).data
+          let diffPixels = 0
+          for (let i = 0; i < dA.length; i += 4) {
+            if (
+              Math.abs(dA[i]! - dB[i]!) > 8 ||
+              Math.abs(dA[i + 1]! - dB[i + 1]!) > 8 ||
+              Math.abs(dA[i + 2]! - dB[i + 2]!) > 8
+            ) {
+              diffPixels += 1
+            }
+          }
+          const total = w * h
+          return {
+            widthA: imgA.width,
+            heightA: imgA.height,
+            widthB: imgB.width,
+            heightB: imgB.height,
+            diffPixels,
+            diffPercent: Number(((diffPixels / total) * 100).toFixed(3)),
+          }
+        },
+        { aB64: aBuf.toString('base64'), bB64: bBuf.toString('base64') },
+      )
+
     await page.goto('/')
     await page.evaluate(() => document.fonts.ready)
     await page.mouse.move(10, 10)
     await page.waitForTimeout(80)
 
-    const staticBodyShot = await page.getByTestId('richtext-body-box-rich').screenshot()
+    // 1) Dark theme parity (static vs active edit, caret/selection kept natural)
+    const staticDarkShot = await page.getByTestId('richtext-body-box-rich').screenshot()
     await page.screenshot({ path: path.join(OUT_DIR, 'canvas-static-dark.png') })
 
-    // Enter edit mode on box-rich (double-click), blur text caret briefly via transparent caret-color?
-    // Keep live editor mounted (tipTapInstances === 1) and compare richtext-body pixels directly!
     await page.getByTestId('text-box-box-rich').dblclick()
     await expect(page.getByTestId('floating-toolbar')).toBeVisible()
     expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
 
-    // Move cursor to end / click toolbar neutral position? Compare actual rendered box directly:
     await page.screenshot({ path: path.join(OUT_DIR, 'canvas-edit-dark.png') })
-    const editBodyShot = await page.getByTestId('richtext-body-box-rich').screenshot()
+    const editDarkShot = await page.getByTestId('richtext-body-box-rich').screenshot()
 
-    // Compute exact pixel diff ratio between static body and live TipTap editor body
-    const diff = await page.evaluate(
-      async ({ aB64, bB64 }) => {
-        const load = async (b64: string) => {
-          const res = await fetch(`data:image/png;base64,${b64}`)
-          return createImageBitmap(await res.blob())
-        }
-        const imgA = await load(aB64)
-        const imgB = await load(bB64)
-        const w = Math.max(imgA.width, imgB.width)
-        const h = Math.max(imgA.height, imgB.height)
-        const cA = new OffscreenCanvas(w, h)
-        const cB = new OffscreenCanvas(w, h)
-        const ctxA = cA.getContext('2d')!
-        const ctxB = cB.getContext('2d')!
-        ctxA.drawImage(imgA, 0, 0)
-        ctxB.drawImage(imgB, 0, 0)
-        const dA = ctxA.getImageData(0, 0, w, h).data
-        const dB = ctxB.getImageData(0, 0, w, h).data
-        let diffPixels = 0
-        for (let i = 0; i < dA.length; i += 4) {
-          if (
-            Math.abs(dA[i]! - dB[i]!) > 8 ||
-            Math.abs(dA[i + 1]! - dB[i + 1]!) > 8 ||
-            Math.abs(dA[i + 2]! - dB[i + 2]!) > 8
-          ) {
-            diffPixels += 1
-          }
-        }
-        const total = w * h
-        return {
-          widthA: imgA.width,
-          heightA: imgA.height,
-          widthB: imgB.width,
-          heightB: imgB.height,
-          diffPixels,
-          diffPercent: Number(((diffPixels / total) * 100).toFixed(3)),
-        }
-      },
-      {
-        aB64: staticBodyShot.toString('base64'),
-        bB64: editBodyShot.toString('base64'),
-      },
-    )
+    const diffDark = await compareBodies(staticDarkShot, editDarkShot)
+    console.log('S2_VISUAL_PARITY_DARK=' + JSON.stringify(diffDark))
+    expect(diffDark.widthA).toBe(diffDark.widthB)
+    expect(diffDark.heightA).toBe(diffDark.heightB)
+    expect(diffDark.diffPercent).toBeLessThan(1.0)
 
-    console.log('S2_VISUAL_PARITY=' + JSON.stringify(diff))
-    expect(diff.widthA).toBe(diff.widthB)
-    expect(diff.heightA).toBe(diff.heightB)
-    // Only the blinking 1px cursor / subpixel anti-aliasing may differ (< 1% pixels)
-    expect(diff.diffPercent).toBeLessThan(1.0)
-
-    // Also capture Light theme edit mode screenshot
+    // 2) Light theme parity (static vs active edit)
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
     await page.getByTestId('theme-toggle').click()
     await expect
       .poll(async () =>
@@ -404,33 +449,76 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.evaluate(
       () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
     )
+    await page.mouse.move(10, 10)
+    await page.waitForTimeout(60)
+
+    const staticLightShot = await page.getByTestId('richtext-body-box-rich').screenshot()
+    await page.screenshot({ path: path.join(OUT_DIR, 'canvas-static-light.png') })
+
+    await page.getByTestId('text-box-box-rich').dblclick()
+    await expect(page.getByTestId('floating-toolbar')).toBeVisible()
+    await page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    )
     await page.screenshot({ path: path.join(OUT_DIR, 'canvas-edit-light.png') })
+    const editLightShot = await page.getByTestId('richtext-body-box-rich').screenshot()
+
+    const diffLight = await compareBodies(staticLightShot, editLightShot)
+    console.log('S2_VISUAL_PARITY_LIGHT=' + JSON.stringify(diffLight))
+    expect(diffLight.widthA).toBe(diffLight.widthB)
+    expect(diffLight.heightA).toBe(diffLight.heightB)
+    expect(diffLight.diffPercent).toBeLessThan(1.0)
   })
 
   test('benchmark FPS pan dan zoom dengan 100 dan 300 elemen statis + 1 editor aktif', async ({
     page,
   }) => {
-    test.setTimeout(45_000)
+    test.setTimeout(120_000)
     await page.goto('/')
 
-    const bench100 = await page.evaluate(() => window.__S2_API__?.measurePanZoomFps(100))
-    expect(bench100).toBeDefined()
-    expect(bench100!.frameCount).toBeGreaterThan(5)
-    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+    const scenarios = [
+      {
+        key: 's100_baseline_0editor',
+        count: 100 as const,
+        activeEditor: false,
+        zoomOutAllVisible: false,
+      },
+      { key: 's100_1editor', count: 100 as const, activeEditor: true, zoomOutAllVisible: false },
+      {
+        key: 's300_baseline_0editor',
+        count: 300 as const,
+        activeEditor: false,
+        zoomOutAllVisible: false,
+      },
+      { key: 's300_1editor', count: 300 as const, activeEditor: true, zoomOutAllVisible: false },
+      {
+        key: 's300_zoom_out_all_visible_1editor',
+        count: 300 as const,
+        activeEditor: true,
+        zoomOutAllVisible: true,
+      },
+    ]
 
-    const bench300 = await page.evaluate(() => window.__S2_API__?.measurePanZoomFps(300))
-    expect(bench300).toBeDefined()
-    expect(bench300!.frameCount).toBeGreaterThan(5)
-    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+    const results: Record<string, unknown> = {}
+    for (const sc of scenarios) {
+      const res = await page.evaluate((opts) => window.__S2_API__?.measurePanZoomFps(opts), {
+        count: sc.count,
+        activeEditor: sc.activeEditor,
+        zoomOutAllVisible: sc.zoomOutAllVisible,
+      })
+      expect(res).toBeDefined()
+      expect(res!.durationMs).toBeGreaterThanOrEqual(3000)
+      expect(res!.frameCount).toBeGreaterThanOrEqual(150)
+      expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(
+        sc.activeEditor ? 1 : 0,
+      )
+      if (sc.zoomOutAllVisible) {
+        expect(res!.renderedDomNodesMin).toBe(300)
+      }
+      results[sc.key] = res
+    }
 
     await page.screenshot({ path: path.join(OUT_DIR, 'stress-300-dark.png') })
-
-    console.log(
-      'S2_FPS_BENCHMARKS=' +
-        JSON.stringify({
-          nodes100: bench100,
-          nodes300: bench300,
-        }),
-    )
+    console.log('S2_FPS_BENCHMARKS=' + JSON.stringify(results))
   })
 })

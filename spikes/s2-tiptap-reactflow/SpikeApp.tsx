@@ -10,7 +10,7 @@ import {
 } from '@xyflow/react'
 import { Hand, Image as ImageIcon, MousePointer, RotateCcw, Sun, Moon, Type } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { TipTapDoc } from '@/domain/schema'
+import { parseCanvasJson, type CanvasJson, type ParseResult, type TipTapDoc } from '@/domain/schema'
 import { Button } from '@/ui/components/button'
 import { createPlainParagraphDoc } from './rich-text-config'
 import { TextCanvasNode, type TextBoxNode } from './TextCanvasNode'
@@ -29,14 +29,27 @@ interface CanvasSnapshot {
   }>
 }
 
+interface FpsBenchmarkOptions {
+  count: 100 | 300
+  activeEditor: boolean
+  zoomOutAllVisible?: boolean
+}
+
 interface FpsBenchmarkResult {
   staticNodes: number
+  activeEditor: boolean
+  zoomOutAllVisible: boolean
   durationMs: number
   frameCount: number
+  meanMs: number
   p50Ms: number
   p95Ms: number
+  maxMs: number
+  meanFps: number
   p50Fps: number
   p95Fps: number
+  renderedDomNodesMin: number
+  renderedDomNodesMax: number
 }
 
 declare global {
@@ -59,7 +72,8 @@ declare global {
       getCanvasUndoCount: () => number
       enterEdit: (id: string) => void
       exitEdit: () => void
-      measurePanZoomFps: (count: 100 | 300) => Promise<FpsBenchmarkResult>
+      validateWithDomainSchema: (doc: TipTapDoc) => ParseResult<CanvasJson>
+      measurePanZoomFps: (opts: FpsBenchmarkOptions) => Promise<FpsBenchmarkResult>
     }
   }
 }
@@ -73,23 +87,25 @@ const SAMPLE_RICH_DOC: TipTapDoc = {
   content: [
     {
       type: 'heading',
-      attrs: { level: 2 },
+      attrs: { level: 2, textAlign: 'left' },
       content: [{ type: 'text', text: 'Heap Exploitation Notes' }],
     },
     {
       type: 'paragraph',
+      attrs: { textAlign: 'center' },
       content: [
         { type: 'text', text: 'Inspect ' },
-        { type: 'text', marks: [{ type: 'bold' }], text: 'tcache_perthread_struct' },
-        { type: 'text', text: ' and verify ' },
+        { type: 'text', marks: [{ type: 'bold' }], text: 'tcache' },
+        { type: 'text', text: ' ' },
+        { type: 'text', marks: [{ type: 'underline' }], text: 'entries' },
+        { type: 'text', text: ' & ' },
         {
           type: 'text',
-          marks: [{ type: 'textStyle', attrs: { color: '#7c9cff' } }],
+          marks: [{ type: 'textStyle', attrs: { color: '#7c9cff', fontSize: '18px' } }],
           text: 'pointer mangling',
         },
-        { type: 'text', text: ' with ' },
+        { type: 'text', text: ' ' },
         { type: 'text', marks: [{ type: 'code' }], text: 'SAFE_LINK' },
-        { type: 'text', text: '.' },
       ],
     },
     {
@@ -120,6 +136,20 @@ const SAMPLE_RICH_DOC: TipTapDoc = {
           ],
         },
       ],
+    },
+    {
+      type: 'orderedList',
+      content: [
+        {
+          type: 'listItem',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Verify bin count' }] }],
+        },
+      ],
+    },
+    {
+      type: 'codeBlock',
+      attrs: { language: 'c' },
+      content: [{ type: 'text', text: 'void* p = malloc(0x20);' }],
     },
   ],
 }
@@ -175,7 +205,7 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): Array<{
     {
       id: 'box-edit',
       x: 80,
-      y: 340,
+      y: 480,
       width: 340,
       zIndex: 3,
       doc: createPlainParagraphDoc('Alpha Bravo Charlie Delta'),
@@ -183,7 +213,7 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): Array<{
     {
       id: 'box-second',
       x: 470,
-      y: 340,
+      y: 480,
       width: 320,
       zIndex: 4,
       doc: createPlainParagraphDoc('Second box (only 1 TipTap instance mounts at a time)'),
@@ -458,15 +488,33 @@ function SpikeCanvasInner() {
   }, [makeSnapshot, pushUndoSnapshot, restoreCanvasUndo, setNodes])
 
   const measurePanZoomFps = useCallback(
-    async (count: 100 | 300): Promise<FpsBenchmarkResult> => {
+    async ({
+      count,
+      activeEditor,
+      zoomOutAllVisible = false,
+    }: FpsBenchmarkOptions): Promise<FpsBenchmarkResult> => {
       applyNodeDataset(count)
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
-      // Keep 1 active TipTap editor open concurrently while panning/zooming N static nodes
-      enterEditMode('box-edit')
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      if (activeEditor) {
+        enterEditMode('box-edit')
+        await new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        )
+      }
+
+      if (zoomOutAllVisible) {
+        void reactFlow.setViewport({ x: 60, y: 40, zoom: 0.21 })
+        await new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        )
+      }
 
       const deltas: number[] = []
-      const durationMs = 1100
+      let renderedDomNodesMin = Infinity
+      let renderedDomNodesMax = 0
+      const minDurationMs = 3200
+      const minFrames = 150
+      const maxDurationMs = 12000
       const start = performance.now()
       let prev = start
 
@@ -478,15 +526,27 @@ function SpikeCanvasInner() {
           }
           prev = now
 
-          const elapsed = now - start
-          const progress = Math.min(1, elapsed / durationMs)
-          const angle = progress * Math.PI * 2
-          const zoom = 0.72 + 0.32 * Math.sin(angle)
-          const x = -220 * progress + 60 * Math.cos(angle)
-          const y = -120 * progress + 40 * Math.sin(angle)
-          void reactFlow.setViewport({ x, y, zoom })
+          const domNodes = document.querySelectorAll('.react-flow__node').length
+          renderedDomNodesMin = Math.min(renderedDomNodesMin, domNodes)
+          renderedDomNodesMax = Math.max(renderedDomNodesMax, domNodes)
 
-          if (progress < 1) {
+          const elapsed = now - start
+          const progress = Math.min(1, elapsed / minDurationMs)
+          const angle = (elapsed / minDurationMs) * Math.PI * 4
+
+          if (zoomOutAllVisible) {
+            const zoom = 0.2 + 0.015 * Math.sin(angle)
+            const x = 60 + 25 * Math.cos(angle)
+            const y = 35 + 15 * Math.sin(angle)
+            void reactFlow.setViewport({ x, y, zoom })
+          } else {
+            const zoom = 0.72 + 0.32 * Math.sin(angle)
+            const x = -360 * Math.sin(progress * Math.PI) + 80 * Math.cos(angle)
+            const y = -180 * Math.sin(progress * Math.PI) + 50 * Math.sin(angle)
+            void reactFlow.setViewport({ x, y, zoom })
+          }
+
+          if ((elapsed < minDurationMs || deltas.length < minFrames) && elapsed < maxDurationMs) {
             requestAnimationFrame(step)
           } else {
             resolve()
@@ -496,16 +556,26 @@ function SpikeCanvasInner() {
       })
 
       const sorted = [...deltas].sort((a, b) => a - b)
+      const sumMs = sorted.reduce((acc, v) => acc + v, 0)
+      const meanMs = sorted.length > 0 ? sumMs / sorted.length : 0
       const p50Ms = percentile(sorted, 0.5)
       const p95Ms = percentile(sorted, 0.95)
+      const maxMs = sorted.length > 0 ? sorted[sorted.length - 1]! : 0
       const res: FpsBenchmarkResult = {
         staticNodes: count,
+        activeEditor,
+        zoomOutAllVisible,
         durationMs: Number((prev - start).toFixed(1)),
         frameCount: sorted.length,
+        meanMs: Number(meanMs.toFixed(2)),
         p50Ms: Number(p50Ms.toFixed(2)),
         p95Ms: Number(p95Ms.toFixed(2)),
+        maxMs: Number(maxMs.toFixed(2)),
+        meanFps: meanMs > 0 ? Number((1000 / meanMs).toFixed(1)) : 0,
         p50Fps: p50Ms > 0 ? Number((1000 / p50Ms).toFixed(1)) : 0,
         p95Fps: p95Ms > 0 ? Number((1000 / p95Ms).toFixed(1)) : 0,
+        renderedDomNodesMin: Number.isFinite(renderedDomNodesMin) ? renderedDomNodesMin : 0,
+        renderedDomNodesMax,
       }
       setLastFpsBench(res)
       return res
@@ -536,6 +606,22 @@ function SpikeCanvasInner() {
       getCanvasUndoCount: () => undoStackRef.current.length,
       enterEdit: enterEditMode,
       exitEdit: exitEditMode,
+      validateWithDomainSchema: (doc: TipTapDoc) =>
+        parseCanvasJson({
+          schema: 1,
+          elements: {
+            e_00000001: {
+              type: 'text',
+              x: 0,
+              y: 0,
+              w: 320,
+              z: 'a0',
+              style: { bg: null, border: null },
+              content: doc,
+              updatedAt: '2026-11-19T12:00:00Z',
+            },
+          },
+        }),
       measurePanZoomFps,
     }
     return () => {
