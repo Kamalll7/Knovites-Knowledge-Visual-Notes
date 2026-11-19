@@ -11,7 +11,7 @@ import {
   createSeededUlidGenerator,
   mulberry32,
   pickOne,
-} from '@/testing/datasets/prng'
+} from '@/domain/datasets/prng'
 
 export interface GenerateTreeOptions {
   seed: number
@@ -22,13 +22,7 @@ export interface GenerateTreeOptions {
 const BRANCH_COLORS = ['#e11d48', '#0284c7', '#059669', '#d97706', '#7c3aed'] as const
 
 const NODE_STATUSES: readonly NodeStatus[] = ['none', 'learning', 'practiced', 'mastered']
-const INNER_NODE_TYPES: readonly NodeType[] = [
-  'category',
-  'concept',
-  'technique',
-  'challenge',
-  'lab',
-]
+const INNER_NODE_TYPES: readonly NodeType[] = ['category', 'concept', 'technique', 'challenge']
 
 const CURATED_TOPICS: readonly string[] = [
   'Binary Exploitation',

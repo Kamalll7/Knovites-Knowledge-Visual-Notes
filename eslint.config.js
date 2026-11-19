@@ -208,10 +208,9 @@ export default defineConfig([
                 { to: { module: { origin: 'core' } } },
               ],
             },
-            // Non-test files may never import test files
+            // Production and other files must not import test files
             {
-              from: { file: { categories: '!test' } },
-              disallow: { to: { file: { categories: 'test' } } },
+              disallow: { to: { file: { categories: ['test', 'domain-test'] } } },
               message: 'Production files must not import test files.',
             },
           ],

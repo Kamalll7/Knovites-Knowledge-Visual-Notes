@@ -528,6 +528,50 @@ describe('domain/tree [T1.3]', () => {
       assertTreeInvariants(deleted.state)
     })
 
+    it('rejects reorderNode with order_collision when target neighbors share an identical order (e.g. corrupt sibling) and allows valid positions', () => {
+      const idA = makeUlid(1)
+      const idC = makeUlid(3)
+      // idA ('a0') and broken-node (fallback 'a0') share identical order 'a0'; idC has 'a1'
+      const built = buildTree([
+        { path: 'alpha', node: makeNodeMeta(idA, 'Alpha', 'a0'), hasCanvas: true },
+        {
+          path: 'broken-node',
+          corrupt: true,
+          corruptErrors: [{ path: 'order', code: 'invalid', message: 'corrupt' }],
+          hasCanvas: false,
+        },
+        { path: 'charlie', node: makeNodeMeta(idC, 'Charlie', 'a1'), hasCanvas: true },
+      ])
+
+      const corruptId = Object.values(built.state.nodes).find((n) => n.corrupt)!.id
+      expect(built.state.rootIds).toEqual([idA, corruptId, idC])
+
+      // Moving charlie earlier targets index 1 (between alpha='a0' and broken-node='a0')
+      const tiedReorder = reorderNode(built.state, {
+        nodeId: idC,
+        direction: 'earlier',
+        now: '2026-11-18T12:00:00Z',
+      })
+      expect(tiedReorder.ok).toBe(false)
+      if (!tiedReorder.ok) {
+        expect(tiedReorder.reason).toBe('order_collision')
+        expect(tiedReorder.message).toContain('"a0"')
+      }
+      expect(tiedReorder.state).toBe(built.state)
+      expect(tiedReorder.changeset).toEqual({ upserts: [], moves: [], deletes: [] })
+
+      // Moving charlie to index 0 (before alpha='a0') has a strict open bound and succeeds cleanly
+      const validMoveToFront = reorderNode(built.state, {
+        nodeId: idC,
+        targetIndex: 0,
+        now: '2026-11-18T12:01:00Z',
+      })
+      expect(validMoveToFront.ok).toBe(true)
+      expect(validMoveToFront.state.rootIds).toEqual([idC, idA, corruptId])
+      expect(validMoveToFront.state.nodes[idC]!.meta.order < 'a0').toBe(true)
+      assertTreeInvariants(validMoveToFront.state)
+    })
+
     it('lexicographical ordering wrapper never throws on pathological bounds', () => {
       const k1 = generateOrderBetween(null, '001')
       expect(k1 < '001').toBe(true)
@@ -811,20 +855,8 @@ describe('domain/tree [T1.3]', () => {
                 op.direction === 'earlier'
                   ? Math.max(0, prevIdx - 1)
                   : Math.min(prevSiblings.length - 1, prevIdx + 1)
-              const withoutSelf = prevSiblings.filter((id) => id !== nodeId)
-              const prevNeighbor =
-                expectedIdx > 0 ? prevState.nodes[withoutSelf[expectedIdx - 1]!]! : null
-              const nextNeighbor =
-                expectedIdx < withoutSelf.length
-                  ? prevState.nodes[withoutSelf[expectedIdx]!]!
-                  : null
-              const hasStrictOrderGap =
-                !prevNeighbor ||
-                !nextNeighbor ||
-                prevNeighbor.meta.order !== nextNeighbor.meta.order ||
-                (prevNeighbor.id < nodeId && nodeId < nextNeighbor.id)
               result = reorderNode(state, { nodeId, direction: op.direction, now })
-              if (result.ok && hasStrictOrderGap) {
+              if (result.ok) {
                 const nextSiblings =
                   target.parentId === null
                     ? result.state.rootIds

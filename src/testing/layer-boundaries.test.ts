@@ -189,4 +189,60 @@ describe('ESLint layer boundaries and hard rules', () => {
     )
     expect(disallowedNodeCore.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
   })
+
+  it('allows production code to import domain/datasets while keeping vitest and fast-check banned in non-test dataset files', async () => {
+    const disallowedVitestInDatasetsProd = await lintSnippet(
+      'src/domain/datasets/sample.ts',
+      "import { describe } from 'vitest'\nexport { describe }\n",
+    )
+    expect(disallowedVitestInDatasetsProd.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(
+      true,
+    )
+
+    const disallowedFastCheckInDatasetsProd = await lintSnippet(
+      'src/domain/datasets/sample.ts',
+      "import fc from 'fast-check'\nexport { fc }\n",
+    )
+    expect(
+      disallowedFastCheckInDatasetsProd.some((m) => m.ruleId === 'boundaries/dependencies'),
+    ).toBe(true)
+
+    const allowedInDatasetsTest = await lintSnippet(
+      'src/domain/datasets/sample.test.ts',
+      [
+        "import fc from 'fast-check'",
+        "import { describe } from 'vitest'",
+        "import { DEMO_DATASET } from '@/domain/datasets'",
+        'export { fc, describe, DEMO_DATASET }',
+        '',
+      ].join('\n'),
+    )
+    expect(allowedInDatasetsTest).toEqual([])
+
+    const allowedInFeature = await lintSnippet(
+      'src/features/map/DemoRoute.tsx',
+      [
+        "import { DEMO_DATASET, generateTree } from '@/domain/datasets'",
+        'export function DemoRoute() {',
+        '  return <div>{DEMO_DATASET.manifest.title}:{generateTree({ seed: 1, nodes: 1 }).length}</div>',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    expect(allowedInFeature).toEqual([])
+
+    const allowedInApp = await lintSnippet(
+      'src/app/demo-loader.ts',
+      "import { MANDATORY_MAP_DATASETS } from '@/domain/datasets'\nexport function getDemoCount() { return MANDATORY_MAP_DATASETS.large2000.entries.length }\n",
+    )
+    expect(allowedInApp).toEqual([])
+
+    const disallowedDatasetTestInApp = await lintSnippet(
+      'src/app/bad-demo-test-import.ts',
+      "import '@/domain/datasets/datasets.test'\nexport const x = 1\n",
+    )
+    expect(disallowedDatasetTestInApp.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(
+      true,
+    )
+  })
 })

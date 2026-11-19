@@ -106,6 +106,7 @@ export type TreeOperationErrorReason =
   | 'corrupt_node'
   | 'newer_schema_node'
   | 'cycle_detected'
+  | 'order_collision'
   | 'invalid_title'
   | 'invalid_timestamp'
   | 'invalid_id'

@@ -21,7 +21,7 @@ import {
   MANDATORY_MAP_DATASETS,
   createDemoDataset,
   generateTree,
-} from '@/testing/datasets'
+} from '@/domain/datasets'
 
 interface TreeShapeMetrics {
   state: TreeState
@@ -115,7 +115,7 @@ function measureAndValidateTree(entries: readonly TreeBuildEntry[]): TreeShapeMe
   }
 }
 
-describe('testing/datasets [T1.4]', () => {
+describe('domain/datasets [T1.4]', () => {
   it('never uses Math.random or Date.now in generator sources', () => {
     const dir = path.resolve(import.meta.dirname)
     const files = fs
@@ -202,8 +202,23 @@ describe('testing/datasets [T1.4]', () => {
     })
   })
 
+  it('validates all mandatory and demo dataset entries via schema parsers, buildTree (no issues), unique IDs, and unique sibling slugs', () => {
+    const allDatasets = [...Object.values(MANDATORY_MAP_DATASETS), DEMO_DATASET]
+    for (const dataset of allDatasets) {
+      const parsedManifest = parseKnovitesJson(serializeKnovitesJson(dataset.manifest))
+      expect(parsedManifest.status).toBe('ok')
+      if (parsedManifest.status === 'ok') {
+        expect(parsedManifest.issues).toEqual([])
+      }
+      const metrics = measureAndValidateTree(dataset.entries)
+      for (const node of Object.values(metrics.state.nodes)) {
+        expect(node.meta.type).not.toBe('lab')
+      }
+    }
+  })
+
   describe('demo dataset (~40 nodes, PWN/RE/CRYPTO, canvases)', () => {
-    it('satisfies structure, variety, cross-links, canvases, and canonical round-trip serialization', () => {
+    it('satisfies structure, Phase 1 types (no lab), statuses, cross-links, canvases, and canonical round-trip serialization', () => {
       expect(createDemoDataset()).toEqual(DEMO_DATASET)
 
       const metrics = measureAndValidateTree(DEMO_DATASET.entries)
@@ -224,13 +239,14 @@ describe('testing/datasets [T1.4]', () => {
         expect(hasGrandchild).toBe(true)
       }
 
-      // Verify type, status, tags, and cross-link diversity
+      // Verify type (no reserved 'lab' in Phase 1), status, tags, and cross-link diversity
       const allNodes = Object.values(metrics.state.nodes)
       const types = new Set(allNodes.map((n) => n.meta.type))
       const statuses = new Set(allNodes.map((n) => n.meta.status))
       const allLinks = allNodes.flatMap((n) => n.meta.links)
 
-      expect(types).toEqual(new Set(['category', 'concept', 'technique', 'challenge', 'lab']))
+      expect(types.has('lab')).toBe(false)
+      expect(types).toEqual(new Set(['category', 'concept', 'technique', 'challenge']))
       expect(statuses).toEqual(new Set(['none', 'learning', 'practiced', 'mastered']))
       expect(allNodes.every((n) => n.meta.tags.length >= 1)).toBe(true)
       expect(allLinks.length).toBeGreaterThanOrEqual(6)

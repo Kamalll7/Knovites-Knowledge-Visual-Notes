@@ -11,13 +11,13 @@ import {
   createTitleGenerator,
   generateTree,
   pickNodeTags,
-} from '@/testing/datasets/generate-tree'
+} from '@/domain/datasets/generate-tree'
 import {
   createSeededTimestamp,
   createSeededUlidGenerator,
   mulberry32,
   pickOne,
-} from '@/testing/datasets/prng'
+} from '@/domain/datasets/prng'
 
 export interface NamedMapDataset {
   id: 'unbalanced150' | 'wide60Children' | 'chainDepth12' | 'root20Children' | 'large2000'
@@ -27,7 +27,7 @@ export interface NamedMapDataset {
 }
 
 const STATUSES: readonly NodeStatus[] = ['none', 'learning', 'practiced', 'mastered']
-const LEAF_TYPES: readonly NodeType[] = ['concept', 'technique', 'challenge', 'lab']
+const LEAF_TYPES: readonly NodeType[] = ['concept', 'technique', 'challenge']
 
 function makeManifest(title: string): KnovitesJson {
   return {

@@ -772,7 +772,25 @@ export function reorderNode(state: TreeState, input: ReorderNodeInput): TreeOper
 
   const prevOrder = prevId ? state.nodes[prevId]!.meta.order : null
   const nextOrder = nextId ? state.nodes[nextId]!.meta.order : null
+  if (prevOrder !== null && nextOrder !== null && prevOrder >= nextOrder) {
+    return fail(
+      state,
+      'order_collision',
+      `Cannot reorder "${target.path}" between siblings with identical or non-increasing order ("${prevOrder}" and "${nextOrder}").`,
+    )
+  }
+
   const newOrder = generateOrderBetween(prevOrder, nextOrder)
+  if (
+    (prevOrder !== null && newOrder <= prevOrder) ||
+    (nextOrder !== null && newOrder >= nextOrder)
+  ) {
+    return fail(
+      state,
+      'order_collision',
+      `Cannot generate a strictly ordered key between "${prevOrder ?? 'null'}" and "${nextOrder ?? 'null'}".`,
+    )
+  }
 
   const updatedMeta: NodeJson = {
     ...target.meta,

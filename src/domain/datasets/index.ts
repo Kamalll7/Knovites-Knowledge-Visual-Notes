@@ -1,5 +1,5 @@
-export { DEMO_DATASET, createDemoDataset, type DemoDataset } from '@/testing/datasets/demo-dataset'
-export { generateTree, type GenerateTreeOptions } from '@/testing/datasets/generate-tree'
+export { DEMO_DATASET, createDemoDataset, type DemoDataset } from '@/domain/datasets/demo-dataset'
+export { generateTree, type GenerateTreeOptions } from '@/domain/datasets/generate-tree'
 export {
   MANDATORY_MAP_DATASETS,
   createChainDepth12Dataset,
@@ -9,11 +9,11 @@ export {
   createUnbalanced150Dataset,
   createWide60ChildrenDataset,
   type NamedMapDataset,
-} from '@/testing/datasets/mandatory-datasets'
+} from '@/domain/datasets/mandatory-datasets'
 export {
   createSeededTimestamp,
   createSeededUlidGenerator,
   mulberry32,
   nextInt,
   pickOne,
-} from '@/testing/datasets/prng'
+} from '@/domain/datasets/prng'

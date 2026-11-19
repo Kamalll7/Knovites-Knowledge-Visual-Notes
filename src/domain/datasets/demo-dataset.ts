@@ -14,7 +14,7 @@ import {
   slugify,
   type TreeBuildEntry,
 } from '@/domain/tree'
-import { createSeededTimestamp, createSeededUlidGenerator } from '@/testing/datasets/prng'
+import { createSeededTimestamp, createSeededUlidGenerator } from '@/domain/datasets/prng'
 
 export interface DemoDataset {
   manifest: KnovitesJson
@@ -221,7 +221,7 @@ const DEMO_SPECS: readonly DemoSpecNode[] = [
     key: 'pwn-botcake',
     parentKey: 'pwn-heap',
     title: 'House of Botcake',
-    type: 'lab',
+    type: 'challenge',
     status: 'learning',
     tags: ['pwn', 'heap', 'glibc_2_35'],
     color: null,
@@ -258,7 +258,7 @@ const DEMO_SPECS: readonly DemoSpecNode[] = [
     key: 'pwn-smep',
     parentKey: 'pwn-kernel',
     title: 'ret2usr & SMEP Bypass',
-    type: 'lab',
+    type: 'challenge',
     status: 'none',
     tags: ['pwn', 'kernel', 'smep'],
     color: null,
@@ -334,7 +334,7 @@ const DEMO_SPECS: readonly DemoSpecNode[] = [
     key: 're-angr',
     parentKey: 're-symex',
     title: 'Path Explosion Pruning in angr',
-    type: 'lab',
+    type: 'technique',
     status: 'none',
     tags: ['re', 'angr', 'symbolic'],
     color: null,
