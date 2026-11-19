@@ -64,6 +64,15 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
 - **T3.7** Keyboard, breadcrumb, toolbar node, dialog Create, Rename, Move to, Delete, ubah tipe, status, warna (FR-MAP-07, FR-MAP-10, FR-MAP-11, `spec-nodes-search.md` §6.7).
 - **T3.8** Performa: ukur dataset 150 dan 2.000 node, perbaiki, screenshot semua dataset, laporan `docs/perf.md` (FR-MAP-17).
 - **T3.9 (P1)** Minimap, outline view, drag-and-drop pindah node, busur cross-link.
+- **Syarat dari tinjauan screenshot Spike S3 (wajib terpenuhi di M3):**
+  - Lebar kapsul dihitung dari pengukuran teks nyata (tidak boleh ada judul terpotong di awal; truncation hanya di akhir dengan ellipsis `…`).
+  - Tier semantic zoom ditentukan oleh **ukuran font di layar** (minimal `11 px` di layar untuk Tier 1 dan Tier 2), bukan hanya skala `k`; screenshot Tier 2 wajib diambil pada skala yang memenuhinya.
+  - Aturan kamera: fokus node daun menampilkan parent dan sibling-nya; fokus node ber-children menampilkan fokus + children-nya; tidak ada node penting yang terpotong keluar viewport.
+  - Edge dimulai dari tepi kapsul node (bukan menembus tengah teks) dan memudar dekat induk untuk fan lebar.
+  - Uji tema light: pastikan kontras teks pada tint warna cabang memenuhi WCAG AA serta perbedaan antar-hue cabang tetap jelas terbaca.
+  - HUD (chip zoom, kontrol, breadcrumb/metrics) tidak boleh menimpa node (beri padding viewport saat auto-fit / recenter).
+  - Tes otomatis tambahan (selain cek overlap antar-node): cek edge yang melintas di atas node, label yang terpotong di luar batas kapsul, dan ukuran font minimum di layar.
+  - Ukur FPS di browser **non-headless dengan GPU** (dilakukan pemilik) sebelum kriteria sukses S1 dinyatakan tercapai.
 - **Done when:** S1 (kriteria sukses) tercapai, semua FR-MAP P0 dan FR-NODE P0 lulus, e2e E1 dan E2 hijau.
 
 ### M4 — Halaman node dan kanvas

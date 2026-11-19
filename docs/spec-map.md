@@ -36,3 +36,12 @@ Ini fitur yang membuat produk terasa istimewa. Semua logika posisi ada di `domai
 - **FR-MAP-16 (P1) Cross-link** (`node.links`) digambar sebagai busur putus-putus tipis hanya untuk node fokus atau hover.
 - **FR-MAP-17 (P0) Performa.** SVG dengan transformasi lewat ref (jangan re-render React per frame). Maksimal sekitar 300 node tergambar bersamaan. Komputasi `computeVisible` + layout untuk pohon 2.000 node di bawah 30 ms (benchmark Vitest, informatif). Dataset 150 node tidak seimbang menjaga 55 fps ke atas (S1).
 - **Dataset uji wajib** (generator deterministik dengan seed): 150 node acak tidak seimbang; satu node dengan 60 child; rantai kedalaman 12; root dengan 20 child; pohon 2.000 node. Agent wajib menjalankan screenshot Playwright pada tiap dataset dan memeriksa hasilnya sebelum menutup task peta.
+
+#### Hasil spike S3 (catatan implementasi M3)
+
+Lihat laporan lengkap di [`docs/spikes/s3-radial.md`](spikes/s3-radial.md). Penyesuaian desain dari spike S3 untuk M3:
+
+- **FR-MAP-03 (bobot sudut):** Formula bobot sudut memperhitungkan bobot subtree yang **sedang terlihat** secara *bottom-up* ditambah boost kecil pada jalur fokus, serta memakai koefisien turunan tersembunyi yang lebih kecil (`0.35 * log2(1 + turunanTersembunyi)` dibanding `0.5`) agar sepupu tertutup berukuran besar tidak menyempitkan cabang aktif yang sedang diekspansi.
+- **FR-MAP-03 (sub-cincin stagger):** Untuk `>= 12` sibling terlihat dalam satu induk (mis. `root20Children`, `wide60Children`), node didistribusikan ke sub-cincin stagger radial deterministik (2 sub-cincin untuk `>= 12`, 3 sub-cincin untuk `>= 34`) dan busur terarah untuk fan non-root besar agar bebas tumpang tindih dengan radius yang tetap kompak.
+- **FR-MAP-05 & FR-MAP-08 (transisi & semantic zoom):** Umpan balik perubahan `zoomTier` ke state UI **dibekukan** selama animasi transisi terprogram berlangsung agar perubahan tier tidak memicu recompute layout/dimensi di tengah jalan; fokus pada node non-root memakai batas bawah `minK = 0.54` sehingga tetap terbaca pada Tier 1.
+- **FR-MAP-09 (efek sorot fokus):** Efek cahaya jalur Root→Focus dan node terfokus memakai **halo stroke** (lapisan path/outline semi-transparan di bawah elemen utama), bukan filter blur SVG (`<filter>` / `feGaussianBlur`), guna menghindari *clipping* bounding-box pada edge vertikal/horizontal maupun degradasi FPS.
