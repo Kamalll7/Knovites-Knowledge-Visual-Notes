@@ -135,11 +135,12 @@ Index pencarian, backlink, daftar children, posisi node di peta, viewport, token
 
 ### 5.9 Skema database lokal (Dexie)
 
-- `nodes`: `id` (PK), `path`, `parentId`, `meta` (isi node.json), `baseBlobSha`, `dirty`, `corrupt`.
-- `canvases`: `nodeId` (PK), `doc`, `baseBlobSha`, `dirty`, `loaded`.
-- `assets`: `[nodeId+path]` (PK), `blob`, `sha`, `dirty`.
-- `pendingDeletes`: path file yang harus dihapus pada commit berikutnya.
-- `syncState`: `repo`, `branch`, `baseCommitSha`, `lastSyncedAt`, `pendingMerge`.
-- `settings` (key-value) dan `errorLog` (maksimal 100 entri).
+- `nodes`: `id` (PK), `path` (indeks unik), `parentId` (indeks), `meta` (isi `node.json` hasil parse atau fallback read-only), `rawNodeJson` (teks mentah file agar node `corrupt` / `newer-schema` tidak pernah ditimpa), `baseBlobSha`, `dirty`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `extraFiles` (daftar file tak dikenal di folder node), `hasCanvas`, `deletedAt` (null bila aktif, ISO UTC saat menunggu jendela Undo 10 detik).
+- `canvases`: `nodeId` (PK), `path` (indeks unik), `doc`, `rawJson` (teks mentah bila `corrupt` / `newer-schema`), `baseBlobSha`, `dirty`, `loaded`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `deletedAt`.
+- `assets`: `[nodeId+path]` (PK), `nodeId`, `path` (relatif terhadap folder node, mis. `assets/<hash16>.<ext>`), `blob`, `sha`, `dirty`, `deletedAt`.
+- `pendingDeletes`: `path` (PK), `baseBlobSha`, `deletedAt` — path file yang harus dihapus pada commit berikutnya.
+- `syncState`: `id` (`'singleton'`, PK), `repo`, `branch`, `baseCommitSha`, `lastSyncedAt`, `pendingMerge`.
+- `settings`: `key` (PK), `value`, `updatedAt`.
+- `errorLog`: `++id` (PK), `timestamp`, `level`, `code`, `message`, `context` — dipangkas otomatis maksimal 100 entri terbaru.
 
 Isi versi dasar (base) untuk three-way merge tidak disimpan lokal. Ia diambil ulang dari GitHub lewat `baseBlobSha` saat merge dibutuhkan (blob Git tidak pernah berubah).
