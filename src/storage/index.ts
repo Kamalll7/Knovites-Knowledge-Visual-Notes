@@ -28,3 +28,12 @@ export {
   type StoredNodeRecord,
   type SyncStateRecord,
 } from '@/storage/types'
+export { requestPersistentStorage, type StoragePersistNavigator } from '@/storage/persist'
+export {
+  createBrowserTabLockCoordinator,
+  createFakeTabLockRegistry,
+  type BrowserTabLockOptions,
+  type FakeTabLockRegistry,
+  type TabLockCoordinator,
+  type TabLockRole,
+} from '@/storage/tab-lock'

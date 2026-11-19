@@ -15,7 +15,12 @@ import { MapPlaceholder } from '@/features/map/MapPlaceholder'
 import { NodePagePlaceholder } from '@/features/page/NodePagePlaceholder'
 import { SettingsPlaceholder } from '@/features/settings/SettingsPlaceholder'
 import { en } from '@/i18n/en'
-import { createKnovitesDatabase } from '@/storage'
+import {
+  createBrowserTabLockCoordinator,
+  createKnovitesDatabase,
+  requestPersistentStorage,
+  type TabLockCoordinator,
+} from '@/storage'
 import { Button } from '@/ui/components/button'
 
 function NotFoundPlaceholder() {
@@ -79,24 +84,35 @@ function detectIndexedDb(): boolean {
   }
 }
 
-function createDefaultWorkspaceStore(): {
+function createDefaultWorkspaceRuntime(): {
   store: WorkspaceStoreApi
-  shouldHydrateOnMount: boolean
+  coordinator: TabLockCoordinator | null
 } {
   if (!detectIndexedDb()) {
     return {
       store: createWorkspaceStore({
         storage: createUnavailableStorageAdapter('IndexedDB is unavailable in this environment.'),
       }),
-      shouldHydrateOnMount: false,
+      coordinator: null,
     }
   }
 
+  const db = createKnovitesDatabase()
+  const coordinator = createBrowserTabLockCoordinator()
+  let storeRef: WorkspaceStoreApi | null = null
+
+  const store = createWorkspaceStore({
+    storage: createDexieWorkspaceAdapter(db),
+    onTakeOverWriter: async () => {
+      await coordinator.takeOver()
+      await storeRef?.getState().hydrate()
+    },
+  })
+  storeRef = store
+
   return {
-    store: createWorkspaceStore({
-      storage: createDexieWorkspaceAdapter(createKnovitesDatabase()),
-    }),
-    shouldHydrateOnMount: true,
+    store,
+    coordinator,
   }
 }
 
@@ -105,20 +121,40 @@ export interface AppProps {
 }
 
 export function App({ workspaceStore }: AppProps) {
-  const [{ store, shouldHydrateOnMount }] = useState(() => {
+  const [{ store, coordinator }] = useState(() => {
     if (workspaceStore) {
-      return { store: workspaceStore, shouldHydrateOnMount: false }
+      return { store: workspaceStore, coordinator: null }
     }
-    return createDefaultWorkspaceStore()
+    return createDefaultWorkspaceRuntime()
   })
 
   useEffect(() => {
-    if (!shouldHydrateOnMount || store.getState().hydrated) return
-    void store.getState().hydrate()
-    return () => {
-      store.getState().dispose()
+    if (!coordinator) return
+
+    let active = true
+    void requestPersistentStorage()
+
+    const handlePageHide = () => {
+      void coordinator.release()
     }
-  }, [store, shouldHydrateOnMount])
+    window.addEventListener('pagehide', handlePageHide)
+
+    void coordinator.acquire((role) => {
+      if (!active) return
+      const isReadOnly = role === 'readonly'
+      store.getState().setReadOnlyTab(isReadOnly)
+      if (!store.getState().hydrated || !isReadOnly) {
+        void store.getState().hydrate()
+      }
+    })
+
+    return () => {
+      active = false
+      window.removeEventListener('pagehide', handlePageHide)
+      store.getState().dispose()
+      void coordinator.release()
+    }
+  }, [store, coordinator])
 
   return (
     <WorkspaceStoreContext.Provider value={store}>

@@ -28,3 +28,4 @@ Menambahkan **`fake-indexeddb@6.2.8`** sebagai `devDependency`:
 - `package.json` dan `pnpm-lock.yaml` menambah `fake-indexeddb` di `devDependencies`.
 - `src/storage/storage.test.ts` memakai instance `IDBFactory` dari `fake-indexeddb` untuk menguji atomisitas, rollback, batas `errorLog`, node `corrupt`, dan migrasi skema.
 - Tidak ada keputusan **[LOCKED]** di PRD yang berubah (`prd.md` §3 tetap memakai Dexie untuk IndexedDB).
+

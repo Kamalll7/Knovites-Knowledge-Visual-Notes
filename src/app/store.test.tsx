@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '@/app/App'
@@ -11,6 +11,7 @@ import {
 } from '@/app/store'
 import { serializeCanvasJson } from '@/domain/serialize'
 import {
+  createFakeTabLockRegistry,
   createKnovitesDatabase,
   getPendingDeletes,
   loadTreeBuildEntries,
@@ -275,5 +276,96 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     expect(banner).toHaveAttribute('role', 'alert')
     expect(banner.textContent).toContain('IndexedDB disabled in private mode')
     store.getState().dispose()
+  })
+
+  it('blocks writes on non-leader read-only tab and transfers writer role cleanly on Take over (FR-LOC-05)', async () => {
+    const indexedDB = new IDBFactory()
+    const registry = createFakeTabLockRegistry()
+    const lock1 = registry.createClient('tab-1')
+    const lock2 = registry.createClient('tab-2')
+
+    const db1 = createKnovitesDatabase('multi-tab-store-test', { indexedDB, IDBKeyRange })
+    const db2 = createKnovitesDatabase('multi-tab-store-test', { indexedDB, IDBKeyRange })
+
+    let store1Ref: ReturnType<typeof createWorkspaceStore> | null = null
+    let store2Ref: ReturnType<typeof createWorkspaceStore> | null = null
+
+    const store1 = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db1),
+      now: createDeterministicClock('2026-11-19T12:00:00Z'),
+      onTakeOverWriter: async () => {
+        await lock1.takeOver()
+        await store1Ref?.getState().hydrate()
+      },
+    })
+    store1Ref = store1
+
+    const store2 = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db2),
+      now: createDeterministicClock('2026-11-19T12:01:00Z'),
+      onTakeOverWriter: async () => {
+        await lock2.takeOver()
+        await store2Ref?.getState().hydrate()
+      },
+    })
+    store2Ref = store2
+
+    await lock1.acquire((role) => store1.getState().setReadOnlyTab(role === 'readonly'))
+    await store1.getState().hydrate()
+    const createdByTab1 = await store1.getState().createNode({ title: 'PWN', parentId: null })
+    expect(createdByTab1.ok).toBe(true)
+    if (!createdByTab1.ok) return
+
+    // Second tab starts in read-only mode
+    await lock2.acquire((role) => store2.getState().setReadOnlyTab(role === 'readonly'))
+    await store2.getState().hydrate()
+    expect(store2.getState().isReadOnlyTab).toBe(true)
+
+    // Non-leader writes MUST be blocked cleanly
+    const blockedCreate = await store2
+      .getState()
+      .createNode({ title: 'Blocked Node', parentId: null })
+    expect(blockedCreate.ok).toBe(false)
+    if (!blockedCreate.ok) expect(blockedCreate.reason).toBe('readonly_tab')
+
+    const blockedRename = await store2
+      .getState()
+      .renameNode({ nodeId: createdByTab1.nodeId, title: 'Blocked Rename' })
+    expect(blockedRename.ok).toBe(false)
+    if (!blockedRename.ok) expect(blockedRename.reason).toBe('readonly_tab')
+
+    const blockedDelete = await store2.getState().deleteNode(createdByTab1.nodeId)
+    expect(blockedDelete.ok).toBe(false)
+    if (!blockedDelete.ok) expect(blockedDelete.reason).toBe('readonly_tab')
+
+    // IndexedDB must still hold only Tab 1's untouched 'PWN' node
+    expect(store2.getState().tree.nodes[createdByTab1.nodeId]?.meta.title).toBe('PWN')
+
+    render(<App workspaceStore={store2} />)
+    expect(screen.getByTestId('readonly-tab-banner')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('take-over-button'))
+
+    await waitFor(() => {
+      expect(store2.getState().isReadOnlyTab).toBe(false)
+      expect(screen.queryByTestId('readonly-tab-banner')).toBeNull()
+    })
+    expect(store1.getState().isReadOnlyTab).toBe(true)
+
+    // Former writer Tab 1 is now blocked; new writer Tab 2 succeeds
+    const blockedAfterTakeOver = await store1
+      .getState()
+      .createNode({ title: 'Stale Write', parentId: null })
+    expect(blockedAfterTakeOver.ok).toBe(false)
+    if (!blockedAfterTakeOver.ok) expect(blockedAfterTakeOver.reason).toBe('readonly_tab')
+
+    const allowedAfterTakeOver = await store2.getState().createNode({ title: 'RE', parentId: null })
+    expect(allowedAfterTakeOver.ok).toBe(true)
+
+    await lock1.release()
+    await lock2.release()
+    store1.getState().dispose()
+    store2.getState().dispose()
+    db1.close()
+    db2.close()
   })
 })
