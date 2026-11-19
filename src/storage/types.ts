@@ -1,8 +1,11 @@
 import type { CanvasJson, NodeJson, SchemaIssue } from '@/domain/schema'
 
-export const CURRENT_DB_SCHEMA_VERSION = 1
+export const CURRENT_DB_SCHEMA_VERSION = 2
 export const DEFAULT_DB_NAME = 'knovites-local'
 export const MAX_ERROR_LOG_ENTRIES = 100
+
+/** Numeric flag stored in IndexedDB because W3C IndexedDB forbids booleans as index keys. */
+export type IndexedFlag = 0 | 1
 
 export interface StoredNodeRecord {
   id: string
@@ -11,13 +14,14 @@ export interface StoredNodeRecord {
   meta: NodeJson
   rawNodeJson: string
   baseBlobSha: string | null
-  dirty: boolean
+  dirty: IndexedFlag
   corrupt: boolean
   corruptErrors?: SchemaIssue[]
   newerSchemaVersion?: number
   extraFiles: string[]
   hasCanvas: boolean
-  deletedAt: string | null
+  /** `0` when active, positive epoch ms when soft-deleted awaiting 10s Undo window. */
+  deletedAt: number
 }
 
 export interface StoredCanvasRecord {
@@ -26,12 +30,13 @@ export interface StoredCanvasRecord {
   doc: CanvasJson | null
   rawJson: string
   baseBlobSha: string | null
-  dirty: boolean
+  dirty: IndexedFlag
   loaded: boolean
   corrupt: boolean
   corruptErrors?: SchemaIssue[]
   newerSchemaVersion?: number
-  deletedAt: string | null
+  /** `0` when active, positive epoch ms when soft-deleted awaiting 10s Undo window. */
+  deletedAt: number
 }
 
 export interface StoredAssetRecord {
@@ -40,8 +45,9 @@ export interface StoredAssetRecord {
   path: string
   blob: Uint8Array | Blob
   sha: string | null
-  dirty: boolean
-  deletedAt: string | null
+  dirty: IndexedFlag
+  /** `0` when active, positive epoch ms when soft-deleted awaiting 10s Undo window. */
+  deletedAt: number
 }
 
 export interface PendingDeleteRecord {
@@ -96,4 +102,32 @@ export interface InvalidNodeInput {
 export interface SoftDeleteInput {
   nodeIds: readonly string[]
   deletedAt: string
+}
+
+export interface DirtyNodeFile {
+  nodeId: string
+  path: string
+  rawNodeJson: string
+  baseBlobSha: string | null
+}
+
+export interface DirtyCanvasFile {
+  nodeId: string
+  path: string
+  rawJson: string
+  baseBlobSha: string | null
+}
+
+export interface DirtyAssetFile {
+  nodeId: string
+  path: string
+  blob: Uint8Array | Blob
+  sha: string | null
+}
+
+export interface CollectedDirtyFiles {
+  nodes: DirtyNodeFile[]
+  canvases: DirtyCanvasFile[]
+  assets: DirtyAssetFile[]
+  pendingDeletes: PendingDeleteRecord[]
 }

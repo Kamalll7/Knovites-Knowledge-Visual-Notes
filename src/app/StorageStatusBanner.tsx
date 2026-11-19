@@ -1,4 +1,4 @@
-import { AlertTriangle, Lock } from 'lucide-react'
+import { AlertTriangle, Info, Lock } from 'lucide-react'
 import { useWorkspaceStore } from '@/app/workspace-context'
 import { en } from '@/i18n/en'
 import { Button } from '@/ui/components/button'
@@ -7,9 +7,11 @@ export function StorageStatusBanner() {
   const storageError = useWorkspaceStore((state) => state.storageError)
   const hasUnsavedChanges = useWorkspaceStore((state) => state.hasUnsavedChanges)
   const isReadOnlyTab = useWorkspaceStore((state) => state.isReadOnlyTab)
+  const isLockSupported = useWorkspaceStore((state) => state.isLockSupported)
+  const retrySave = useWorkspaceStore((state) => state.retrySave)
   const takeOverWriterLock = useWorkspaceStore((state) => state.takeOverWriterLock)
 
-  if (!storageError && !isReadOnlyTab) {
+  if (!storageError && !isReadOnlyTab && isLockSupported) {
     return null
   }
 
@@ -30,11 +32,24 @@ export function StorageStatusBanner() {
               </p>
             </div>
           </div>
-          {hasUnsavedChanges ? (
-            <span className="rounded-sm border border-destructive/40 bg-background px-2 py-0.5 text-xs font-medium text-foreground">
-              {en.storageBanner.unsavedBadge}
-            </span>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {hasUnsavedChanges ? (
+              <span className="rounded-sm border border-destructive/40 bg-background px-2 py-0.5 text-xs font-medium text-foreground">
+                {en.storageBanner.unsavedBadge}
+              </span>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="retry-storage-button"
+              onClick={() => {
+                void retrySave()
+              }}
+            >
+              {en.storageBanner.retryButton}
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -64,6 +79,22 @@ export function StorageStatusBanner() {
           >
             {en.storageBanner.takeOverButton}
           </Button>
+        </div>
+      ) : null}
+
+      {!isLockSupported ? (
+        <div
+          role="status"
+          data-testid="locks-unsupported-banner"
+          className="mx-auto flex max-w-7xl items-start gap-2.5 bg-muted/60 px-4 py-2 text-xs text-foreground sm:px-6"
+        >
+          <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div>
+            <span className="font-semibold">{en.storageBanner.locksUnsupportedTitle}: </span>
+            <span className="text-muted-foreground">
+              {en.storageBanner.locksUnsupportedDescription}
+            </span>
+          </div>
         </div>
       ) : null}
     </div>

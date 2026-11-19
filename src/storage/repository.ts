@@ -1,9 +1,16 @@
 import { parseCanvasJson, parseNodeJson, type NodeJson } from '@/domain/schema'
-import { compareLexicographical, type Changeset, type TreeBuildEntry } from '@/domain/tree'
+import {
+  compareLexicographical,
+  deriveNodePath,
+  resolveUniqueSlug,
+  type Changeset,
+  type TreeBuildEntry,
+} from '@/domain/tree'
 import type { KnovitesDatabase } from '@/storage/db'
 import {
   MAX_ERROR_LOG_ENTRIES,
   type ApplyChangesetOptions,
+  type CollectedDirtyFiles,
   type ErrorLogRecord,
   type InvalidNodeInput,
   type PendingDeleteRecord,
@@ -39,6 +46,21 @@ function makePlaceholderMeta(id: string): NodeJson {
     createdAt: '1970-01-01T00:00:00Z',
     updatedAt: '1970-01-01T00:00:00Z',
   }
+}
+
+function toEpochMs(isoOrMs: string | number): number {
+  if (typeof isoOrMs === 'number') {
+    return Number.isFinite(isoOrMs) && isoOrMs > 0 ? isoOrMs : 1
+  }
+  const parsed = Date.parse(isoOrMs)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
+function toIsoUtc(epochMs: number, fallbackIso: string): string {
+  if (!Number.isFinite(epochMs) || epochMs <= 0) {
+    return fallbackIso
+  }
+  return new Date(epochMs).toISOString().replace('.000Z', 'Z')
 }
 
 function resolveParentPath(nodePath: string): string | null {
@@ -116,7 +138,7 @@ export async function applyChangeset(
 
     for (const node of allNodes) {
       initialNodeById.set(node.id, node)
-      if (node.deletedAt === null) {
+      if (node.deletedAt === 0) {
         initialNodeByPath.set(node.path, node)
         nodeByPath.set(node.path, { ...node, extraFiles: [...node.extraFiles] })
         nodeById.set(node.id, nodeByPath.get(node.path)!)
@@ -124,15 +146,15 @@ export async function applyChangeset(
     }
 
     for (const canvas of allCanvases) {
-      if (canvas.deletedAt === null) {
+      if (canvas.deletedAt === 0) {
         canvasByPath.set(canvas.path, { ...canvas })
       }
     }
 
     for (const asset of allAssets) {
-      if (asset.deletedAt !== null) continue
+      if (asset.deletedAt !== 0) continue
       const owner = initialNodeById.get(asset.nodeId)
-      if (owner && owner.deletedAt === null) {
+      if (owner && owner.deletedAt === 0) {
         assetByFullPath.set(`${owner.path}/${asset.path}`, { ...asset })
       }
     }
@@ -255,7 +277,7 @@ export async function applyChangeset(
               record: {
                 ...source,
                 path: newNodePath,
-                dirty: true,
+                dirty: 1,
               },
             })
           }
@@ -283,7 +305,7 @@ export async function applyChangeset(
               record: {
                 ...source,
                 path: newNodePath,
-                dirty: true,
+                dirty: 1,
               },
             })
           }
@@ -315,7 +337,7 @@ export async function applyChangeset(
             record: {
               ...assetSource,
               path: newRelPath,
-              dirty: true,
+              dirty: 1,
             },
           })
         }
@@ -398,11 +420,11 @@ export async function applyChangeset(
           meta: parsed.data,
           rawNodeJson: upsert.content,
           baseBlobSha: existingById?.baseBlobSha ?? existingAtPath?.baseBlobSha ?? null,
-          dirty: true,
+          dirty: 1,
           corrupt: false,
           extraFiles: existingById?.extraFiles ?? existingAtPath?.extraFiles ?? [],
           hasCanvas: existingById?.hasCanvas ?? existingAtPath?.hasCanvas ?? false,
-          deletedAt: null,
+          deletedAt: 0,
         }
 
         nodeByPath.set(nodePath, nextRecord)
@@ -432,10 +454,10 @@ export async function applyChangeset(
           doc: parsed.data,
           rawJson: upsert.content,
           baseBlobSha: existingCanvas?.baseBlobSha ?? null,
-          dirty: true,
+          dirty: 1,
           loaded: true,
           corrupt: false,
-          deletedAt: null,
+          deletedAt: 0,
         }
 
         canvasByPath.set(nodePath, nextCanvas)
@@ -483,7 +505,7 @@ export async function saveInvalidNode(
       meta: makePlaceholderMeta(id),
       rawNodeJson: input.rawNodeJson,
       baseBlobSha: input.baseBlobSha ?? existing?.baseBlobSha ?? null,
-      dirty: false,
+      dirty: 0,
       corrupt: true,
       ...(input.corruptErrors ? { corruptErrors: input.corruptErrors } : {}),
       ...(input.newerSchemaVersion !== undefined
@@ -491,7 +513,7 @@ export async function saveInvalidNode(
         : {}),
       extraFiles: input.extraFiles ? [...input.extraFiles] : (existing?.extraFiles ?? []),
       hasCanvas: input.hasCanvas ?? existing?.hasCanvas ?? false,
-      deletedAt: null,
+      deletedAt: 0,
     }
 
     await db.nodes.put(record)
@@ -504,32 +526,30 @@ export async function saveAsset(db: KnovitesDatabase, asset: StoredAssetRecord):
 }
 
 /**
- * Loads all active (non-soft-deleted) records from IndexedDB into `TreeBuildEntry[]`
+ * Loads all active (`deletedAt === 0`) records from IndexedDB into `TreeBuildEntry[]`
  * ready for `domain/tree.buildTree()`.
+ * Uses primary-store `nodes.toArray()` plus `node.hasCanvas` (maintained on canvas
+ * upsert/delete and backfilled during v1->v2 migration) to avoid redundant canvas scans.
  */
 export async function loadTreeBuildEntries(db: KnovitesDatabase): Promise<TreeBuildEntry[]> {
-  const [nodes, canvases, assets] = await Promise.all([
+  const [nodes, assets] = await Promise.all([
     db.nodes.toArray(),
-    db.canvases.toArray(),
-    db.assets.toArray(),
+    db.assets.where('deletedAt').equals(0).toArray(),
   ])
-
-  const activeCanvases = new Set(canvases.filter((c) => c.deletedAt === null).map((c) => c.nodeId))
 
   const assetsByNodeId = new Map<string, string[]>()
   for (const asset of assets) {
-    if (asset.deletedAt !== null) continue
     const list = assetsByNodeId.get(asset.nodeId) ?? []
     list.push(asset.path)
     assetsByNodeId.set(asset.nodeId, list)
   }
 
   return nodes
-    .filter((node) => node.deletedAt === null)
+    .filter((node) => node.deletedAt === 0)
     .sort((a, b) => compareLexicographical(a.path, b.path))
     .map((node): TreeBuildEntry => {
       const nodeAssets = assetsByNodeId.get(node.id) ?? []
-      const hasCanvas = node.hasCanvas || activeCanvases.has(node.id)
+      const hasCanvas = node.hasCanvas
 
       if (node.newerSchemaVersion !== undefined) {
         return {
@@ -578,6 +598,8 @@ export async function softDeleteSubtree(
   const targetIds = new Set(input.nodeIds)
   if (targetIds.size === 0) return
 
+  const deletedAtMs = toEpochMs(input.deletedAt)
+
   await db.transaction('rw', [db.nodes, db.canvases, db.assets], async () => {
     const nodes = await db.nodes.bulkGet([...targetIds])
     for (const node of nodes) {
@@ -589,7 +611,7 @@ export async function softDeleteSubtree(
     const updatedNodes: StoredNodeRecord[] = []
     for (const node of nodes) {
       if (node) {
-        updatedNodes.push({ ...node, deletedAt: input.deletedAt })
+        updatedNodes.push({ ...node, deletedAt: deletedAtMs })
       }
     }
     if (updatedNodes.length > 0) {
@@ -600,7 +622,7 @@ export async function softDeleteSubtree(
     const updatedCanvases: StoredCanvasRecord[] = []
     for (const canvas of canvases) {
       if (canvas) {
-        updatedCanvases.push({ ...canvas, deletedAt: input.deletedAt })
+        updatedCanvases.push({ ...canvas, deletedAt: deletedAtMs })
       }
     }
     if (updatedCanvases.length > 0) {
@@ -615,7 +637,7 @@ export async function softDeleteSubtree(
       await db.assets.bulkPut(
         assets.map((asset) => ({
           ...asset,
-          deletedAt: input.deletedAt,
+          deletedAt: deletedAtMs,
         })),
       )
     }
@@ -624,31 +646,109 @@ export async function softDeleteSubtree(
 
 /**
  * Restores a previously soft-deleted subtree (Undo within 10s window) atomically.
+ * If another active node occupied the restored root's path during the window,
+ * assigns a unique sibling slug (`resolveUniqueSlug`) and rewrites subtree paths
+ * so two active nodes never share the same path.
  */
 export async function restoreSoftDeletedSubtree(
   db: KnovitesDatabase,
   nodeIds: readonly string[],
+  now: string = new Date().toISOString(),
 ): Promise<void> {
   if (nodeIds.length === 0) return
 
-  await db.transaction('rw', [db.nodes, db.canvases, db.assets], async () => {
-    const nodes = await db.nodes.bulkGet([...nodeIds])
-    const restoredNodes: StoredNodeRecord[] = []
-    for (const node of nodes) {
-      if (node && node.deletedAt !== null) {
-        restoredNodes.push({ ...node, deletedAt: null })
+  await db.transaction('rw', [db.nodes, db.canvases, db.assets, db.pendingDeletes], async () => {
+    const targetIdSet = new Set(nodeIds)
+    const [activeNodes, softDeletedCandidates] = await Promise.all([
+      db.nodes.where('deletedAt').equals(0).toArray(),
+      db.nodes.bulkGet([...targetIdSet]),
+    ])
+    const softDeletedNodes = softDeletedCandidates.filter(
+      (n): n is StoredNodeRecord => n !== undefined && n.deletedAt > 0,
+    )
+
+    if (softDeletedNodes.length === 0) return
+
+    const activeById = new Map(activeNodes.map((n) => [n.id, n]))
+    const activeNodePaths = new Set(activeNodes.map((n) => n.path))
+    const restoredIdSet = new Set(softDeletedNodes.map((n) => n.id))
+
+    const rootNode =
+      softDeletedNodes.find((n) => n.parentId === null || !restoredIdSet.has(n.parentId)) ??
+      softDeletedNodes[0]!
+
+    const activeParent = rootNode.parentId !== null ? activeById.get(rootNode.parentId) : undefined
+    const effectiveParentId = activeParent ? activeParent.id : null
+    const parentPath = activeParent ? activeParent.path : null
+
+    const activeSiblingSlugs = activeNodes
+      .filter((n) => n.parentId === effectiveParentId)
+      .map((n) => {
+        const slash = n.path.lastIndexOf('/')
+        return slash === -1 ? n.path : n.path.slice(slash + 1)
+      })
+
+    const lastSlash = rootNode.path.lastIndexOf('/')
+    const originalSlug = lastSlash === -1 ? rootNode.path : rootNode.path.slice(lastSlash + 1)
+    const uniqueSlug = resolveUniqueSlug(originalSlug, activeSiblingSlugs)
+    const oldRootPath = rootNode.path
+    const targetRootPath = deriveNodePath(parentPath, uniqueSlug)
+    const pathChanged = targetRootPath !== oldRootPath
+
+    const remapPath = (path: string): string => {
+      if (!pathChanged) return path
+      if (path === oldRootPath) return targetRootPath
+      if (path.startsWith(`${oldRootPath}/`)) {
+        return `${targetRootPath}${path.slice(oldRootPath.length)}`
       }
-    }
-    if (restoredNodes.length > 0) {
-      await db.nodes.bulkPut(restoredNodes)
+      return path
     }
 
-    const canvases = await db.canvases.bulkGet([...nodeIds])
+    const oldPathsToPendingDelete: PendingDeleteRecord[] = []
+    const restoredNodes: StoredNodeRecord[] = softDeletedNodes.map((node) => {
+      const nextPath = remapPath(node.path)
+      const moved = nextPath !== node.path
+      if (moved && node.baseBlobSha !== null && !activeNodePaths.has(node.path)) {
+        oldPathsToPendingDelete.push({
+          path: `${node.path}/node.json`,
+          baseBlobSha: node.baseBlobSha,
+          deletedAt: now,
+        })
+      }
+      return {
+        ...node,
+        parentId: node.id === rootNode.id ? effectiveParentId : node.parentId,
+        path: nextPath,
+        dirty: moved ? 1 : node.dirty,
+        deletedAt: 0,
+      }
+    })
+    await db.nodes.bulkPut(restoredNodes)
+
+    const [canvases, activeCanvases] = await Promise.all([
+      db.canvases.bulkGet([...targetIdSet]),
+      db.canvases.where('deletedAt').equals(0).toArray(),
+    ])
+    const activeCanvasPaths = new Set(activeCanvases.map((c) => c.path))
+
     const restoredCanvases: StoredCanvasRecord[] = []
     for (const canvas of canvases) {
-      if (canvas && canvas.deletedAt !== null) {
-        restoredCanvases.push({ ...canvas, deletedAt: null })
+      if (!canvas || canvas.deletedAt === 0) continue
+      const nextPath = remapPath(canvas.path)
+      const moved = nextPath !== canvas.path
+      if (moved && canvas.baseBlobSha !== null && !activeCanvasPaths.has(canvas.path)) {
+        oldPathsToPendingDelete.push({
+          path: `${canvas.path}/canvas.json`,
+          baseBlobSha: canvas.baseBlobSha,
+          deletedAt: now,
+        })
       }
+      restoredCanvases.push({
+        ...canvas,
+        path: nextPath,
+        dirty: moved ? 1 : canvas.dirty,
+        deletedAt: 0,
+      })
     }
     if (restoredCanvases.length > 0) {
       await db.canvases.bulkPut(restoredCanvases)
@@ -656,13 +756,48 @@ export async function restoreSoftDeletedSubtree(
 
     const assets = await db.assets
       .where('nodeId')
-      .anyOf([...nodeIds])
+      .anyOf([...targetIdSet])
       .toArray()
-    const restoredAssets = assets
-      .filter((a) => a.deletedAt !== null)
-      .map((a) => ({ ...a, deletedAt: null }))
+    const nodeByIdAfterRestore = new Map(restoredNodes.map((n) => [n.id, n]))
+    const restoredAssets: StoredAssetRecord[] = []
+    for (const asset of assets) {
+      if (asset.deletedAt === 0) continue
+      const restoredOwner = nodeByIdAfterRestore.get(asset.nodeId)
+      const oldOwner = softDeletedNodes.find((n) => n.id === asset.nodeId)
+      const ownerPathChanged =
+        restoredOwner !== undefined &&
+        oldOwner !== undefined &&
+        restoredOwner.path !== oldOwner.path
+      if (
+        ownerPathChanged &&
+        oldOwner &&
+        asset.sha !== null &&
+        !activeNodePaths.has(oldOwner.path)
+      ) {
+        oldPathsToPendingDelete.push({
+          path: `${oldOwner.path}/${asset.path}`,
+          baseBlobSha: asset.sha,
+          deletedAt: now,
+        })
+      }
+      restoredAssets.push({
+        ...asset,
+        dirty: ownerPathChanged ? 1 : asset.dirty,
+        deletedAt: 0,
+      })
+    }
     if (restoredAssets.length > 0) {
       await db.assets.bulkPut(restoredAssets)
+    }
+
+    for (const node of restoredNodes) {
+      await db.pendingDeletes.delete(`${node.path}/node.json`)
+    }
+    for (const canvas of restoredCanvases) {
+      await db.pendingDeletes.delete(`${canvas.path}/canvas.json`)
+    }
+    if (oldPathsToPendingDelete.length > 0) {
+      await db.pendingDeletes.bulkPut(oldPathsToPendingDelete)
     }
   })
 }
@@ -670,7 +805,7 @@ export async function restoreSoftDeletedSubtree(
 /**
  * Finalizes all soft-deleted rows (or only the specified `nodeIds`) into `pendingDeletes`
  * and removes their soft-deleted records in one atomic transaction.
- * Called when the 10s Undo timer expires or on startup/reload recovery.
+ * Uses indexed range queries so common-case hydrate() with 0 soft-deleted items is O(1).
  */
 export async function finalizeSoftDeletes(
   db: KnovitesDatabase,
@@ -680,50 +815,76 @@ export async function finalizeSoftDeletes(
   const filterSet = onlyNodeIds ? new Set(onlyNodeIds) : null
 
   return db.transaction('rw', [db.nodes, db.canvases, db.assets, db.pendingDeletes], async () => {
-    const [allNodes, allCanvases, allAssets] = await Promise.all([
-      db.nodes.toArray(),
-      db.canvases.toArray(),
-      db.assets.toArray(),
+    const [softNodes, softCanvases, softAssets] = await Promise.all([
+      db.nodes.where('deletedAt').above(0).toArray(),
+      db.canvases.where('deletedAt').above(0).toArray(),
+      db.assets.where('deletedAt').above(0).toArray(),
     ])
 
-    const nodeById = new Map(allNodes.map((n) => [n.id, n]))
+    const nodesToFinalize = softNodes.filter((n) => !filterSet || filterSet.has(n.id))
+    const canvasesToFinalize = softCanvases.filter((c) => !filterSet || filterSet.has(c.nodeId))
+    const assetsToFinalize = softAssets.filter((a) => !filterSet || filterSet.has(a.nodeId))
+
+    if (
+      nodesToFinalize.length === 0 &&
+      canvasesToFinalize.length === 0 &&
+      assetsToFinalize.length === 0
+    ) {
+      return []
+    }
+
+    const [activeNodes, activeCanvases, activeAssets] = await Promise.all([
+      db.nodes.where('deletedAt').equals(0).toArray(),
+      db.canvases.where('deletedAt').equals(0).toArray(),
+      db.assets.where('deletedAt').equals(0).toArray(),
+    ])
+
+    const nodeById = new Map<string, StoredNodeRecord>()
+    for (const n of softNodes) nodeById.set(n.id, n)
+    for (const n of activeNodes) nodeById.set(n.id, n)
+
+    const activeNodePaths = new Set(activeNodes.map((n) => n.path))
+    const activeCanvasPaths = new Set(activeCanvases.map((c) => c.path))
+    const activeAssetFullPaths = new Set<string>()
+    for (const a of activeAssets) {
+      const owner = nodeById.get(a.nodeId)
+      if (owner && owner.deletedAt === 0) {
+        activeAssetFullPaths.add(`${owner.path}/${a.path}`)
+      }
+    }
+
     const pendingMap = new Map<string, PendingDeleteRecord>()
 
-    const nodesToFinalize = allNodes.filter(
-      (n) => n.deletedAt !== null && (!filterSet || filterSet.has(n.id)),
-    )
-    const canvasesToFinalize = allCanvases.filter(
-      (c) => c.deletedAt !== null && (!filterSet || filterSet.has(c.nodeId)),
-    )
-    const assetsToFinalize = allAssets.filter(
-      (a) => a.deletedAt !== null && (!filterSet || filterSet.has(a.nodeId)),
-    )
-
     for (const node of nodesToFinalize) {
-      const deletedAt = node.deletedAt ?? now
-      pendingMap.set(`${node.path}/node.json`, {
-        path: `${node.path}/node.json`,
-        baseBlobSha: node.baseBlobSha,
-        deletedAt,
-      })
-      if (node.hasCanvas) {
+      const deletedAt = toIsoUtc(node.deletedAt, now)
+      if (!activeNodePaths.has(node.path)) {
+        pendingMap.set(`${node.path}/node.json`, {
+          path: `${node.path}/node.json`,
+          baseBlobSha: node.baseBlobSha,
+          deletedAt,
+        })
+      }
+      if (node.hasCanvas && !activeCanvasPaths.has(node.path)) {
         pendingMap.set(`${node.path}/canvas.json`, {
           path: `${node.path}/canvas.json`,
           baseBlobSha: null,
           deletedAt,
         })
       }
-      for (const extraFile of node.extraFiles) {
-        pendingMap.set(`${node.path}/${extraFile}`, {
-          path: `${node.path}/${extraFile}`,
-          baseBlobSha: null,
-          deletedAt,
-        })
+      if (!activeNodePaths.has(node.path)) {
+        for (const extraFile of node.extraFiles) {
+          pendingMap.set(`${node.path}/${extraFile}`, {
+            path: `${node.path}/${extraFile}`,
+            baseBlobSha: null,
+            deletedAt,
+          })
+        }
       }
     }
 
     for (const canvas of canvasesToFinalize) {
-      const deletedAt = canvas.deletedAt ?? now
+      if (activeCanvasPaths.has(canvas.path)) continue
+      const deletedAt = toIsoUtc(canvas.deletedAt, now)
       pendingMap.set(`${canvas.path}/canvas.json`, {
         path: `${canvas.path}/canvas.json`,
         baseBlobSha: canvas.baseBlobSha,
@@ -735,10 +896,11 @@ export async function finalizeSoftDeletes(
       const owner = nodeById.get(asset.nodeId)
       if (!owner) continue
       const fullPath = `${owner.path}/${asset.path}`
+      if (activeAssetFullPaths.has(fullPath)) continue
       pendingMap.set(fullPath, {
         path: fullPath,
         baseBlobSha: asset.sha,
-        deletedAt: asset.deletedAt ?? now,
+        deletedAt: toIsoUtc(asset.deletedAt, now),
       })
     }
 
@@ -764,6 +926,81 @@ export async function finalizeSoftDeletes(
 
 export async function getPendingDeletes(db: KnovitesDatabase): Promise<PendingDeleteRecord[]> {
   return db.pendingDeletes.orderBy('path').toArray()
+}
+
+/**
+ * Collects all dirty active local records (`dirty === 1 && deletedAt === 0`)
+ * plus pending remote deletions using Dexie secondary indexes (`dirty`).
+ */
+export async function collectDirtyFiles(db: KnovitesDatabase): Promise<CollectedDirtyFiles> {
+  const [dirtyNodeRows, dirtyCanvasRows, dirtyAssetRows, pendingDeletes] = await Promise.all([
+    db.nodes.where('dirty').equals(1).toArray(),
+    db.canvases.where('dirty').equals(1).toArray(),
+    db.assets.where('dirty').equals(1).toArray(),
+    db.pendingDeletes.orderBy('path').toArray(),
+  ])
+
+  const dirtyNodes: CollectedDirtyFiles['nodes'] = []
+  for (const node of dirtyNodeRows) {
+    if (node.deletedAt !== 0 || node.corrupt || node.newerSchemaVersion !== undefined) continue
+    dirtyNodes.push({
+      nodeId: node.id,
+      path: `${node.path}/node.json`,
+      rawNodeJson: node.rawNodeJson,
+      baseBlobSha: node.baseBlobSha,
+    })
+  }
+
+  const dirtyCanvases: CollectedDirtyFiles['canvases'] = []
+  for (const canvas of dirtyCanvasRows) {
+    if (canvas.deletedAt !== 0 || canvas.corrupt || canvas.newerSchemaVersion !== undefined)
+      continue
+    dirtyCanvases.push({
+      nodeId: canvas.nodeId,
+      path: `${canvas.path}/canvas.json`,
+      rawJson: canvas.rawJson,
+      baseBlobSha: canvas.baseBlobSha,
+    })
+  }
+
+  const dirtyAssets: CollectedDirtyFiles['assets'] = []
+  if (dirtyAssetRows.length > 0) {
+    const activeDirtyAssets = dirtyAssetRows.filter((a) => a.deletedAt === 0)
+    const ownerIds = [...new Set(activeDirtyAssets.map((a) => a.nodeId))]
+    const owners = ownerIds.length > 0 ? await db.nodes.bulkGet(ownerIds) : []
+    const ownerById = new Map<string, StoredNodeRecord>()
+    for (const owner of owners) {
+      if (
+        owner &&
+        owner.deletedAt === 0 &&
+        !owner.corrupt &&
+        owner.newerSchemaVersion === undefined
+      ) {
+        ownerById.set(owner.id, owner)
+      }
+    }
+    for (const asset of activeDirtyAssets) {
+      const owner = ownerById.get(asset.nodeId)
+      if (!owner) continue
+      dirtyAssets.push({
+        nodeId: asset.nodeId,
+        path: `${owner.path}/${asset.path}`,
+        blob: asset.blob,
+        sha: asset.sha,
+      })
+    }
+  }
+
+  dirtyNodes.sort((a, b) => compareLexicographical(a.path, b.path))
+  dirtyCanvases.sort((a, b) => compareLexicographical(a.path, b.path))
+  dirtyAssets.sort((a, b) => compareLexicographical(a.path, b.path))
+
+  return {
+    nodes: dirtyNodes,
+    canvases: dirtyCanvases,
+    assets: dirtyAssets,
+    pendingDeletes,
+  }
 }
 
 /**

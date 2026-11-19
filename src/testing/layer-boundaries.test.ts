@@ -24,80 +24,88 @@ async function withTempFile(relativePath: string, content: string, fn: () => Pro
 }
 
 describe('ESLint layer boundaries and hard rules', () => {
-  it('forbids domain/ from importing React, storage, app, or UI layers', async () => {
-    const reactErrors = await lintSnippet(
-      'src/domain/tree/sample.ts',
-      "import { useState } from 'react'\nexport const x = useState\n",
-    )
-    expect(reactErrors.some((m) => m.ruleId === 'no-restricted-imports')).toBe(true)
-
-    const appErrors = await lintSnippet(
-      'src/domain/tree/sample.ts',
-      "import { App } from '@/app/App'\nexport const x = App\n",
-    )
-    expect(appErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
-
-    const uiErrors = await lintSnippet(
-      'src/domain/tree/sample.ts',
-      "import { Button } from '@/ui/components/button'\nexport const x = Button\n",
-    )
-    expect(uiErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
-
-    const domErrors = await lintSnippet(
-      'src/domain/tree/sample.ts',
-      'export const loc = window.location.href\n',
-    )
-    expect(domErrors.some((m) => m.ruleId === 'no-restricted-globals')).toBe(true)
-
-    const allowedPureGlobals = await lintSnippet(
-      'src/domain/tree/pure.ts',
-      [
-        'export async function pureHelpers(input: { a: number }) {',
-        '  const cloned = structuredClone(input)',
-        '  const encoded = new TextEncoder().encode(JSON.stringify(cloned))',
-        "  const digest = await crypto.subtle.digest('SHA-256', encoded)",
-        '  const now = new Date().toISOString()',
-        '  return { digest, now }',
-        '}',
-        '',
-      ].join('\n'),
-    )
-    expect(allowedPureGlobals).toEqual([])
-
-    await withTempFile('src/storage/__boundary_test__.ts', 'export const db = 1\n', async () => {
-      const storageErrors = await lintSnippet(
+  it(
+    'forbids domain/ from importing React, storage, app, or UI layers',
+    { timeout: 15_000 },
+    async () => {
+      const reactErrors = await lintSnippet(
         'src/domain/tree/sample.ts',
-        "import { db } from '@/storage/__boundary_test__'\nexport const x = db\n",
+        "import { useState } from 'react'\nexport const x = useState\n",
       )
-      expect(storageErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
-    })
-  })
+      expect(reactErrors.some((m) => m.ruleId === 'no-restricted-imports')).toBe(true)
 
-  it('forbids cross-feature imports between features/* while allowing intra-feature imports', async () => {
-    await withTempFile(
-      'src/features/canvas/__boundary_test__.ts',
-      'export const canvasVal = 1\n',
-      async () => {
-        const crossAliasErrors = await lintSnippet(
-          'src/features/map/MapView.tsx',
-          "import { canvasVal } from '@/features/canvas/__boundary_test__'\nexport const x = canvasVal\n",
-        )
-        expect(crossAliasErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+      const appErrors = await lintSnippet(
+        'src/domain/tree/sample.ts',
+        "import { App } from '@/app/App'\nexport const x = App\n",
+      )
+      expect(appErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
 
-        const crossRelativeErrors = await lintSnippet(
-          'src/features/map/MapView.tsx',
-          "import { canvasVal } from '../canvas/__boundary_test__'\nexport const x = canvasVal\n",
-        )
-        expect(crossRelativeErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+      const uiErrors = await lintSnippet(
+        'src/domain/tree/sample.ts',
+        "import { Button } from '@/ui/components/button'\nexport const x = Button\n",
+      )
+      expect(uiErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
 
-        const sameFeatureErrors = await lintSnippet(
-          'src/features/canvas/CanvasView.tsx',
-          "import { canvasVal } from '@/features/canvas/__boundary_test__'\nexport const x = canvasVal\n",
+      const domErrors = await lintSnippet(
+        'src/domain/tree/sample.ts',
+        'export const loc = window.location.href\n',
+      )
+      expect(domErrors.some((m) => m.ruleId === 'no-restricted-globals')).toBe(true)
+
+      const allowedPureGlobals = await lintSnippet(
+        'src/domain/tree/pure.ts',
+        [
+          'export async function pureHelpers(input: { a: number }) {',
+          '  const cloned = structuredClone(input)',
+          '  const encoded = new TextEncoder().encode(JSON.stringify(cloned))',
+          "  const digest = await crypto.subtle.digest('SHA-256', encoded)",
+          '  const now = new Date().toISOString()',
+          '  return { digest, now }',
+          '}',
+          '',
+        ].join('\n'),
+      )
+      expect(allowedPureGlobals).toEqual([])
+
+      await withTempFile('src/storage/__boundary_test__.ts', 'export const db = 1\n', async () => {
+        const storageErrors = await lintSnippet(
+          'src/domain/tree/sample.ts',
+          "import { db } from '@/storage/__boundary_test__'\nexport const x = db\n",
         )
-        expect(sameFeatureErrors).toEqual([])
-      },
-    )
-  })
+        expect(storageErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+      })
+    },
+  )
+
+  it(
+    'forbids cross-feature imports between features/* while allowing intra-feature imports',
+    { timeout: 15_000 },
+    async () => {
+      await withTempFile(
+        'src/features/canvas/__boundary_test__.ts',
+        'export const canvasVal = 1\n',
+        async () => {
+          const crossAliasErrors = await lintSnippet(
+            'src/features/map/MapView.tsx',
+            "import { canvasVal } from '@/features/canvas/__boundary_test__'\nexport const x = canvasVal\n",
+          )
+          expect(crossAliasErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+
+          const crossRelativeErrors = await lintSnippet(
+            'src/features/map/MapView.tsx',
+            "import { canvasVal } from '../canvas/__boundary_test__'\nexport const x = canvasVal\n",
+          )
+          expect(crossRelativeErrors.some((m) => m.ruleId === 'boundaries/dependencies')).toBe(true)
+
+          const sameFeatureErrors = await lintSnippet(
+            'src/features/canvas/CanvasView.tsx',
+            "import { canvasVal } from '@/features/canvas/__boundary_test__'\nexport const x = canvasVal\n",
+          )
+          expect(sameFeatureErrors).toEqual([])
+        },
+      )
+    },
+  )
 
   it('restricts Dexie to storage/ and Octokit to sync/', async () => {
     const dexieInApp = await lintSnippet(

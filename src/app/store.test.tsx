@@ -11,6 +11,7 @@ import {
 } from '@/app/store'
 import { serializeCanvasJson } from '@/domain/serialize'
 import {
+  createBrowserTabLockCoordinator,
   createFakeTabLockRegistry,
   createKnovitesDatabase,
   getPendingDeletes,
@@ -130,22 +131,22 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
       path: 'assets/abcdef0123456789.png',
       blob: new Uint8Array([1, 2, 3, 4]),
       sha: 'assetsha',
-      dirty: false,
-      deletedAt: null,
+      dirty: 0,
+      deletedAt: 0,
     })
 
-    // Delete subtree -> immediately written to IndexedDB with deletedAt !== null
+    // Delete subtree -> immediately written to IndexedDB with deletedAt > 0
     const deleted = await store.getState().deleteNode(parent.nodeId)
     expect(deleted.ok).toBe(true)
     expect(store.getState().storageError).toBeNull()
     expect(store.getState().tree.nodes[parent.nodeId]).toBeUndefined()
     expect(store.getState().tree.nodes[child.nodeId]).toBeUndefined()
     expect(store.getState().pendingUndoDelete?.rootNodeId).toBe(parent.nodeId)
-    expect((await db.nodes.get(child.nodeId))?.deletedAt).not.toBeNull()
-    expect((await db.canvases.get(child.nodeId))?.deletedAt).not.toBeNull()
+    expect((await db.nodes.get(child.nodeId))?.deletedAt).toBeGreaterThan(0)
+    expect((await db.canvases.get(child.nodeId))?.deletedAt).toBeGreaterThan(0)
     expect(
       (await db.assets.get([child.nodeId, 'assets/abcdef0123456789.png']))?.deletedAt,
-    ).not.toBeNull()
+    ).toBeGreaterThan(0)
     expect(await getPendingDeletes(db)).toEqual([])
 
     // Undo at t = 5s restores everything in memory AND IndexedDB
@@ -157,7 +158,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     expect(store.getState().tree.nodes[child.nodeId]?.assets).toEqual([
       'assets/abcdef0123456789.png',
     ])
-    expect((await db.nodes.get(child.nodeId))?.deletedAt).toBeNull()
+    expect((await db.nodes.get(child.nodeId))?.deletedAt).toBe(0)
     expect((await db.canvases.get(child.nodeId))?.rawJson).toBe(customCanvas)
     expect(await getPendingDeletes(db)).toEqual([])
 
@@ -223,42 +224,214 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     db2.close()
   })
 
-  it('keeps in-memory edits, marks unsaved state, and renders blocking banner when IndexedDB write fails (FR-LOC-04)', async () => {
-    const failingAdapter: WorkspaceStorageAdapter = {
-      loadEntries: async () => [],
-      applyChangeset: async () => {
+  it('keeps initial edit, blocks subsequent mutations during storageError, and recovers via Retry button (FR-LOC-04)', async () => {
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-retry-test', { indexedDB, IDBKeyRange })
+    const baseAdapter = createDexieWorkspaceAdapter(db)
+
+    let shouldFailWrite = true
+    const applyChangesetSpy = vi.fn(async (cs, options) => {
+      if (shouldFailWrite) {
         throw new Error('QuotaExceededError: storage quota exceeded')
-      },
-      softDeleteSubtree: async () => {
-        throw new Error('QuotaExceededError')
-      },
-      restoreSoftDeletedSubtree: async () => {},
-      finalizeSoftDeletes: async () => {},
-      appendErrorLog: async () => {},
+      }
+      return baseAdapter.applyChangeset(cs, options)
+    })
+
+    const failingThenRecoveringAdapter: WorkspaceStorageAdapter = {
+      ...baseAdapter,
+      applyChangeset: applyChangesetSpy,
     }
 
     const store = createWorkspaceStore({
-      storage: failingAdapter,
+      storage: failingThenRecoveringAdapter,
       now: createDeterministicClock(),
     })
     await store.getState().hydrate()
 
-    const created = await store.getState().createNode({ title: 'Important Note', parentId: null })
-    expect(created.ok).toBe(true)
-    if (!created.ok) return
+    // First write fails: edit stays in memory, storageError & hasUnsavedChanges are set
+    const firstEdit = await store.getState().createNode({ title: 'Important Note', parentId: null })
+    expect(firstEdit.ok).toBe(true)
+    if (!firstEdit.ok) return
 
-    // Edit MUST remain in memory, NOT discarded!
-    expect(store.getState().tree.nodes[created.nodeId]?.meta.title).toBe('Important Note')
+    expect(store.getState().tree.nodes[firstEdit.nodeId]?.meta.title).toBe('Important Note')
     expect(store.getState().hasUnsavedChanges).toBe(true)
     expect(store.getState().storageError?.message).toContain('QuotaExceededError')
+    expect(applyChangesetSpy).toHaveBeenCalledTimes(1)
+
+    // Subsequent mutations MUST be rejected while storageError is active (no new Changeset computed)
+    const secondCreate = await store
+      .getState()
+      .createNode({ title: 'Should Be Blocked', parentId: null })
+    expect(secondCreate.ok).toBe(false)
+    if (!secondCreate.ok) expect(secondCreate.reason).toBe('storage_error')
+
+    const blockedRename = await store
+      .getState()
+      .renameNode({ nodeId: firstEdit.nodeId, title: 'Blocked Rename' })
+    expect(blockedRename.ok).toBe(false)
+    if (!blockedRename.ok) expect(blockedRename.reason).toBe('storage_error')
+
+    const blockedMove = await store
+      .getState()
+      .moveNode({ nodeId: firstEdit.nodeId, newParentId: null })
+    expect(blockedMove.ok).toBe(false)
+    if (!blockedMove.ok) expect(blockedMove.reason).toBe('storage_error')
+
+    const blockedReorder = await store
+      .getState()
+      .reorderNode({ nodeId: firstEdit.nodeId, direction: 'earlier' })
+    expect(blockedReorder.ok).toBe(false)
+    if (!blockedReorder.ok) expect(blockedReorder.reason).toBe('storage_error')
+
+    const blockedDelete = await store.getState().deleteNode(firstEdit.nodeId)
+    expect(blockedDelete.ok).toBe(false)
+    if (!blockedDelete.ok) expect(blockedDelete.reason).toBe('storage_error')
+
+    // Neither tree nor IndexedDB received a second mutation
+    expect(Object.keys(store.getState().tree.nodes)).toEqual([firstEdit.nodeId])
+    expect(applyChangesetSpy).toHaveBeenCalledTimes(1)
 
     render(<App workspaceStore={store} />)
     const banner = await screen.findByTestId('storage-error-banner')
     expect(banner).toHaveAttribute('role', 'alert')
-    expect(banner.textContent).toContain('Changes are kept in memory')
     expect(banner.textContent).toContain('QuotaExceededError')
 
+    // Storage recovers -> user clicks Retry button -> pending Changeset is flushed and mutations reopen
+    shouldFailWrite = false
+    fireEvent.click(screen.getByTestId('retry-storage-button'))
+
+    await waitFor(() => {
+      expect(store.getState().storageError).toBeNull()
+      expect(store.getState().hasUnsavedChanges).toBe(false)
+      expect(screen.queryByTestId('storage-error-banner')).toBeNull()
+    })
+    expect(applyChangesetSpy).toHaveBeenCalledTimes(2)
+    expect((await db.nodes.get(firstEdit.nodeId))?.meta.title).toBe('Important Note')
+
+    const thirdCreate = await store
+      .getState()
+      .createNode({ title: 'After Recovery', parentId: null })
+    expect(thirdCreate.ok).toBe(true)
+
     store.getState().dispose()
+    db.close()
+  })
+
+  it('assigns a unique slug when Undo restores a node whose path was taken by a new node during the 10s window', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-undo-collision-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+    })
+
+    await store.getState().hydrate()
+    const origParent = await store.getState().createNode({ title: 'PWN', parentId: null })
+    expect(origParent.ok).toBe(true)
+    if (!origParent.ok) return
+
+    const origChild = await store
+      .getState()
+      .createNode({ title: 'Stack', parentId: origParent.nodeId })
+    expect(origChild.ok).toBe(true)
+    if (!origChild.ok) return
+
+    const customCanvas = serializeCanvasJson({
+      schema: 1,
+      elements: {
+        e_deadbeef: {
+          type: 'text',
+          x: 10,
+          y: 20,
+          w: 200,
+          z: 'a0',
+          style: { bg: null, border: null },
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Original Stack' }] }],
+          },
+          updatedAt: '2026-11-19T10:00:00Z',
+        },
+      },
+    })
+    await db.canvases.update(origChild.nodeId, {
+      rawJson: customCanvas,
+      doc: JSON.parse(customCanvas),
+    })
+
+    // Soft-delete 'PWN' (path 'pwn' + child 'pwn/stack')
+    expect((await store.getState().deleteNode(origParent.nodeId)).ok).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // Create a brand new node titled 'PWN' while the 10s Undo window is still open
+    const replacement = await store.getState().createNode({ title: 'PWN', parentId: null })
+    expect(replacement.ok).toBe(true)
+    if (!replacement.ok) return
+    expect(store.getState().tree.nodes[replacement.nodeId]?.path).toBe('pwn')
+    expect(store.getState().pendingUndoDelete?.rootNodeId).toBe(origParent.nodeId)
+
+    // Undo within 10s window: must NOT collide at 'pwn', must give restored root a unique slug 'pwn-2'
+    await vi.advanceTimersByTimeAsync(2000)
+    const undone = await store.getState().undoDelete()
+    expect(undone).toBe(true)
+
+    const allNodes = Object.values(store.getState().tree.nodes)
+    const allPaths = allNodes.map((n) => n.path).sort()
+    expect(allPaths).toEqual(['pwn', 'pwn-2', 'pwn-2/stack'])
+    expect(new Set(allPaths).size).toBe(allPaths.length)
+    expect(store.getState().tree.nodes[replacement.nodeId]?.path).toBe('pwn')
+    expect(store.getState().tree.nodes[origParent.nodeId]?.path).toBe('pwn-2')
+    expect(store.getState().tree.nodes[origChild.nodeId]?.path).toBe('pwn-2/stack')
+    expect((await db.canvases.get(origChild.nodeId))?.path).toBe('pwn-2/stack')
+    expect((await db.canvases.get(origChild.nodeId))?.rawJson).toBe(customCanvas)
+
+    store.getState().dispose()
+    db.close()
+
+    // Reloading from IndexedDB confirms zero duplicate-path issues and all 3 nodes intact
+    const db2 = createKnovitesDatabase('store-undo-collision-test', { indexedDB, IDBKeyRange })
+    const store2 = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db2),
+      now: createDeterministicClock('2026-11-19T11:00:00Z'),
+    })
+    await store2.getState().hydrate()
+    expect(store2.getState().issues).toEqual([])
+    expect(Object.keys(store2.getState().tree.nodes)).toHaveLength(3)
+    store2.getState().dispose()
+    db2.close()
+  })
+
+  it('displays single-session notice when navigator.locks is unavailable while permitting local edits', async () => {
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-no-locks-test', { indexedDB, IDBKeyRange })
+    const coordinator = createBrowserTabLockCoordinator({ locks: undefined })
+    expect(coordinator.isSupported()).toBe(false)
+
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+      initialLockSupported: coordinator.isSupported(),
+    })
+
+    const role = await coordinator.acquire((nextRole) => {
+      store.getState().setReadOnlyTab(nextRole === 'readonly')
+    })
+    expect(role).toBe('writer')
+    await store.getState().hydrate()
+
+    render(<App workspaceStore={store} />)
+    const notice = await screen.findByTestId('locks-unsupported-banner')
+    expect(notice).toHaveAttribute('role', 'status')
+    expect(notice.textContent).toContain('Web Locks unavailable')
+
+    // Local editing still works in single-session mode
+    const created = await store.getState().createNode({ title: 'Solo Note', parentId: null })
+    expect(created.ok).toBe(true)
+
+    await coordinator.release()
+    store.getState().dispose()
+    db.close()
   })
 
   it('sets storageError and renders blocking banner when IndexedDB is unavailable during hydrate', async () => {

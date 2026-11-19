@@ -13,20 +13,44 @@ export const DB_V1_STORES: Record<string, string> = {
   errorLog: '++id, timestamp, level, code',
 }
 
+export const DB_V2_STORES: Record<string, string> = {
+  nodes: 'id, path, parentId, dirty, deletedAt',
+  canvases: 'nodeId, path, dirty, deletedAt',
+  assets: '[nodeId+path], nodeId, path, dirty, deletedAt',
+  pendingDeletes: 'path, deletedAt',
+  syncState: 'id',
+  settings: 'key',
+  errorLog: '++id, timestamp, level, code',
+}
+
+function toIndexedFlag(value: unknown): 0 | 1 {
+  return value === true || value === 1 ? 1 : 0
+}
+
+function toDeletedEpochMs(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+  }
+  return 0
+}
+
 async function upgradeV1ToV2(tx: Transaction): Promise<void> {
+  const canvasNodeIds = new Set<unknown>(await tx.table('canvases').toCollection().primaryKeys())
+
   await tx
     .table('nodes')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
+      record['dirty'] = toIndexedFlag(record['dirty'])
+      record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
       if (record['extraFiles'] === undefined) {
         record['extraFiles'] = []
       }
-      if (record['deletedAt'] === undefined) {
-        record['deletedAt'] = null
-      }
-      if (record['hasCanvas'] === undefined) {
-        record['hasCanvas'] = false
-      }
+      record['hasCanvas'] = Boolean(record['hasCanvas']) || canvasNodeIds.has(record['id'])
       if (record['rawNodeJson'] === undefined && record['meta'] !== undefined) {
         record['rawNodeJson'] = serializeNodeJson(
           record['meta'] as Parameters<typeof serializeNodeJson>[0],
@@ -38,11 +62,10 @@ async function upgradeV1ToV2(tx: Transaction): Promise<void> {
     .table('canvases')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
+      record['dirty'] = toIndexedFlag(record['dirty'])
+      record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
       if (record['corrupt'] === undefined) {
         record['corrupt'] = false
-      }
-      if (record['deletedAt'] === undefined) {
-        record['deletedAt'] = null
       }
       if (record['rawJson'] === undefined && record['doc'] != null) {
         record['rawJson'] = serializeCanvasJson(
@@ -55,9 +78,8 @@ async function upgradeV1ToV2(tx: Transaction): Promise<void> {
     .table('assets')
     .toCollection()
     .modify((record: Record<string, unknown>) => {
-      if (record['deletedAt'] === undefined) {
-        record['deletedAt'] = null
-      }
+      record['dirty'] = toIndexedFlag(record['dirty'])
+      record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
     })
 }
 
@@ -71,6 +93,6 @@ export function applyDatabaseMigrations(
   db.version(1).stores(DB_V1_STORES)
 
   if (targetVersion >= 2) {
-    db.version(2).stores(DB_V1_STORES).upgrade(upgradeV1ToV2)
+    db.version(2).stores(DB_V2_STORES).upgrade(upgradeV1ToV2)
   }
 }

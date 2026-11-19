@@ -82,11 +82,15 @@ export const en = {
   storageBanner: {
     errorTitle: 'Local storage unavailable',
     errorDescription:
-      'Changes are kept in memory and not yet saved to browser storage. Free disk space or enable IndexedDB before closing.',
+      'Changes are kept in memory and not yet saved to browser storage. Editing is paused until saved. Free disk space or enable IndexedDB, then retry.',
     unsavedBadge: 'Unsaved in memory',
+    retryButton: 'Retry',
     readonlyTitle: 'Read-only tab',
     readonlyDescription:
       'Another tab currently holds write access to this workspace. Editing is disabled here to prevent data conflicts.',
     takeOverButton: 'Take over',
+    locksUnsupportedTitle: 'Single-tab mode (Web Locks unavailable)',
+    locksUnsupportedDescription:
+      'Multi-tab lock protection is unsupported in this browser context. Avoid editing in multiple tabs at the same time.',
   },
 } as const

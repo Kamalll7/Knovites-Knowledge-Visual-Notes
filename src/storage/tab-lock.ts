@@ -5,6 +5,7 @@ export interface TabLockCoordinator {
   takeOver: () => Promise<TabLockRole>
   release: () => Promise<void>
   getRole: () => TabLockRole
+  isSupported: () => boolean
 }
 
 export interface BrowserTabLockOptions {
@@ -59,6 +60,7 @@ export function createBrowserTabLockCoordinator(
         : undefined
   const createChannel = options.createChannel ?? createDefaultChannel
   const instanceId = makeInstanceId()
+  const lockApiSupported = Boolean(locks && typeof locks.request === 'function')
 
   let active = false
   let currentRole: TabLockRole = 'readonly'
@@ -165,10 +167,15 @@ export function createBrowserTabLockCoordinator(
             await hold
           })
           .catch(() => {
-            if (active) {
+            releaseHold()
+            if (!settled) {
+              if (active) {
+                setRole('readonly')
+              }
+              settle('readonly')
+            } else if (active && currentRole !== 'readonly') {
               setRole('readonly')
             }
-            settle('readonly')
           })
 
         activeLockPromise = requestPromise
@@ -213,7 +220,12 @@ export function createBrowserTabLockCoordinator(
             await hold
           })
           .catch(() => {
-            settle(currentRole)
+            releaseHold()
+            if (!settled) {
+              settle(currentRole)
+            } else if (active && currentRole !== 'readonly') {
+              setRole('readonly')
+            }
           })
 
         activeLockPromise = requestPromise
@@ -235,6 +247,8 @@ export function createBrowserTabLockCoordinator(
     },
 
     getRole: () => currentRole,
+
+    isSupported: () => lockApiSupported,
   }
 }
 
@@ -301,6 +315,8 @@ export function createFakeTabLockRegistry(): FakeTabLockRegistry {
         },
 
         getRole: () => clients.get(clientId)?.role ?? 'readonly',
+
+        isSupported: () => true,
       }
     },
 

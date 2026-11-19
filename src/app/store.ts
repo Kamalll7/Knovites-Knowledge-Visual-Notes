@@ -42,7 +42,7 @@ export interface PendingUndoDelete {
   deletedAt: string
 }
 
-export type StoreActionErrorReason = TreeOperationErrorReason | 'readonly_tab'
+export type StoreActionErrorReason = TreeOperationErrorReason | 'readonly_tab' | 'storage_error'
 
 export type StoreOperationResult =
   | {
@@ -59,7 +59,7 @@ export interface WorkspaceStorageAdapter {
   loadEntries: () => Promise<TreeBuildEntry[]>
   applyChangeset: (changeset: Changeset, options?: { now?: string }) => Promise<void>
   softDeleteSubtree: (nodeIds: readonly string[], deletedAt: string) => Promise<void>
-  restoreSoftDeletedSubtree: (nodeIds: readonly string[]) => Promise<void>
+  restoreSoftDeletedSubtree: (nodeIds: readonly string[], now?: string) => Promise<void>
   finalizeSoftDeletes: (now: string, nodeIds?: readonly string[]) => Promise<void>
   appendErrorLog: (entry: ErrorLogRecord) => Promise<void>
 }
@@ -70,6 +70,7 @@ export interface WorkspaceStoreDeps {
   generateId?: () => string
   undoTimeoutMs?: number
   initialReadOnly?: boolean
+  initialLockSupported?: boolean
   onTakeOverWriter?: () => Promise<void>
 }
 
@@ -81,6 +82,7 @@ export interface WorkspaceStoreState {
   hasUnsavedChanges: boolean
   storageError: StorageErrorState | null
   isReadOnlyTab: boolean
+  isLockSupported: boolean
   hydrate: () => Promise<void>
   createNode: (input: {
     title: string
@@ -99,7 +101,9 @@ export interface WorkspaceStoreState {
   deleteNode: (nodeId: string) => Promise<StoreOperationResult>
   undoDelete: () => Promise<boolean>
   finalizePendingDelete: () => Promise<void>
+  retrySave: () => Promise<boolean>
   setReadOnlyTab: (readOnly: boolean) => void
+  setLockSupported: (supported: boolean) => void
   takeOverWriterLock: () => Promise<void>
   dispose: () => void
 }
@@ -111,7 +115,7 @@ export function createDexieWorkspaceAdapter(db: KnovitesDatabase): WorkspaceStor
     loadEntries: () => loadTreeBuildEntries(db),
     applyChangeset: (changeset, options) => applyChangeset(db, changeset, options),
     softDeleteSubtree: (nodeIds, deletedAt) => softDeleteSubtree(db, { nodeIds, deletedAt }),
-    restoreSoftDeletedSubtree: (nodeIds) => restoreSoftDeletedSubtree(db, nodeIds),
+    restoreSoftDeletedSubtree: (nodeIds, now) => restoreSoftDeletedSubtree(db, nodeIds, now),
     finalizeSoftDeletes: async (now, nodeIds) => {
       await finalizeSoftDeletes(db, now, nodeIds)
     },
@@ -160,6 +164,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
   const generateId = deps.generateId ?? createIdGenerator()
   const undoTimeoutMs = deps.undoTimeoutMs ?? UNDO_DELETE_TIMEOUT_MS
   let undoTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingRetryOp: (() => Promise<void>) | null = null
 
   const clearUndoTimer = () => {
     if (undoTimer !== null) {
@@ -170,6 +175,14 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
 
   return createStore<WorkspaceStoreState>()(
     immer((set, get) => {
+      const startUndoTimer = () => {
+        clearUndoTimer()
+        undoTimer = setTimeout(() => {
+          undoTimer = null
+          void get().finalizePendingDelete()
+        }, undoTimeoutMs)
+      }
+
       const recordStorageFailure = async (code: string, error: unknown) => {
         const message = extractErrorMessage(error)
         set((draft) => {
@@ -198,9 +211,13 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             message: 'This tab is read-only because another tab holds write access.',
           }
         }
-
-        if (get().pendingUndoDelete !== null) {
-          await get().finalizePendingDelete()
+        if (get().storageError !== null) {
+          return {
+            ok: false,
+            reason: 'storage_error',
+            message:
+              'Cannot modify workspace while local storage has unsaved changes. Retry saving first.',
+          }
         }
 
         const now = getNow()
@@ -220,6 +237,9 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
         try {
           await deps.storage.applyChangeset(result.changeset, { now })
         } catch (error) {
+          pendingRetryOp = async () => {
+            await deps.storage.applyChangeset(result.changeset, { now })
+          }
           await recordStorageFailure('storage_write_failed', error)
         }
 
@@ -237,6 +257,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
         hasUnsavedChanges: false,
         storageError: null,
         isReadOnlyTab: deps.initialReadOnly ?? false,
+        isLockSupported: deps.initialLockSupported ?? true,
 
         hydrate: async () => {
           const now = getNow()
@@ -250,12 +271,14 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
               await deps.storage.applyChangeset(built.changeset, { now })
             }
 
+            pendingRetryOp = null
             set((draft) => {
               draft.tree = castDraft(built.state)
               draft.issues = built.issues
               draft.pendingUndoDelete = null
               draft.hydrated = true
               draft.storageError = null
+              draft.hasUnsavedChanges = false
             })
           } catch (error) {
             const message = extractErrorMessage(error)
@@ -308,9 +331,25 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
               message: 'This tab is read-only because another tab holds write access.',
             }
           }
+          if (get().storageError !== null) {
+            return {
+              ok: false,
+              reason: 'storage_error',
+              message:
+                'Cannot modify workspace while local storage has unsaved changes. Retry saving first.',
+            }
+          }
 
           if (get().pendingUndoDelete !== null) {
             await get().finalizePendingDelete()
+            if (get().storageError !== null) {
+              return {
+                ok: false,
+                reason: 'storage_error',
+                message:
+                  'Cannot modify workspace while local storage has unsaved changes. Retry saving first.',
+              }
+            }
           }
 
           const currentTree = get().tree
@@ -341,14 +380,14 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
 
           try {
             await deps.storage.softDeleteSubtree(subtreeIds, now)
+            startUndoTimer()
           } catch (error) {
+            pendingRetryOp = async () => {
+              await deps.storage.softDeleteSubtree(subtreeIds, now)
+              startUndoTimer()
+            }
             await recordStorageFailure('storage_soft_delete_failed', error)
           }
-
-          undoTimer = setTimeout(() => {
-            undoTimer = null
-            void get().finalizePendingDelete()
-          }, undoTimeoutMs)
 
           return {
             ok: true,
@@ -357,24 +396,33 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
         },
 
         undoDelete: async () => {
-          if (get().isReadOnlyTab) {
+          if (get().isReadOnlyTab || get().storageError !== null) {
             return false
           }
           const pending = get().pendingUndoDelete
           if (!pending) return false
 
           clearUndoTimer()
-          try {
-            await deps.storage.restoreSoftDeletedSubtree(pending.nodeIds)
+          const performRestore = async () => {
+            const now = getNow()
+            await deps.storage.restoreSoftDeletedSubtree(pending.nodeIds, now)
             const entries = await deps.storage.loadEntries()
             const built = buildTree(entries, { generateId })
+            if (built.changeset.upserts.length > 0) {
+              await deps.storage.applyChangeset(built.changeset, { now })
+            }
             set((draft) => {
               draft.tree = castDraft(built.state)
               draft.issues = built.issues
               draft.pendingUndoDelete = null
             })
+          }
+
+          try {
+            await performRestore()
             return true
           } catch (error) {
+            pendingRetryOp = performRestore
             await recordStorageFailure('storage_undo_failed', error)
             return false
           }
@@ -385,19 +433,57 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
           const pending = get().pendingUndoDelete
           if (!pending) return
 
-          try {
+          const performFinalize = async () => {
             await deps.storage.finalizeSoftDeletes(getNow(), pending.nodeIds)
             set((draft) => {
               draft.pendingUndoDelete = null
             })
+          }
+
+          try {
+            await performFinalize()
           } catch (error) {
+            pendingRetryOp = performFinalize
             await recordStorageFailure('storage_finalize_delete_failed', error)
           }
+        },
+
+        retrySave: async () => {
+          if (get().isReadOnlyTab) {
+            return false
+          }
+          if (pendingRetryOp !== null) {
+            try {
+              await pendingRetryOp()
+              pendingRetryOp = null
+              set((draft) => {
+                draft.storageError = null
+                draft.hasUnsavedChanges = false
+              })
+              return true
+            } catch (error) {
+              await recordStorageFailure(get().storageError?.code ?? 'storage_retry_failed', error)
+              return false
+            }
+          }
+
+          if (get().storageError !== null) {
+            await get().hydrate()
+            return get().storageError === null
+          }
+
+          return true
         },
 
         setReadOnlyTab: (readOnly) => {
           set((draft) => {
             draft.isReadOnlyTab = readOnly
+          })
+        },
+
+        setLockSupported: (supported) => {
+          set((draft) => {
+            draft.isLockSupported = supported
           })
         },
 

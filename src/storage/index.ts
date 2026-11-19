@@ -1,8 +1,9 @@
 export { KnovitesDatabase, createKnovitesDatabase } from '@/storage/db'
-export { DB_V1_STORES, applyDatabaseMigrations } from '@/storage/migrations'
+export { DB_V1_STORES, DB_V2_STORES, applyDatabaseMigrations } from '@/storage/migrations'
 export {
   appendErrorLog,
   applyChangeset,
+  collectDirtyFiles,
   finalizeSoftDeletes,
   getErrorLogs,
   getPendingDeletes,
@@ -17,8 +18,13 @@ export {
   DEFAULT_DB_NAME,
   MAX_ERROR_LOG_ENTRIES,
   type ApplyChangesetOptions,
+  type CollectedDirtyFiles,
+  type DirtyAssetFile,
+  type DirtyCanvasFile,
+  type DirtyNodeFile,
   type ErrorLogLevel,
   type ErrorLogRecord,
+  type IndexedFlag,
   type InvalidNodeInput,
   type PendingDeleteRecord,
   type SettingRecord,

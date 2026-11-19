@@ -103,6 +103,7 @@ function createDefaultWorkspaceRuntime(): {
 
   const store = createWorkspaceStore({
     storage: createDexieWorkspaceAdapter(db),
+    initialLockSupported: coordinator.isSupported(),
     onTakeOverWriter: async () => {
       await coordinator.takeOver()
       await storeRef?.getState().hydrate()

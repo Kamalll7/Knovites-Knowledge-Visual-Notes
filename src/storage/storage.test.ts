@@ -15,6 +15,7 @@ import {
   appendErrorLog,
   applyChangeset,
   applyDatabaseMigrations,
+  collectDirtyFiles,
   createKnovitesDatabase,
   finalizeSoftDeletes,
   getErrorLogs,
@@ -134,8 +135,8 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     await applyChangeset(db, cChild.changeset, { now })
     await applyChangeset(db, cTarget.changeset, { now })
 
-    expect((await db.nodes.get(makeUlid(1)))?.dirty).toBe(true)
-    expect((await db.canvases.get(makeUlid(1)))?.dirty).toBe(true)
+    expect((await db.nodes.get(makeUlid(1)))?.dirty).toBe(1)
+    expect((await db.canvases.get(makeUlid(1)))?.dirty).toBe(1)
 
     // Attach an asset + extraFile to ROP and clear dirty flags to simulate synced state
     await saveAsset(db, {
@@ -143,15 +144,15 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
       path: 'assets/deadbeef12345678.png',
       blob: new Uint8Array([137, 80, 78, 71]),
       sha: 'assetsha1',
-      dirty: false,
-      deletedAt: null,
+      dirty: 0,
+      deletedAt: 0,
     })
     await db.nodes.update(makeUlid(2), {
-      dirty: false,
+      dirty: 0,
       baseBlobSha: 'nodesha2',
       extraFiles: ['exploit.py'],
     })
-    await db.canvases.update(makeUlid(2), { dirty: false, baseBlobSha: 'canvassha2' })
+    await db.canvases.update(makeUlid(2), { dirty: 0, baseBlobSha: 'canvassha2' })
 
     // Re-load from storage -> buildTree -> rename & move ROP under RE
     const loadedEntries = await loadTreeBuildEntries(db)
@@ -175,15 +176,15 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     const movedNode = await db.nodes.get(makeUlid(2))
     expect(movedNode?.path).toBe('re/rop')
     expect(movedNode?.parentId).toBe(makeUlid(3))
-    expect(movedNode?.dirty).toBe(true)
+    expect(movedNode?.dirty).toBe(1)
     expect(movedNode?.extraFiles).toEqual(['exploit.py'])
 
     const movedCanvas = await db.canvases.get(makeUlid(2))
     expect(movedCanvas?.path).toBe('re/rop')
-    expect(movedCanvas?.dirty).toBe(true)
+    expect(movedCanvas?.dirty).toBe(1)
 
     const movedAsset = await db.assets.get([makeUlid(2), 'assets/deadbeef12345678.png'])
-    expect(movedAsset?.dirty).toBe(true)
+    expect(movedAsset?.dirty).toBe(1)
 
     // Delete RE subtree (including RE + re/rop + canvas + asset + exploit.py)
     const renamed = renameNode(moved.state, {
@@ -391,14 +392,15 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     const migratedNode = await migratedDb.table('nodes').get(nodeId)
     expect(migratedNode?.meta).toEqual(legacyMeta)
     expect(migratedNode?.baseBlobSha).toBe('legacysha1')
-    expect(migratedNode?.dirty).toBe(true)
+    expect(migratedNode?.dirty).toBe(1)
     expect(migratedNode?.extraFiles).toEqual([])
-    expect(migratedNode?.deletedAt).toBeNull()
+    expect(migratedNode?.deletedAt).toBe(0)
     expect(migratedNode?.rawNodeJson).toBe(serializeNodeJson(legacyMeta))
 
     const migratedCanvas = await migratedDb.table('canvases').get(nodeId)
     expect(migratedCanvas?.doc).toEqual(legacyCanvas)
-    expect(migratedCanvas?.deletedAt).toBeNull()
+    expect(migratedCanvas?.dirty).toBe(0)
+    expect(migratedCanvas?.deletedAt).toBe(0)
     expect(migratedCanvas?.rawJson).toBe(serializeCanvasJson(legacyCanvas))
 
     const migratedSetting = await migratedDb.table('settings').get('theme')
@@ -431,20 +433,20 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
       path: 'assets/0011223344556677.png',
       blob: new Uint8Array([1, 2, 3]),
       sha: 'assetsha99',
-      dirty: false,
-      deletedAt: null,
+      dirty: 0,
+      deletedAt: 0,
     })
     await db.nodes.update(idChild, { baseBlobSha: 'nodesha99', extraFiles: ['notes.txt'] })
 
     await softDeleteSubtree(db, { nodeIds: [idRoot, idChild], deletedAt: '2026-11-19T09:05:00Z' })
     // Soft-deleted records are excluded from active tree load, but still retained in IDB
     expect(await loadTreeBuildEntries(db)).toEqual([])
-    expect((await db.nodes.get(idChild))?.deletedAt).toBe('2026-11-19T09:05:00Z')
+    expect((await db.nodes.get(idChild))?.deletedAt).toBe(Date.parse('2026-11-19T09:05:00Z'))
 
     // Undo restores all nodes, canvases, and assets
     await restoreSoftDeletedSubtree(db, [idRoot, idChild])
     expect(await loadTreeBuildEntries(db)).toHaveLength(2)
-    expect((await db.assets.get([idChild, 'assets/0011223344556677.png']))?.deletedAt).toBeNull()
+    expect((await db.assets.get([idChild, 'assets/0011223344556677.png']))?.deletedAt).toBe(0)
 
     // Soft-delete again and finalize into pendingDeletes
     await softDeleteSubtree(db, { nodeIds: [idRoot, idChild], deletedAt: '2026-11-19T09:06:00Z' })
@@ -462,6 +464,71 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
       'pwn/rop/node.json',
       'pwn/rop/notes.txt',
     ])
+    await db.close()
+  })
+
+  it('benchmarks large2000 (2,000 nodes) hydrate and collectDirtyFiles within performance budget', async () => {
+    const { db } = makeTestDb('knovites-large2000-bench')
+    // Dynamic import strictly inside test so production bundle never includes datasets unless needed
+    const { MANDATORY_MAP_DATASETS } = await import('@/domain/datasets')
+    const dataset = MANDATORY_MAP_DATASETS.large2000
+    expect(dataset.entries).toHaveLength(2000)
+
+    const initialBuild = buildTree(dataset.entries)
+    expect(initialBuild.issues).toEqual([])
+    const nodeList = Object.values(initialBuild.state.nodes)
+    expect(nodeList).toHaveLength(2000)
+
+    const now = '2026-11-19T12:00:00Z'
+    const nodeRows = nodeList.map((n, index) => ({
+      id: n.id,
+      path: n.path,
+      parentId: n.parentId,
+      meta: n.meta,
+      rawNodeJson: serializeNodeJson(n.meta),
+      baseBlobSha: `sha-${index}`,
+      dirty: (index < 25 ? 1 : 0) as 0 | 1,
+      corrupt: false,
+      extraFiles: [],
+      hasCanvas: true,
+      deletedAt: 0,
+    }))
+    const emptyCanvas = { schema: 1 as const, elements: {} }
+    const rawCanvasJson = serializeCanvasJson(emptyCanvas)
+    const canvasRows = nodeList.map((n, index) => ({
+      nodeId: n.id,
+      path: n.path,
+      doc: emptyCanvas,
+      rawJson: rawCanvasJson,
+      baseBlobSha: `csha-${index}`,
+      dirty: (index < 10 ? 1 : 0) as 0 | 1,
+      loaded: true,
+      corrupt: false,
+      deletedAt: 0,
+    }))
+
+    await db.nodes.bulkPut(nodeRows)
+    await db.canvases.bulkPut(canvasRows)
+
+    // Warm up once before timing so JIT doesn't skew steady-state measurement
+    await finalizeSoftDeletes(db, now)
+    await loadTreeBuildEntries(db)
+
+    const t0 = performance.now()
+    await finalizeSoftDeletes(db, now)
+    const entries = await loadTreeBuildEntries(db)
+    const built = buildTree(entries)
+    const hydrateMs = performance.now() - t0
+
+    const dirtyStart = performance.now()
+    const dirtyFiles = await collectDirtyFiles(db)
+    const dirtyMs = performance.now() - dirtyStart
+
+    expect(Object.keys(built.state.nodes)).toHaveLength(2000)
+    expect(dirtyFiles.nodes).toHaveLength(25)
+    expect(dirtyFiles.canvases).toHaveLength(10)
+    expect(hydrateMs).toBeLessThan(350)
+    expect(dirtyMs).toBeLessThan(100)
     await db.close()
   })
 })
