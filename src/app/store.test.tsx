@@ -14,6 +14,7 @@ import {
   createBrowserTabLockCoordinator,
   createFakeTabLockRegistry,
   createKnovitesDatabase,
+  getEffectiveDeletes,
   getPendingDeletes,
   loadTreeBuildEntries,
   saveAsset,
@@ -294,6 +295,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     render(<App workspaceStore={store} />)
     const banner = await screen.findByTestId('storage-error-banner')
     expect(banner).toHaveAttribute('role', 'alert')
+    expect(banner.textContent).toContain('Do not close this tab until Retry succeeds')
     expect(banner.textContent).toContain('QuotaExceededError')
 
     // Storage recovers -> user clicks Retry button -> pending Changeset is flushed and mutations reopen
@@ -400,6 +402,177 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     expect(Object.keys(store2.getState().tree.nodes)).toHaveLength(3)
     store2.getState().dispose()
     db2.close()
+  })
+
+  it('records all finalized paths in pendingDeletes and filters out re-created active paths in getEffectiveDeletes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-effective-deletes-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+    })
+
+    await store.getState().hydrate()
+    const origPwn = await store.getState().createNode({ title: 'PWN', parentId: null })
+    expect(origPwn.ok).toBe(true)
+    if (!origPwn.ok) return
+
+    const origStack = await store
+      .getState()
+      .createNode({ title: 'Stack', parentId: origPwn.nodeId })
+    expect(origStack.ok).toBe(true)
+    if (!origStack.ok) return
+
+    await saveAsset(db, {
+      nodeId: origStack.nodeId,
+      path: 'assets/1122334455667788.png',
+      blob: new Uint8Array([1, 2, 3]),
+      sha: 'stackassetsha',
+      dirty: 0,
+      deletedAt: 0,
+    })
+
+    // Soft-delete PWN (pwn + pwn/stack + stack asset)
+    expect((await store.getState().deleteNode(origPwn.nodeId)).ok).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // Recreate a new node at path 'pwn' within the 10-second Undo window
+    const newPwn = await store.getState().createNode({ title: 'PWN', parentId: null })
+    expect(newPwn.ok).toBe(true)
+
+    // Let the 10-second window expire without Undo -> finalizes deleted subtree into pendingDeletes
+    await vi.advanceTimersByTimeAsync(UNDO_DELETE_TIMEOUT_MS)
+    await vi.waitFor(() => {
+      expect(store.getState().pendingUndoDelete).toBeNull()
+    })
+
+    // Raw pendingDeletes MUST retain ALL finalized paths of the deleted subtree
+    const rawDeletes = await getPendingDeletes(db)
+    expect(rawDeletes.map((d) => d.path)).toEqual([
+      'pwn/canvas.json',
+      'pwn/node.json',
+      'pwn/stack/assets/1122334455667788.png',
+      'pwn/stack/canvas.json',
+      'pwn/stack/node.json',
+    ])
+
+    // Effective deletes MUST keep pwn/stack/* and exclude re-created pwn/node.json & pwn/canvas.json
+    const effectiveDeletes = await getEffectiveDeletes(db)
+    expect(effectiveDeletes.map((d) => d.path)).toEqual([
+      'pwn/stack/assets/1122334455667788.png',
+      'pwn/stack/canvas.json',
+      'pwn/stack/node.json',
+    ])
+
+    store.getState().dispose()
+    db.close()
+  })
+
+  it('finalizes the first soft-deleted node into pendingDeletes when a second node is deleted within the 10s window and undoes the second delete without data loss', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-double-delete-undo-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+    })
+
+    await store.getState().hydrate()
+    const cryptoNode = await store.getState().createNode({ title: 'Crypto', parentId: null })
+    const webNode = await store.getState().createNode({ title: 'Web', parentId: null })
+    const keepNode = await store.getState().createNode({ title: 'Forensics', parentId: null })
+    expect(cryptoNode.ok && webNode.ok && keepNode.ok).toBe(true)
+    if (!cryptoNode.ok || !webNode.ok || !keepNode.ok) return
+
+    // Delete #1 ('Crypto'), then 3s later delete #2 ('Web') within the 10s Undo window
+    expect((await store.getState().deleteNode(cryptoNode.nodeId)).ok).toBe(true)
+    await vi.advanceTimersByTimeAsync(3000)
+
+    expect((await store.getState().deleteNode(webNode.nodeId)).ok).toBe(true)
+    expect(store.getState().pendingUndoDelete?.rootNodeId).toBe(webNode.nodeId)
+
+    // Delete #1 is finalized cleanly to pendingDeletes when Delete #2 supersedes the Undo slot
+    expect((await getPendingDeletes(db)).map((d) => d.path)).toEqual([
+      'crypto/canvas.json',
+      'crypto/node.json',
+    ])
+
+    // Undo restores Delete #2 ('Web') cleanly while preserving 'Forensics' and Crypto's pending delete
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await store.getState().undoDelete()).toBe(true)
+    expect(store.getState().pendingUndoDelete).toBeNull()
+    expect(store.getState().tree.nodes[webNode.nodeId]?.meta.title).toBe('Web')
+    expect(store.getState().tree.nodes[keepNode.nodeId]?.meta.title).toBe('Forensics')
+    expect(store.getState().tree.nodes[cryptoNode.nodeId]).toBeUndefined()
+    expect((await getEffectiveDeletes(db)).map((d) => d.path)).toEqual([
+      'crypto/canvas.json',
+      'crypto/node.json',
+    ])
+
+    store.getState().dispose()
+    db.close()
+  })
+
+  it('restores soft-deleted child to root with a unique slug when its parent is moved or deleted during the 10s undo window', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('store-parent-moved-undo-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: createDeterministicClock(),
+    })
+
+    await store.getState().hydrate()
+    const pwn = await store.getState().createNode({ title: 'PWN', parentId: null })
+    const archive = await store.getState().createNode({ title: 'Archive', parentId: null })
+    const rootRop = await store.getState().createNode({ title: 'ROP', parentId: null })
+    expect(pwn.ok && archive.ok && rootRop.ok).toBe(true)
+    if (!pwn.ok || !archive.ok || !rootRop.ok) return
+
+    const childRop = await store.getState().createNode({ title: 'ROP', parentId: pwn.nodeId })
+    expect(childRop.ok).toBe(true)
+    if (!childRop.ok) return
+
+    const gadget = await store.getState().createNode({ title: 'Gadget', parentId: childRop.nodeId })
+    expect(gadget.ok).toBe(true)
+    if (!gadget.ok) return
+
+    // Case 1: soft-delete 'pwn/rop', move parent 'pwn' -> 'archive/pwn', then Undo
+    expect((await store.getState().deleteNode(childRop.nodeId)).ok).toBe(true)
+    await vi.advanceTimersByTimeAsync(1500)
+
+    const movedParent = await store
+      .getState()
+      .moveNode({ nodeId: pwn.nodeId, newParentId: archive.nodeId })
+    expect(movedParent.ok).toBe(true)
+    expect(store.getState().tree.nodes[pwn.nodeId]?.path).toBe('archive/pwn')
+
+    expect(await store.getState().undoDelete()).toBe(true)
+    // Because parent 'pwn' moved to 'archive/pwn' and root 'rop' already exists, child restores to root as 'rop-2'
+    expect(store.getState().tree.nodes[childRop.nodeId]?.parentId).toBeNull()
+    expect(store.getState().tree.nodes[childRop.nodeId]?.path).toBe('rop-2')
+    expect(store.getState().tree.nodes[gadget.nodeId]?.path).toBe('rop-2/gadget')
+
+    // Case 2: parent is missing (deleted) when child subtree Undo executes -> restores to root with unique slug 'rop-3'
+    const folder = await store.getState().createNode({ title: 'Folder', parentId: null })
+    expect(folder.ok).toBe(true)
+    if (!folder.ok) return
+    const leafRop = await store.getState().createNode({ title: 'ROP', parentId: folder.nodeId })
+    expect(leafRop.ok).toBe(true)
+    if (!leafRop.ok) return
+
+    expect((await store.getState().deleteNode(leafRop.nodeId)).ok).toBe(true)
+    // Simulate parent no longer present in active DB before Undo executes
+    await db.nodes.delete(folder.nodeId)
+
+    expect(await store.getState().undoDelete()).toBe(true)
+    expect(store.getState().tree.nodes[leafRop.nodeId]?.parentId).toBeNull()
+    expect(store.getState().tree.nodes[leafRop.nodeId]?.path).toBe('rop-3')
+    expect(store.getState().issues).toEqual([])
+
+    store.getState().dispose()
+    db.close()
   })
 
   it('displays single-session notice when navigator.locks is unavailable while permitting local edits', async () => {

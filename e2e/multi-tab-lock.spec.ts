@@ -36,12 +36,12 @@ test.describe('Multi-tab Web Locks protection [T2.3, FR-LOC-05]', () => {
     await expect(page2.getByTestId('readonly-tab-banner')).toHaveCount(0)
     await expect(page1.getByTestId('readonly-tab-banner')).toBeVisible()
     await expect(page1.getByTestId('take-over-button')).toBeVisible()
+    expect(errors).toEqual([])
 
-    // Take back from first tab as well to confirm bi-directional handoff
+    // Take back from first tab as well to confirm bi-directional handoff without console/page errors
     await page1.getByTestId('take-over-button').click()
     await expect(page1.getByTestId('readonly-tab-banner')).toHaveCount(0)
     await expect(page2.getByTestId('readonly-tab-banner')).toBeVisible()
-
     expect(errors).toEqual([])
   })
 })

@@ -677,9 +677,11 @@ export async function restoreSoftDeletedSubtree(
       softDeletedNodes.find((n) => n.parentId === null || !restoredIdSet.has(n.parentId)) ??
       softDeletedNodes[0]!
 
+    const originalParentPath = resolveParentPath(rootNode.path)
     const activeParent = rootNode.parentId !== null ? activeById.get(rootNode.parentId) : undefined
-    const effectiveParentId = activeParent ? activeParent.id : null
-    const parentPath = activeParent ? activeParent.path : null
+    const parentIntact = activeParent !== undefined && activeParent.path === originalParentPath
+    const effectiveParentId = parentIntact ? activeParent.id : null
+    const parentPath = parentIntact ? activeParent.path : null
 
     const activeSiblingSlugs = activeNodes
       .filter((n) => n.parentId === effectiveParentId)
@@ -805,7 +807,9 @@ export async function restoreSoftDeletedSubtree(
 /**
  * Finalizes all soft-deleted rows (or only the specified `nodeIds`) into `pendingDeletes`
  * and removes their soft-deleted records in one atomic transaction.
- * Uses indexed range queries so common-case hydrate() with 0 soft-deleted items is O(1).
+ * Unconditionally records every path of the finalized subtree (including descendants, canvases,
+ * extra files, and assets) in `pendingDeletes` even if a new active node now uses the same path;
+ * call `getEffectiveDeletes(db)` during sync to subtract active paths from the final state.
  */
 export async function finalizeSoftDeletes(
   db: KnovitesDatabase,
@@ -833,23 +837,18 @@ export async function finalizeSoftDeletes(
       return []
     }
 
-    const [activeNodes, activeCanvases, activeAssets] = await Promise.all([
-      db.nodes.where('deletedAt').equals(0).toArray(),
-      db.canvases.where('deletedAt').equals(0).toArray(),
-      db.assets.where('deletedAt').equals(0).toArray(),
-    ])
-
     const nodeById = new Map<string, StoredNodeRecord>()
     for (const n of softNodes) nodeById.set(n.id, n)
-    for (const n of activeNodes) nodeById.set(n.id, n)
 
-    const activeNodePaths = new Set(activeNodes.map((n) => n.path))
-    const activeCanvasPaths = new Set(activeCanvases.map((c) => c.path))
-    const activeAssetFullPaths = new Set<string>()
-    for (const a of activeAssets) {
-      const owner = nodeById.get(a.nodeId)
-      if (owner && owner.deletedAt === 0) {
-        activeAssetFullPaths.add(`${owner.path}/${a.path}`)
+    if (assetsToFinalize.length > 0) {
+      const missingOwnerIds = [
+        ...new Set(assetsToFinalize.map((a) => a.nodeId).filter((id) => !nodeById.has(id))),
+      ]
+      if (missingOwnerIds.length > 0) {
+        const extraOwners = await db.nodes.bulkGet(missingOwnerIds)
+        for (const owner of extraOwners) {
+          if (owner) nodeById.set(owner.id, owner)
+        }
       }
     }
 
@@ -857,33 +856,28 @@ export async function finalizeSoftDeletes(
 
     for (const node of nodesToFinalize) {
       const deletedAt = toIsoUtc(node.deletedAt, now)
-      if (!activeNodePaths.has(node.path)) {
-        pendingMap.set(`${node.path}/node.json`, {
-          path: `${node.path}/node.json`,
-          baseBlobSha: node.baseBlobSha,
-          deletedAt,
-        })
-      }
-      if (node.hasCanvas && !activeCanvasPaths.has(node.path)) {
+      pendingMap.set(`${node.path}/node.json`, {
+        path: `${node.path}/node.json`,
+        baseBlobSha: node.baseBlobSha,
+        deletedAt,
+      })
+      if (node.hasCanvas) {
         pendingMap.set(`${node.path}/canvas.json`, {
           path: `${node.path}/canvas.json`,
           baseBlobSha: null,
           deletedAt,
         })
       }
-      if (!activeNodePaths.has(node.path)) {
-        for (const extraFile of node.extraFiles) {
-          pendingMap.set(`${node.path}/${extraFile}`, {
-            path: `${node.path}/${extraFile}`,
-            baseBlobSha: null,
-            deletedAt,
-          })
-        }
+      for (const extraFile of node.extraFiles) {
+        pendingMap.set(`${node.path}/${extraFile}`, {
+          path: `${node.path}/${extraFile}`,
+          baseBlobSha: null,
+          deletedAt,
+        })
       }
     }
 
     for (const canvas of canvasesToFinalize) {
-      if (activeCanvasPaths.has(canvas.path)) continue
       const deletedAt = toIsoUtc(canvas.deletedAt, now)
       pendingMap.set(`${canvas.path}/canvas.json`, {
         path: `${canvas.path}/canvas.json`,
@@ -896,7 +890,6 @@ export async function finalizeSoftDeletes(
       const owner = nodeById.get(asset.nodeId)
       if (!owner) continue
       const fullPath = `${owner.path}/${asset.path}`
-      if (activeAssetFullPaths.has(fullPath)) continue
       pendingMap.set(fullPath, {
         path: fullPath,
         baseBlobSha: asset.sha,
@@ -929,15 +922,66 @@ export async function getPendingDeletes(db: KnovitesDatabase): Promise<PendingDe
 }
 
 /**
+ * Computes the effective remote deletions (`pendingDeletes` minus paths present in the current
+ * active local state).
+ *
+ * `finalizeSoftDeletes` records every deleted subtree path into `pendingDeletes` unconditionally,
+ * even when a new node was created at the same path during the 10-second Undo window (because the
+ * replacement node might later be moved or deleted before sync runs). Sync calls
+ * `getEffectiveDeletes` so remote commits only delete paths that are truly absent in the final state.
+ */
+export async function getEffectiveDeletes(db: KnovitesDatabase): Promise<PendingDeleteRecord[]> {
+  const pendingDeletes = await db.pendingDeletes.orderBy('path').toArray()
+  if (pendingDeletes.length === 0) {
+    return []
+  }
+
+  const [nodes, canvases, assets] = await Promise.all([
+    db.nodes.toArray(),
+    db.canvases.toArray(),
+    db.assets.where('deletedAt').equals(0).toArray(),
+  ])
+
+  const activePaths = new Set<string>()
+  const activeNodeById = new Map<string, StoredNodeRecord>()
+
+  for (const node of nodes) {
+    if (node.deletedAt !== 0) continue
+    activeNodeById.set(node.id, node)
+    activePaths.add(`${node.path}/node.json`)
+    if (node.hasCanvas) {
+      activePaths.add(`${node.path}/canvas.json`)
+    }
+    for (const extraFile of node.extraFiles) {
+      activePaths.add(`${node.path}/${extraFile}`)
+    }
+  }
+
+  for (const canvas of canvases) {
+    if (canvas.deletedAt !== 0) continue
+    activePaths.add(`${canvas.path}/canvas.json`)
+  }
+
+  for (const asset of assets) {
+    const owner = activeNodeById.get(asset.nodeId)
+    if (owner) {
+      activePaths.add(`${owner.path}/${asset.path}`)
+    }
+  }
+
+  return pendingDeletes.filter((entry) => !activePaths.has(entry.path))
+}
+
+/**
  * Collects all dirty active local records (`dirty === 1 && deletedAt === 0`)
- * plus pending remote deletions using Dexie secondary indexes (`dirty`).
+ * plus effective remote deletions (`getEffectiveDeletes`) ready for sync.
  */
 export async function collectDirtyFiles(db: KnovitesDatabase): Promise<CollectedDirtyFiles> {
   const [dirtyNodeRows, dirtyCanvasRows, dirtyAssetRows, pendingDeletes] = await Promise.all([
     db.nodes.where('dirty').equals(1).toArray(),
     db.canvases.where('dirty').equals(1).toArray(),
     db.assets.where('dirty').equals(1).toArray(),
-    db.pendingDeletes.orderBy('path').toArray(),
+    getEffectiveDeletes(db),
   ])
 
   const dirtyNodes: CollectedDirtyFiles['nodes'] = []

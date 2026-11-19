@@ -5,6 +5,7 @@ export {
   applyChangeset,
   collectDirtyFiles,
   finalizeSoftDeletes,
+  getEffectiveDeletes,
   getErrorLogs,
   getPendingDeletes,
   loadTreeBuildEntries,

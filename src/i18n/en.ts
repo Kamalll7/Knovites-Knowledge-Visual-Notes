@@ -82,7 +82,7 @@ export const en = {
   storageBanner: {
     errorTitle: 'Local storage unavailable',
     errorDescription:
-      'Changes are kept in memory and not yet saved to browser storage. Editing is paused until saved. Free disk space or enable IndexedDB, then retry.',
+      'Changes are kept in memory and not yet saved to browser storage. Editing is paused. Do not close this tab until Retry succeeds.',
     unsavedBadge: 'Unsaved in memory',
     retryButton: 'Retry',
     readonlyTitle: 'Read-only tab',
