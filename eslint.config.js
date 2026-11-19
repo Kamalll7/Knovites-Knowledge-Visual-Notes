@@ -329,13 +329,20 @@ export default defineConfig([
       ],
     },
   },
-  // Node / E2E / Config files
+  // Node / E2E / Spike / Config files
   {
-    files: ['e2e/**/*.{ts,tsx}', '*.config.{js,ts}'],
+    files: ['e2e/**/*.{ts,tsx}', 'spikes/**/*.{ts,tsx}', '*.config.{js,ts}'],
     languageOptions: {
       globals: {
         ...globals.node,
+        ...globals.browser,
       },
+    },
+  },
+  {
+    files: ['spikes/**/*.{ts,tsx}'],
+    rules: {
+      'boundaries/dependencies': 'off',
     },
   },
   // shadcn/ui components export helper variants alongside components

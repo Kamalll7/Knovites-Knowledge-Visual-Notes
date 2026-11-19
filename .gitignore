@@ -38,3 +38,7 @@ blob-report
 
 # Gambar referensi dari situs lain, jangan di-commit
 docs/Image_reference*
+
+# Video rekaman spike (hanya screenshot PNG yang disimpan)
+spikes/**/out/*.webm
+spikes/**/out/*.mp4
