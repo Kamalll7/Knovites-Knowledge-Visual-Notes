@@ -1,12 +1,34 @@
 import type { Editor } from '@tiptap/react'
-import { Bold, Highlighter, Italic, Underline } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { FONT_FAMILY_OPTIONS, FONT_SIZE_OPTIONS, TEXT_COLOR_SWATCHES } from './rich-text-config'
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Highlighter,
+  Italic,
+  Maximize2,
+  Square,
+  Underline,
+} from 'lucide-react'
+import { memo, useEffect, useState } from 'react'
+import {
+  FONT_FAMILY_OPTIONS,
+  FONT_SIZE_OPTIONS,
+  isFrameNoneStyle,
+  TEXT_COLOR_TOKENS,
+  type ResizeMode,
+  type TextBoxStyle,
+} from './rich-text-config'
 
 export interface FloatingToolbarProps {
   editor: Editor
   position: { left: number; top: number }
   toolbarRef?: React.RefObject<HTMLDivElement | null>
+  nodeStyle: TextBoxStyle
+  resizeMode: ResizeMode
+  textScale: number
+  onToggleFrame: () => void
+  onToggleResizeMode: () => void
 }
 
 /**
@@ -15,7 +37,53 @@ export interface FloatingToolbarProps {
  * Uses `onMouseDown={(e) => e.preventDefault()}` on every control so clicking buttons or
  * opening font/size pickers keeps ProseMirror focus and text selection completely intact.
  */
-export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolbarProps) {
+export function FloatingToolbar({
+  editor,
+  position,
+  toolbarRef,
+  nodeStyle,
+  resizeMode,
+  textScale,
+  onToggleFrame,
+  onToggleResizeMode,
+}: FloatingToolbarProps) {
+  return (
+    <div
+      ref={toolbarRef}
+      data-testid="floating-toolbar"
+      data-editor-toolbar="true"
+      onMouseDown={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        left: 0,
+        top: 0,
+        transform: `translate3d(${Math.round(position.left)}px, ${Math.round(position.top)}px, 0)`,
+      }}
+      className="nodrag nowheel nopan absolute z-30 flex w-max items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs whitespace-nowrap shadow-lg"
+    >
+      <FloatingToolbarBody
+        editor={editor}
+        nodeStyle={nodeStyle}
+        resizeMode={resizeMode}
+        textScale={textScale}
+        onToggleFrame={onToggleFrame}
+        onToggleResizeMode={onToggleResizeMode}
+      />
+    </div>
+  )
+}
+
+const FloatingToolbarBody = memo(function FloatingToolbarBody({
+  editor,
+  nodeStyle,
+  resizeMode,
+  textScale,
+  onToggleFrame,
+  onToggleResizeMode,
+}: Omit<FloatingToolbarProps, 'position' | 'toolbarRef'>) {
   const [openMenu, setOpenMenu] = useState<'size' | 'font' | null>(null)
   const [, setTransactionTick] = useState(0)
 
@@ -34,6 +102,8 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
     typeof currentAttrs['fontSize'] === 'string' && currentAttrs['fontSize'].length > 0
       ? currentAttrs['fontSize']
       : '16px'
+  const baseFontNumeric = Number.parseFloat(currentFontSize) || 16
+  const effectiveFontPx = Math.round(baseFontNumeric * textScale)
   const currentFontFamily =
     typeof currentAttrs['fontFamily'] === 'string' && currentAttrs['fontFamily'].length > 0
       ? currentAttrs['fontFamily']
@@ -45,6 +115,7 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
   const isItalic = editor.isActive('italic')
   const isUnderline = editor.isActive('underline')
   const isHighlight = editor.isActive('highlight')
+  const isFrameBoxOn = !isFrameNoneStyle(nodeStyle)
 
   const keepFocus = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -52,18 +123,7 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
   }
 
   return (
-    <div
-      ref={toolbarRef}
-      data-testid="floating-toolbar"
-      data-editor-toolbar="true"
-      onMouseDown={keepFocus}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        left: `${Math.round(position.left)}px`,
-        top: `${Math.round(position.top)}px`,
-      }}
-      className="nodrag nowheel nopan absolute z-30 flex w-max items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs whitespace-nowrap shadow-lg"
-    >
+    <>
       <button
         type="button"
         data-testid="toolbar-bold"
@@ -112,7 +172,7 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
         aria-label="Highlight"
         aria-pressed={isHighlight}
         onMouseDown={keepFocus}
-        onClick={() => editor.chain().focus().toggleHighlight({ color: '#fbbf24' }).run()}
+        onClick={() => editor.chain().focus().toggleHighlight({ color: 'warning' }).run()}
         className={`flex h-7 w-7 items-center justify-center rounded transition-colors ${
           isHighlight ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-secondary'
         }`}
@@ -122,31 +182,61 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
 
       <span className="mx-0.5 h-4 w-px bg-border" />
 
-      {/* Color swatches */}
-      <div className="flex items-center gap-1" role="group" aria-label="Text color">
-        {TEXT_COLOR_SWATCHES.map((swatch) => {
-          const active = currentColor === swatch.value
+      {/* TextAlign (left / center / right; justify sengaja tidak tersedia) */}
+      {(
+        [
+          { id: 'left', icon: AlignLeft, label: 'Align left' },
+          { id: 'center', icon: AlignCenter, label: 'Align center' },
+          { id: 'right', icon: AlignRight, label: 'Align right' },
+        ] as const
+      ).map((item) => {
+        const Icon = item.icon
+        const active = editor.isActive({ textAlign: item.id })
+        return (
+          <button
+            key={item.id}
+            type="button"
+            data-testid={`toolbar-align-${item.id}`}
+            aria-label={item.label}
+            aria-pressed={active}
+            onMouseDown={keepFocus}
+            onClick={() => editor.chain().focus().setTextAlign(item.id).run()}
+            className={`flex h-7 w-7 items-center justify-center rounded transition-colors ${
+              active ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-secondary'
+            }`}
+          >
+            <Icon className="size-3.5" />
+          </button>
+        )
+      })}
+
+      <span className="mx-0.5 h-4 w-px bg-border" />
+
+      {/* Semantic theme color swatches */}
+      <div className="flex items-center gap-1" role="group" aria-label="Text color tokens">
+        {TEXT_COLOR_TOKENS.map((swatch) => {
+          const active = currentColor === swatch.token
           return (
             <button
               key={swatch.label}
               type="button"
-              data-testid={`toolbar-color-${swatch.label.toLowerCase().replace(/\s+/g, '-')}`}
+              data-testid={`toolbar-color-${swatch.token ?? 'auto'}`}
               title={swatch.label}
               aria-label={`Color ${swatch.label}`}
               aria-pressed={active}
               onMouseDown={keepFocus}
               onClick={() => {
-                if (swatch.value === null) {
+                if (swatch.token === null) {
                   editor.chain().focus().unsetColor().run()
                 } else {
-                  editor.chain().focus().setColor(swatch.value).run()
+                  editor.chain().focus().setColor(swatch.token).run()
                 }
               }}
               className={`h-4 w-4 rounded-full border transition-transform ${
                 active ? 'scale-110 border-foreground ring-1 ring-ring' : 'border-border'
               }`}
               style={{
-                backgroundColor: swatch.value ?? 'var(--fg)',
+                backgroundColor: swatch.cssVar ?? 'var(--fg)',
               }}
             />
           )
@@ -166,6 +256,11 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
           className="h-7 rounded border border-border bg-secondary px-2 font-mono text-[11px] font-medium text-foreground hover:bg-secondary/80"
         >
           {currentFontSize}
+          {textScale !== 1 ? (
+            <span data-testid="toolbar-size-effective" className="ml-1 text-muted-foreground">
+              (→{effectiveFontPx}px)
+            </span>
+          ) : null}
         </button>
         {openMenu === 'size' ? (
           <div
@@ -235,6 +330,46 @@ export function FloatingToolbar({ editor, position, toolbarRef }: FloatingToolba
           </div>
         ) : null}
       </div>
-    </div>
+
+      <span className="mx-0.5 h-4 w-px bg-border" />
+
+      {/* Toggle "kotak di belakang teks" (mengatur style.bg & style.border sekaligus ke null / "none") */}
+      <button
+        type="button"
+        data-testid="toolbar-frame-toggle"
+        title="Kotak di belakang teks"
+        aria-label="Kotak di belakang teks"
+        aria-pressed={isFrameBoxOn}
+        onMouseDown={keepFocus}
+        onClick={onToggleFrame}
+        className={`flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors ${
+          isFrameBoxOn
+            ? 'bg-secondary text-foreground hover:bg-secondary/80'
+            : 'border border-dashed border-border text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        <Square className="size-3" />
+        <span>{isFrameBoxOn ? 'Box' : 'None'}</span>
+      </button>
+
+      {/* Toggle mode resize per node (Reflow vs Scale) */}
+      <button
+        type="button"
+        data-testid="toolbar-resize-mode"
+        title="Mode resize (Reflow vs Scale)"
+        aria-label="Mode resize"
+        aria-pressed={resizeMode === 'scale'}
+        onMouseDown={keepFocus}
+        onClick={onToggleResizeMode}
+        className={`flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors ${
+          resizeMode === 'scale'
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-secondary text-foreground hover:bg-secondary/80'
+        }`}
+      >
+        <Maximize2 className="size-3" />
+        <span>{resizeMode === 'scale' ? `Scale ×${Number(textScale.toFixed(2))}` : 'Reflow'}</span>
+      </button>
+    </>
   )
-}
+})

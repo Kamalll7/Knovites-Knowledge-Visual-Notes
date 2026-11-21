@@ -1,3 +1,20 @@
+/* Theme semantic text tokens (WCAG 2.1 AA >= 4.5:1 on both --card and --bg) */
+:root {
+  --text-token-accent: #3451d1;
+  --text-token-warning: #92400e;
+  --text-token-success: #047857;
+  --text-token-danger: #b91c1c;
+  --text-token-violet: #6d28d9;
+}
+
+.dark {
+  --text-token-accent: #7c9cff;
+  --text-token-warning: #fbbf24;
+  --text-token-success: #34d399;
+  --text-token-danger: #f87171;
+  --text-token-violet: #a78bfa;
+}
+
 /* Shared typography and layout parity rules between static renderer and active TipTap editor */
 .knovites-richtext {
   font-family: var(--font-sans);
@@ -88,10 +105,17 @@
   border-radius: 4px;
 }
 
-.knovites-richtext pre {
+/* Code blocks use horizontal scrolling (owner decision 2026-11-21) with explicit override over ProseMirror pre */
+.knovites-richtext pre,
+.knovites-richtext .ProseMirror pre {
+  box-sizing: border-box;
+  max-width: 100%;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
-  white-space: pre-wrap;
+  line-height: 1.45;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
   background-color: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -100,9 +124,16 @@
   overflow-x: auto;
 }
 
-.knovites-richtext pre code {
+.knovites-richtext pre:last-child,
+.knovites-richtext .ProseMirror pre:last-child {
+  margin-bottom: 0;
+}
+
+.knovites-richtext pre code,
+.knovites-richtext .ProseMirror pre code {
   background: transparent;
   padding: 0;
+  white-space: inherit;
 }
 
 .knovites-richtext hr {
@@ -117,6 +148,7 @@
   text-underline-offset: 2px;
 }
 
+/* Highlight theme-aware pairs (supports both legacy hex and semantic token keys) */
 .knovites-richtext mark {
   padding: 0 2px;
   border-radius: 3px;
@@ -124,6 +156,7 @@
   color: #0f172a;
 }
 
+.knovites-richtext mark[data-color='success'],
 .knovites-richtext mark[data-color='#34d399'],
 .knovites-richtext mark[style*='#34d399'],
 .knovites-richtext mark[style*='52, 211, 153'] {
@@ -131,6 +164,7 @@
   color: #0f172a;
 }
 
+.knovites-richtext mark[data-color='accent'],
 .knovites-richtext mark[data-color='#7c9cff'],
 .knovites-richtext mark[style*='#7c9cff'],
 .knovites-richtext mark[style*='124, 156, 255'] {
@@ -138,6 +172,7 @@
   color: #0f172a;
 }
 
+.knovites-richtext mark[data-color='danger'],
 .knovites-richtext mark[data-color='#f87171'],
 .knovites-richtext mark[style*='#f87171'],
 .knovites-richtext mark[style*='248, 113, 113'] {
@@ -150,6 +185,7 @@
   color: #fde68a;
 }
 
+.dark .knovites-richtext mark[data-color='success'],
 .dark .knovites-richtext mark[data-color='#34d399'],
 .dark .knovites-richtext mark[style*='#34d399'],
 .dark .knovites-richtext mark[style*='52, 211, 153'] {
@@ -157,6 +193,7 @@
   color: #a7f3d0;
 }
 
+.dark .knovites-richtext mark[data-color='accent'],
 .dark .knovites-richtext mark[data-color='#7c9cff'],
 .dark .knovites-richtext mark[style*='#7c9cff'],
 .dark .knovites-richtext mark[style*='124, 156, 255'] {
@@ -164,6 +201,7 @@
   color: #dbeafe;
 }
 
+.dark .knovites-richtext mark[data-color='danger'],
 .dark .knovites-richtext mark[data-color='#f87171'],
 .dark .knovites-richtext mark[style*='#f87171'],
 .dark .knovites-richtext mark[style*='248, 113, 113'] {
@@ -171,15 +209,49 @@
   color: #fecdd3;
 }
 
+/* Frame "none" subtle visual cues without altering layout dimensions or data */
+.knovites-card-surface[data-frame-mode='none'][data-empty='true'] {
+  outline: 1.5px dashed var(--border);
+  outline-offset: -1.5px;
+}
+
+.knovites-card-surface[data-frame-mode='none']:hover {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  outline-offset: -1px;
+}
+
+.knovites-empty-placeholder {
+  color: var(--fg-muted);
+  opacity: 0.65;
+  font-style: italic;
+}
+
+/* Resize handle styling (only mounted while selected; never alters box geometry) */
+.react-flow__resize-control.handle.knovites-resize-handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--bg);
+  background-color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+}
+
+.react-flow__resize-control.handle.knovites-resize-side {
+  border-radius: 3px;
+}
+
 /* Override React Flow's default wrapper styling so our card border/padding stay crisp and identical */
-.react-flow__node-textBox {
+.react-flow__node-textBox,
+.react-flow__node-imageBox {
   padding: 0;
   border: none;
   background: transparent;
   border-radius: 12px;
 }
 
-.react-flow__node-textBox.selected {
+.react-flow__node-textBox.selected,
+.react-flow__node-imageBox.selected {
   box-shadow: none;
 }
 

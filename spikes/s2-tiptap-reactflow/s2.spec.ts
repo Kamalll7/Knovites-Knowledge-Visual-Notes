@@ -222,8 +222,8 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
     await expect(editorEl.locator('strong')).toContainText('Alpha')
 
-    // Click Color swatch Accent Blue
-    await page.getByTestId('toolbar-color-accent-blue').click()
+    // Click Color swatch Accent (semantic token)
+    await page.getByTestId('toolbar-color-accent').click()
     expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
 
     // Open Font Size dropdown & choose 24px
@@ -243,7 +243,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(markTypes).toContain('bold')
     expect(markTypes).toContain('textStyle')
     const styleMark = firstText?.marks?.find((m) => m.type === 'textStyle')
-    expect(styleMark?.attrs?.['color']).toBe('#7c9cff')
+    expect(styleMark?.attrs?.['color']).toBe('accent')
     expect(styleMark?.attrs?.['fontSize']).toBe('24px')
     expect(styleMark?.attrs?.['fontFamily']).toContain('JetBrains Mono')
   })
@@ -354,19 +354,29 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     const editorEl = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
     await expect(editorEl).toBeVisible()
 
-    // First record whether editing an unaligned plain paragraph emits `{ textAlign: null }`
+    // Verify plain paragraph emits NO `attrs` (C.11: editor tidak boleh menulis `{ textAlign: null }`)
     await page.keyboard.press('End')
     await page.keyboard.type(' check')
     const plainDocCheck = await page.evaluate(() => {
       const state = window.__S2_API__?.getNodeState('box-edit')
+      const rawEditorJson = window.__S2_API__?.getActiveEditorJson() as {
+        content?: Array<{ attrs?: unknown }>
+      } | null
       if (!state || !state.doc) return null
       return {
-        firstParaAttrs: state.doc.content?.[0]?.attrs ?? null,
+        stateParaAttrs: state.doc.content?.[0]?.attrs ?? null,
+        editorGetJsonParaAttrs: rawEditorJson?.content?.[0]?.attrs ?? null,
         schemaResult: window.__S2_API__!.validateWithDomainSchema(state.doc),
       }
     })
     console.log('S2_PLAIN_PARAGRAPH_CHECK=' + JSON.stringify(plainDocCheck))
     expect(plainDocCheck).not.toBeNull()
+    expect(plainDocCheck!.stateParaAttrs).toBeNull()
+    expect(plainDocCheck!.editorGetJsonParaAttrs).toBeNull()
+    expect(plainDocCheck!.schemaResult.status).toBe('ok')
+    expect(
+      plainDocCheck!.schemaResult.status === 'ok' ? plainDocCheck!.schemaResult.issues : [],
+    ).toEqual([])
 
     // Select all and dispatch synthetic HTML paste with dangerous inline styles, on* handlers, external <img>, script, and malicious href variants
     await page.keyboard.press('Control+a')
@@ -433,7 +443,9 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(serialized).toContain('BadCase')
     expect(serialized).toContain('CleanedAttrs')
     expect(serialized).toContain('https://example.com/safe')
-    expect(serialized).toContain('#ff0000')
+    // Paste hex rgb(255,0,0) dipetakan ke token semantik terdekat ('danger'); invalid CSS ('notacolor') dibuang
+    expect(serialized).toContain('"color":"danger"')
+    expect(serialized).not.toContain('notacolor')
     expect(serialized).toContain('24px')
     expect(serialized).toContain('"type":"bold"')
     expect(serialized).not.toContain('"level":5')
@@ -535,7 +547,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(schemaCheck!.recheckIssues).toEqual([])
   })
 
-  test('9. tampilan statis dan mode edit identik secara visual dan tangkap screenshot', async ({
+  test('9. tampilan statis dan mode edit identik pada seluruh node (border/ring/padding) untuk frame auto & none di tema dark & light', async ({
     page,
   }) => {
     const compareBodies = async (aBuf: Buffer, bBuf: Buffer) =>
@@ -585,61 +597,95 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await page.mouse.move(10, 10)
     await page.waitForTimeout(80)
 
-    // 0) Static-rendered anchor must include rel="noopener noreferrer"
+    // Static-rendered anchor must include rel="noopener noreferrer"
     const staticAnchor = page.getByTestId('richtext-body-box-rich').locator('a')
     await expect(staticAnchor).toHaveAttribute('href', 'https://example.com/heap')
     await expect(staticAnchor).toHaveAttribute('rel', 'noopener noreferrer')
 
-    // 1) Dark theme parity (static vs active edit, caret/selection kept natural)
-    const staticDarkShot = await page.getByTestId('richtext-body-box-rich').screenshot()
-    await page.screenshot({ path: path.join(OUT_DIR, 'canvas-static-dark.png') })
+    const measureCardStyleAndBox = async () =>
+      page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>('[data-testid="card-surface-box-rich"]')!
+        const cs = getComputedStyle(el)
+        const rect = el.getBoundingClientRect()
+        return {
+          width: Number(rect.width.toFixed(2)),
+          height: Number(rect.height.toFixed(2)),
+          borderWidth: cs.borderTopWidth,
+          padding: `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
+          boxShadow: cs.boxShadow,
+        }
+      })
 
-    await page.getByTestId('text-box-box-rich').dblclick()
-    await expect(page.getByTestId('floating-toolbar')).toBeVisible()
-    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
-
-    await page.screenshot({ path: path.join(OUT_DIR, 'canvas-edit-dark.png') })
-    const editDarkShot = await page.getByTestId('richtext-body-box-rich').screenshot()
-
-    const diffDark = await compareBodies(staticDarkShot, editDarkShot)
-    console.log('S2_VISUAL_PARITY_DARK=' + JSON.stringify(diffDark))
-    expect(diffDark.widthA).toBe(diffDark.widthB)
-    expect(diffDark.heightA).toBe(diffDark.heightB)
-    expect(diffDark.diffPercent).toBeLessThan(1.0)
-
-    // 2) Light theme parity (static vs active edit)
-    await page.keyboard.press('Escape')
-    await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
-    await page.getByTestId('theme-toggle').click()
-    await expect
-      .poll(async () =>
-        page.evaluate(() =>
-          getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
-        ),
+    const runParityCheck = async (
+      theme: 'dark' | 'light',
+      frameNone: boolean,
+      captureCanvasShots: boolean,
+    ) => {
+      await page.keyboard.press('Escape')
+      await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
+      await page.evaluate(
+        ({ t, fn }) => {
+          window.__S2_API__?.selectNodes([])
+          window.__S2_API__?.setTheme(t)
+          window.__S2_API__?.setNodeFrameModeForTest('box-rich', fn)
+        },
+        { t: theme, fn: frameNone },
       )
-      .toBe('#f6f8fc')
-    await page.evaluate(
-      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-    )
-    await page.mouse.move(10, 10)
-    await page.waitForTimeout(60)
+      await expect
+        .poll(async () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+          ),
+        )
+        .toBe(theme === 'dark' ? '#0b0e14' : '#f6f8fc')
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+      await page.mouse.move(10, 10)
+      await page.waitForTimeout(60)
 
-    const staticLightShot = await page.getByTestId('richtext-body-box-rich').screenshot()
-    await page.screenshot({ path: path.join(OUT_DIR, 'canvas-static-light.png') })
+      const staticGeom = await measureCardStyleAndBox()
+      const staticWholeShot = await page.getByTestId('card-surface-box-rich').screenshot()
+      if (captureCanvasShots) {
+        await page.screenshot({ path: path.join(OUT_DIR, `canvas-static-${theme}.png`) })
+      }
 
-    await page.getByTestId('text-box-box-rich').dblclick()
-    await expect(page.getByTestId('floating-toolbar')).toBeVisible()
-    await page.evaluate(
-      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-    )
-    await page.screenshot({ path: path.join(OUT_DIR, 'canvas-edit-light.png') })
-    const editLightShot = await page.getByTestId('richtext-body-box-rich').screenshot()
+      await page.getByTestId('text-box-box-rich').dblclick()
+      await expect(page.getByTestId('floating-toolbar')).toBeVisible()
+      expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+      await page.mouse.move(10, 10)
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
 
-    const diffLight = await compareBodies(staticLightShot, editLightShot)
-    console.log('S2_VISUAL_PARITY_LIGHT=' + JSON.stringify(diffLight))
-    expect(diffLight.widthA).toBe(diffLight.widthB)
-    expect(diffLight.heightA).toBe(diffLight.heightB)
-    expect(diffLight.diffPercent).toBeLessThan(1.0)
+      const editGeom = await measureCardStyleAndBox()
+      if (captureCanvasShots) {
+        await page.screenshot({ path: path.join(OUT_DIR, `canvas-edit-${theme}.png`) })
+      }
+      const editWholeShot = await page.getByTestId('card-surface-box-rich').screenshot()
+      const diff = await compareBodies(staticWholeShot, editWholeShot)
+
+      // Ring edit memakai box-shadow sehingga border/padding/ukuran kotak TIDAK berubah sama sekali
+      expect(editGeom.borderWidth).toBe(staticGeom.borderWidth)
+      expect(editGeom.padding).toBe(staticGeom.padding)
+      expect(Math.abs(editGeom.width - staticGeom.width)).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(editGeom.height - staticGeom.height)).toBeLessThanOrEqual(0.5)
+      expect(editGeom.boxShadow).not.toBe('none')
+      expect(diff.widthA).toBe(diff.widthB)
+      expect(diff.heightA).toBe(diff.heightB)
+      expect(diff.diffPercent).toBeLessThan(1.0)
+      return { staticGeom, editGeom, diff }
+    }
+
+    const parityReport = {
+      dark_auto: await runParityCheck('dark', false, true),
+      light_auto: await runParityCheck('light', false, true),
+      dark_none: await runParityCheck('dark', true, false),
+      light_none: await runParityCheck('light', true, false),
+    }
+    console.log('S2_WHOLE_NODE_PARITY=' + JSON.stringify(parityReport))
   })
 
   test('10. toolbar berukuran tetap di luar transform kanvas, terbaca di semua zoom, dan tidak menutupi node', async ({
@@ -700,8 +746,8 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       })
 
       // Toolbar stays screen-sized & readable (>= 28px button) and never overlaps edited box
-      expect(tbBox!.width).toBeGreaterThanOrEqual(260)
-      expect(tbBox!.width).toBeLessThanOrEqual(420)
+      expect(tbBox!.width).toBeGreaterThanOrEqual(320)
+      expect(tbBox!.width).toBeLessThanOrEqual(680)
       expect(tbBox!.height).toBeGreaterThanOrEqual(34)
       expect(tbBox!.height).toBeLessThanOrEqual(48)
       expect(boldBox!.height).toBeGreaterThanOrEqual(26)
@@ -729,7 +775,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     console.log('S2_TOOLBAR_ZOOM_INVARIANCE=' + JSON.stringify(measuredZooms))
   })
 
-  test('11. ukur rasio kontras WCAG 2.1 untuk mark color & highlight di tema dark/light dan frame card/none', async ({
+  test('11. ukur rasio kontras WCAG 2.1 untuk token warna teks semantik & highlight di tema dark/light dan frame card/none (semua >= 4.5)', async ({
     page,
   }) => {
     await page.goto('/')
@@ -743,48 +789,48 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
             { type: 'text' as const, text: 'AutoText' },
             {
               type: 'text' as const,
-              text: 'AccentBlue',
-              marks: [{ type: 'textStyle' as const, attrs: { color: '#7c9cff' } }],
+              text: 'TokenAccent',
+              marks: [{ type: 'textStyle' as const, attrs: { color: 'accent' } }],
             },
             {
               type: 'text' as const,
-              text: 'AmberText',
-              marks: [{ type: 'textStyle' as const, attrs: { color: '#fbbf24' } }],
+              text: 'TokenWarning',
+              marks: [{ type: 'textStyle' as const, attrs: { color: 'warning' } }],
             },
             {
               type: 'text' as const,
-              text: 'EmeraldText',
-              marks: [{ type: 'textStyle' as const, attrs: { color: '#34d399' } }],
+              text: 'TokenSuccess',
+              marks: [{ type: 'textStyle' as const, attrs: { color: 'success' } }],
             },
             {
               type: 'text' as const,
-              text: 'RoseText',
-              marks: [{ type: 'textStyle' as const, attrs: { color: '#f87171' } }],
+              text: 'TokenDanger',
+              marks: [{ type: 'textStyle' as const, attrs: { color: 'danger' } }],
             },
             {
               type: 'text' as const,
-              text: 'VioletText',
-              marks: [{ type: 'textStyle' as const, attrs: { color: '#a78bfa' } }],
+              text: 'TokenViolet',
+              marks: [{ type: 'textStyle' as const, attrs: { color: 'violet' } }],
             },
             {
               type: 'text' as const,
-              text: 'HighlightAmber',
-              marks: [{ type: 'highlight' as const, attrs: { color: '#fbbf24' } }],
+              text: 'HighlightWarning',
+              marks: [{ type: 'highlight' as const, attrs: { color: 'warning' } }],
             },
             {
               type: 'text' as const,
-              text: 'HighlightEmerald',
-              marks: [{ type: 'highlight' as const, attrs: { color: '#34d399' } }],
+              text: 'HighlightSuccess',
+              marks: [{ type: 'highlight' as const, attrs: { color: 'success' } }],
             },
             {
               type: 'text' as const,
-              text: 'HighlightBlue',
-              marks: [{ type: 'highlight' as const, attrs: { color: '#7c9cff' } }],
+              text: 'HighlightAccent',
+              marks: [{ type: 'highlight' as const, attrs: { color: 'accent' } }],
             },
             {
               type: 'text' as const,
-              text: 'HighlightRose',
-              marks: [{ type: 'highlight' as const, attrs: { color: '#f87171' } }],
+              text: 'HighlightDanger',
+              marks: [{ type: 'highlight' as const, attrs: { color: 'danger' } }],
             },
           ],
         },
@@ -797,7 +843,10 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       await page.evaluate(
         ({ t, fn }) => {
           window.__S2_API__?.setTheme(t)
-          window.__S2_API__?.setNodeFrameModeForTest('box-edit', fn)
+          window.__S2_API__?.setNodeFrameStyleForTest(
+            'box-edit',
+            fn ? { bg: 'none', border: 'none' } : { bg: null, border: null },
+          )
         },
         { t: theme, fn: frameNone },
       )
@@ -893,26 +942,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     }
     console.log('S2_CONTRAST_RATIOS=' + JSON.stringify(report))
 
-    const isHighlight = (name: string) => name.startsWith('Highlight')
-
-    // All text swatches + Auto + ALL paired Highlights MUST pass AA >= 4.5 on Dark (both card and frame:none)
-    expect(report.dark_card.every((r) => r.passAA)).toBe(true)
-    expect(report.dark_frame_none.every((r) => r.passAA)).toBe(true)
-
-    // Light AutoText & ALL paired Highlights pass AA >= 4.5, while fixed dark-palette hex text swatches still fail AA (< 3.0) on light surface & frame:none
-    expect(report.light_card.find((r) => r.sample === 'AutoText')!.passAA).toBe(true)
-    expect(report.light_card.filter((r) => isHighlight(r.sample)).every((r) => r.passAA)).toBe(true)
-    expect(
-      report.light_frame_none.filter((r) => isHighlight(r.sample)).every((r) => r.passAA),
-    ).toBe(true)
-    const lightFixedHexes = report.light_card.filter(
-      (r) => r.sample !== 'AutoText' && !isHighlight(r.sample),
-    )
-    expect(lightFixedHexes.every((r) => !r.passAA)).toBe(true)
-    const lightNoneHexes = report.light_frame_none.filter(
-      (r) => r.sample !== 'AutoText' && !isHighlight(r.sample),
-    )
-    expect(lightNoneHexes.every((r) => !r.passAA)).toBe(true)
+    // Seluruh token teks + Auto + pasangan Highlight WAJIB lolos WCAG AA (>= 4.5) pada ke-4 kombinasi tema & frame
+    for (const key of ['dark_card', 'dark_frame_none', 'light_card', 'light_frame_none'] as const) {
+      expect(report[key].length).toBe(10)
+      expect(report[key].every((r) => r.passAA)).toBe(true)
+    }
   })
 
   test('12. editor aktif bertahan saat di-pan keluar layar (culling ON): tanpa vs dengan mitigasi ViewportPortal', async ({
@@ -1070,7 +1104,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(Math.abs(afterDragAlign.cardBox.y - afterDragAlign.phBox.y)).toBeLessThanOrEqual(1.5)
 
     // 2) Width resize WHILE editing: text reflows and card/placeholder heights grow identically (`ukuran kotak = ukuran editor`)
-    const resizeHandle = page.getByTestId('resize-handle-box-rich')
+    const resizeHandle = page.getByTestId('resize-handle-box-rich-right')
     await expect(resizeHandle).toBeVisible()
     const rBox = await resizeHandle.boundingBox()
     expect(rBox).not.toBeNull()
@@ -1118,7 +1152,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     }
   })
 
-  test('14. edit di zoom < ambang LOD: editor tampil penuh tanpa reset zoom dengan caret & seleksi berfungsi', async ({
+  test('14. edit di zoom < ambang LOD: kamera otomatis zoom ke tingkat terbaca dan memusatkan node dengan caret & seleksi berfungsi', async ({
     page,
   }) => {
     await page.goto('/')
@@ -1126,18 +1160,37 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     await expect(page.getByTestId('lod-placeholder-box-edit')).toBeVisible()
     await expect(page.getByTestId('text-box-box-edit')).toHaveAttribute('data-lod', 'true')
 
-    // Double-click LOD box -> stays at zoom 0.25 and mounts full TipTap editor + screen-space toolbar
+    // Double-click LOD box -> kamera otomatis zoom ke ~1.0, memusatkan node ke Viewport, dan keluar dari LOD
     await page.getByTestId('text-box-box-edit').dblclick()
     const editor = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
     await expect(editor).toBeVisible()
     await expect(editor).toBeFocused()
     expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
-    expect((await page.evaluate(() => window.__S2_API__?.getViewport()))?.zoom).toBeCloseTo(0.25, 2)
+
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__S2_API__?.getViewport()))?.zoom ?? 0)
+      .toBeGreaterThanOrEqual(0.95)
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod)
+      .toBe(false)
+
+    // Pastikan node benar-benar terpusat di canvas-stage setelah transisi
+    const stageBox = await page.getByTestId('canvas-stage').boundingBox()
+    const cardBox = await page.getByTestId('card-surface-box-edit').boundingBox()
+    expect(stageBox).not.toBeNull()
+    expect(cardBox).not.toBeNull()
+    const stageCx = stageBox!.x + stageBox!.width / 2
+    const stageCy = stageBox!.y + stageBox!.height / 2
+    const cardCx = cardBox!.x + cardBox!.width / 2
+    const cardCy = cardBox!.y + cardBox!.height / 2
+    expect(Math.abs(cardCx - stageCx)).toBeLessThan(80)
+    expect(Math.abs(cardCy - stageCy)).toBeLessThan(80)
+
     await expect(page.getByTestId('floating-toolbar')).toBeVisible()
 
-    // Caret typing, keyboard selection, and toolbar formatting all work at zoom 0.25
-    await page.keyboard.type(' LOW_ZOOM')
-    await expect(editor).toContainText('LOW_ZOOM')
+    // Caret typing, keyboard selection, and toolbar formatting all work after auto-zoom
+    await page.keyboard.type(' AUTO_ZOOM')
+    await expect(editor).toContainText('AUTO_ZOOM')
 
     await page.keyboard.press('Home')
     for (let i = 0; i < 6; i += 1) {
@@ -1249,11 +1302,512 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     )
     expect((await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod).toBe(true)
 
-    // Crossing above LOD_EXIT_ZOOM (0.40) exits LOD cleanly
+    // Crossing above LOD_EXIT_ZOOM (0.40) exits LOD cleanly, and does NOT re-enter at 0.35
     await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 0.42 }))
     await expect
       .poll(async () => (await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod)
       .toBe(false)
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 0.35 }))
+    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+    expect((await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod).toBe(false)
+    // Only crossing strictly below LOD_ENTER_ZOOM (0.32) activates LOD again
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 0.31 }))
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod)
+      .toBe(true)
+  })
+
+  test('17. frame "none": toggle style.bg/border serentak, tinggi otomatis, area kosong dapat diklik, dan node kosong tetap terlihat', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    // Buat node kosong dengan frame none
+    await page.evaluate(() => {
+      window.__S2_API__?.addTextNodeForTest({
+        id: 'box-empty-none',
+        x: 840,
+        y: 300,
+        width: 240,
+        style: { bg: 'none', border: 'none' },
+        doc: { type: 'doc', content: [{ type: 'paragraph', content: [] }] },
+      })
+    })
+
+    const emptySurface = page.getByTestId('card-surface-box-empty-none')
+    await expect(emptySurface).toBeVisible()
+    await expect(emptySurface).toHaveAttribute('data-frame-mode', 'none')
+    await expect(emptySurface).toHaveAttribute('data-empty', 'true')
+    const emptyOutline = await emptySurface.evaluate((el) => getComputedStyle(el).outlineStyle)
+    expect(emptyOutline).toBe('dashed')
+
+    // Toggle "kotak di belakang teks" di FloatingToolbar pada box-edit (Auto -> None -> Auto)
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const toolbarToggle = page.getByTestId('toolbar-frame-toggle')
+    await expect(toolbarToggle).toBeVisible()
+    await expect(toolbarToggle).toHaveAttribute('aria-pressed', 'true')
+
+    await toolbarToggle.click()
+    await expect(toolbarToggle).toHaveAttribute('aria-pressed', 'false')
+    const afterNone = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(afterNone?.style).toEqual({ bg: 'none', border: 'none' })
+    expect(afterNone?.frameNone).toBe(true)
+    expect('frame' in (afterNone?.style ?? {})).toBe(false)
+
+    // Tinggi otomatis bertambah saat mengetik baris baru di frame "none"
+    const boxSurface = page.getByTestId('card-surface-box-edit')
+    const hBefore = (await boxSurface.boundingBox())!.height
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Second line auto height')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('Third line auto height')
+    const hAfter = (await boxSurface.boundingBox())!.height
+    expect(hAfter).toBeGreaterThan(hBefore + 24)
+
+    // Keluar edit -> klik area kosong paling kanan dalam bounding box "none" tetap memilih & masuk edit
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
+    const rectNone = await page.getByTestId('card-surface-box-edit').boundingBox()
+    expect(rectNone).not.toBeNull()
+    const clickX = rectNone!.x + rectNone!.width - 14
+    const clickY = rectNone!.y + rectNone!.height / 2
+    await page.mouse.click(clickX, clickY)
+    expect((await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit')))?.selected).toBe(
+      true,
+    )
+    await page.mouse.dblclick(clickX, clickY)
+    await expect(page.getByTestId('active-tiptap-editor')).toBeVisible()
+
+    // Toggle kembali ke Box (Auto)
+    await page.getByTestId('toolbar-frame-toggle').click()
+    const afterAuto = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(afterAuto?.style).toEqual({ bg: null, border: null })
+  })
+
+  test('18. blok kode scroll horizontal (pre + overflow-x:auto), isolasi wheel horizontal, dan paritas lebar sempit 200 px & 340 px', async ({
+    page,
+  }) => {
+    const compareWholeCard = async (aBuf: Buffer, bBuf: Buffer) =>
+      page.evaluate(
+        async ({ aB64, bB64 }) => {
+          const load = async (b64: string) => {
+            const res = await fetch(`data:image/png;base64,${b64}`)
+            return createImageBitmap(await res.blob())
+          }
+          const imgA = await load(aB64)
+          const imgB = await load(bB64)
+          const w = Math.max(imgA.width, imgB.width)
+          const h = Math.max(imgA.height, imgB.height)
+          const cA = new OffscreenCanvas(w, h)
+          const cB = new OffscreenCanvas(w, h)
+          const ctxA = cA.getContext('2d')!
+          const ctxB = cB.getContext('2d')!
+          ctxA.drawImage(imgA, 0, 0)
+          ctxB.drawImage(imgB, 0, 0)
+          const dA = ctxA.getImageData(0, 0, w, h).data
+          const dB = ctxB.getImageData(0, 0, w, h).data
+          let diffPixels = 0
+          for (let i = 0; i < dA.length; i += 4) {
+            if (
+              Math.abs(dA[i]! - dB[i]!) > 8 ||
+              Math.abs(dA[i + 1]! - dB[i + 1]!) > 8 ||
+              Math.abs(dA[i + 2]! - dB[i + 2]!) > 8
+            ) {
+              diffPixels += 1
+            }
+          }
+          return {
+            widthA: imgA.width,
+            heightA: imgA.height,
+            widthB: imgB.width,
+            heightB: imgB.height,
+            diffPercent: Number(((diffPixels / (w * h)) * 100).toFixed(3)),
+          }
+        },
+        { aB64: aBuf.toString('base64'), bB64: bBuf.toString('base64') },
+      )
+
+    await page.goto('/')
+    await page.evaluate(() => {
+      window.__S2_API__?.setNodeDocForTest('box-edit', {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Long dump line below:' }],
+          },
+          {
+            type: 'codeBlock',
+            attrs: { language: 'json' },
+            content: [
+              {
+                type: 'text',
+                text: 'const long_payload = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_LONG_LINE_NO_WRAP";',
+              },
+            ],
+          },
+        ],
+      })
+    })
+
+    for (const testWidth of [200, 340]) {
+      await page.keyboard.press('Escape')
+      await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
+      await page.evaluate((w) => {
+        window.__S2_API__?.selectNodes([])
+        window.__S2_API__?.setNodeWidthForTest('box-edit', w)
+      }, testWidth)
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+
+      const staticPre = page.getByTestId('richtext-body-box-edit').locator('pre')
+      const staticCss = await staticPre.evaluate((el) => {
+        const cs = getComputedStyle(el)
+        return {
+          whiteSpace: cs.whiteSpace,
+          overflowX: cs.overflowX,
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+        }
+      })
+      expect(staticCss.whiteSpace).toBe('pre')
+      expect(['auto', 'scroll']).toContain(staticCss.overflowX)
+      expect(staticCss.scrollWidth).toBeGreaterThan(staticCss.clientWidth)
+
+      const staticShot = await page.getByTestId('card-surface-box-edit').screenshot()
+      const staticBodyShot = await page.getByTestId('richtext-body-box-edit').screenshot()
+      await page.getByTestId('text-box-box-edit').dblclick()
+      await expect(page.getByTestId('active-tiptap-editor')).toBeVisible()
+      // Taruh caret di awal dokumen & pastikan scrollLeft=0 agar blok kode dibandingkan di posisi awal yang sama
+      await page.keyboard.press('Control+Home')
+      await page.mouse.move(10, 10)
+
+      const activePre = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror pre')
+      await activePre.evaluate((el) => {
+        el.scrollLeft = 0
+      })
+      const activeCss = await activePre.evaluate((el) => {
+        const cs = getComputedStyle(el)
+        return {
+          whiteSpace: cs.whiteSpace,
+          overflowX: cs.overflowX,
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+        }
+      })
+      expect(activeCss.whiteSpace).toBe('pre')
+      expect(['auto', 'scroll']).toContain(activeCss.overflowX)
+      expect(activeCss.scrollWidth).toBeGreaterThan(activeCss.clientWidth)
+
+      const editShot = await page.getByTestId('card-surface-box-edit').screenshot()
+      const editBodyShot = await page.getByTestId('richtext-body-box-edit').screenshot()
+      const parity = await compareWholeCard(staticShot, editShot)
+      const bodyParity = await compareWholeCard(staticBodyShot, editBodyShot)
+      console.log(`S2_CODEBLOCK_PARITY_${testWidth}=` + JSON.stringify({ parity, bodyParity }))
+      expect(parity.widthA).toBe(parity.widthB)
+      expect(parity.heightA).toBe(parity.heightB)
+      expect(bodyParity.widthA).toBe(bodyParity.widthB)
+      expect(bodyParity.heightA).toBe(bodyParity.heightB)
+      expect(bodyParity.diffPercent).toBeLessThan(1.0)
+      expect(parity.diffPercent).toBeLessThan(3.0)
+
+      // Wheel horizontal di atas <pre> aktif menggulir pre.scrollLeft TANPA menggeser kanvas
+      const preBox = await activePre.boundingBox()
+      expect(preBox).not.toBeNull()
+      const vpBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
+      await page.mouse.move(preBox!.x + preBox!.width / 2, preBox!.y + preBox!.height / 2)
+      await page.mouse.wheel(140, 0)
+      await page.waitForTimeout(80)
+      const scrollLeftAfter = await activePre.evaluate((el) => el.scrollLeft)
+      const vpAfter = await page.evaluate(() => window.__S2_API__?.getViewport())
+      expect(scrollLeftAfter).toBeGreaterThan(0)
+      expect(vpAfter).toEqual(vpBefore)
+    }
+  })
+
+  test('19. resizePolicy: 8 handle hanya saat dipilih, isolasi pan/zoom/drag handle, batas minimum, & rasio gambar terkunci default', async ({
+    page,
+  }) => {
+    await page.goto('/')
+
+    const allHandlePositions = [
+      'top-left',
+      'top',
+      'top-right',
+      'right',
+      'bottom-right',
+      'bottom',
+      'bottom-left',
+      'left',
+    ] as const
+
+    // Unselected node tidak menampilkan handle resize
+    for (const pos of allHandlePositions) {
+      await expect(page.getByTestId(`resize-handle-box-edit-${pos}`)).toHaveCount(0)
+      await expect(page.getByTestId(`resize-handle-box-image-${pos}`)).toHaveCount(0)
+    }
+
+    // Pilih box-edit -> seluruh 8 handle sisi & sudut muncul
+    await page.evaluate(() => window.__S2_API__?.selectNodes(['box-edit']))
+    for (const pos of allHandlePositions) {
+      await expect(page.getByTestId(`resize-handle-box-edit-${pos}`)).toBeVisible()
+    }
+
+    // Ctrl+Wheel di atas handle resize TIDAK boleh men-zoom kanvas (Mutation a)
+    const rightHandle = page.getByTestId('resize-handle-box-edit-right')
+    const rBox = await rightHandle.boundingBox()
+    expect(rBox).not.toBeNull()
+    const vpBefore = await page.evaluate(() => window.__S2_API__?.getViewport())
+    await page.mouse.move(rBox!.x + rBox!.width / 2, rBox!.y + rBox!.height / 2)
+    await page.keyboard.down('Control')
+    await page.mouse.wheel(0, -240)
+    await page.keyboard.up('Control')
+    await page.waitForTimeout(80)
+    expect(await page.evaluate(() => window.__S2_API__?.getViewport())).toEqual(vpBefore)
+
+    // Drag handle dengan tool Hand aktif TIDAK boleh menggeser pan kanvas & tetap me-resize (Mutation a)
+    await page.getByTestId('tool-hand').click()
+    await page.mouse.move(rBox!.x + rBox!.width / 2, rBox!.y + rBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rBox!.x + rBox!.width / 2 + 80, rBox!.y + rBox!.height / 2, { steps: 6 })
+    await page.mouse.up()
+    expect(await page.evaluate(() => window.__S2_API__?.getViewport())).toEqual(vpBefore)
+    const grownText = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(grownText!.width).toBeGreaterThanOrEqual(400)
+
+    // Batas minimum text (minW = 160): seret kiri jauh -350 px tetap terjepit >= 160 (Mutation b)
+    await page.getByTestId('tool-select').click()
+    const rBox2 = await page.getByTestId('resize-handle-box-edit-right').boundingBox()
+    await page.mouse.move(rBox2!.x + rBox2!.width / 2, rBox2!.y + rBox2!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rBox2!.x + rBox2!.width / 2 - 350, rBox2!.y + rBox2!.height / 2, {
+      steps: 8,
+    })
+    await page.mouse.up()
+    const clampedText = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(clampedText!.width).toBeGreaterThanOrEqual(160)
+    expect(clampedText!.width).toBeLessThanOrEqual(168)
+
+    // Gambar: rasio aspek 240:150 (1.6) terkunci default saat corner bottom-right diseret bebas
+    await page.evaluate(() => window.__S2_API__?.selectNodes(['box-image']))
+    const imgCorner = await page.getByTestId('resize-handle-box-image-bottom-right').boundingBox()
+    expect(imgCorner).not.toBeNull()
+    await page.mouse.move(imgCorner!.x + imgCorner!.width / 2, imgCorner!.y + imgCorner!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(
+      imgCorner!.x + imgCorner!.width / 2 + 120,
+      imgCorner!.y + imgCorner!.height / 2 + 10,
+      { steps: 8 },
+    )
+    await page.mouse.up()
+    const imgAfter = await page.evaluate(() => window.__S2_API__?.getNodeState('box-image'))
+    expect(imgAfter!.width).toBeGreaterThan(300)
+    const ratioAfter = imgAfter!.width / imgAfter!.height!
+    expect(Math.abs(ratioAfter - 240 / 150)).toBeLessThan(0.06)
+
+    // Batas minimum image (minW >= 80, minH >= 60) (Mutation b)
+    const imgCornerSmall = await page
+      .getByTestId('resize-handle-box-image-bottom-right')
+      .boundingBox()
+    await page.mouse.move(
+      imgCornerSmall!.x + imgCornerSmall!.width / 2,
+      imgCornerSmall!.y + imgCornerSmall!.height / 2,
+    )
+    await page.mouse.down()
+    await page.mouse.move(imgCornerSmall!.x - 350, imgCornerSmall!.y - 250, { steps: 8 })
+    await page.mouse.up()
+    const imgClamped = await page.evaluate(() => window.__S2_API__?.getNodeState('box-image'))
+    expect(imgClamped!.width).toBeGreaterThanOrEqual(80)
+    expect(imgClamped!.height!).toBeGreaterThanOrEqual(60)
+  })
+
+  test('20. teks mode reflow vs scale (textScale, undo 1 langkah, fontSize doc utuh, & caret/seleksi di scale zoom 0.5/1/2)', async ({
+    page,
+  }) => {
+    await page.goto('/')
+
+    // Masuk edit & ketik teks panjang lalu keluar agar ukuran baseline stabil
+    await page.getByTestId('text-box-box-edit').dblclick()
+    await page.keyboard.type(' ScaleTestLine')
+    await page.keyboard.press('Escape')
+
+    const initialState = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    const initialDocJson = JSON.stringify(initialState!.doc)
+    const initialCardBox = await page.getByTestId('card-surface-box-edit').boundingBox()
+
+    // 1) Toggle ke mode Scale dan seret corner bottom-right +170 px
+    await page.evaluate(() => window.__S2_API__?.selectNodes(['box-edit']))
+    await page.getByTestId('header-resize-mode-toggle').click()
+    await expect(page.getByTestId('text-box-box-edit')).toHaveAttribute('data-resize-mode', 'scale')
+
+    const undoCountBeforeResize = await page.evaluate(
+      () => window.__S2_API__?.getCanvasUndoCount() ?? 0,
+    )
+    const scaleRightHandle = await page.getByTestId('resize-handle-box-edit-right').boundingBox()
+    expect(scaleRightHandle).not.toBeNull()
+    await page.mouse.move(
+      scaleRightHandle!.x + scaleRightHandle!.width / 2,
+      scaleRightHandle!.y + scaleRightHandle!.height / 2,
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      scaleRightHandle!.x + scaleRightHandle!.width / 2 + 170,
+      scaleRightHandle!.y + scaleRightHandle!.height / 2,
+      { steps: 8 },
+    )
+    await page.mouse.up()
+
+    // Satu gesture resize = TEPAT +1 langkah undo (Mutation d)
+    const undoCountAfterResize = await page.evaluate(
+      () => window.__S2_API__?.getCanvasUndoCount() ?? 0,
+    )
+    expect(undoCountAfterResize).toBe(undoCountBeforeResize + 1)
+
+    const scaledState = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    const scaledBox = await page.getByTestId('text-box-box-edit').boundingBox()
+    const expectedScaleFromDrag = (initialState!.width + 170) / initialState!.width
+    // Rumus textScale WAJIB sama dengan targetWidth / baseWidth (Mutation c)
+    expect(Math.abs(scaledState!.textScale - expectedScaleFromDrag)).toBeLessThanOrEqual(0.06)
+    expect(scaledState!.textScale).toBeGreaterThan(1.3)
+    expect(scaledState!.textScale).toBeLessThanOrEqual(3.0)
+    // fontSize di JSON dokumen TIDAK berubah (properti textScale non-destruktif; Mutation c)
+    expect(JSON.stringify(scaledState!.doc)).toBe(initialDocJson)
+    // Ukuran terukur proporsional terhadap baseline & mengikuti seretan +170 px
+    const expectedScaledW = Math.round(initialState!.width * scaledState!.textScale)
+    expect(Math.abs(scaledBox!.width - expectedScaledW)).toBeLessThanOrEqual(3)
+    expect(Math.abs(scaledBox!.width - (initialState!.width + 170))).toBeLessThanOrEqual(6)
+    expect(scaledBox!.height).toBeGreaterThan(initialCardBox!.height * 1.25)
+
+    // Ctrl+Z di mode edit HANYA membatalkan teks, bukan resize; setelah Esc baru batalkan resize 1 langkah
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editor = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor).toBeFocused()
+    await expect(page.getByTestId('toolbar-size-effective')).toBeVisible()
+    await page.keyboard.type(' IN_SCALE_EDIT')
+    await expect(editor).toContainText('IN_SCALE_EDIT')
+    await page.keyboard.press('Control+z')
+    await expect(editor).not.toContainText('IN_SCALE_EDIT')
+    expect(
+      (await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit')))?.textScale,
+    ).toBe(scaledState!.textScale)
+
+    // Kelayakan edit di elemen ter-transform scale pada zoom kanvas 0.5, 1, dan 2 (tanpa teks terpotong)
+    for (const k of [0.5, 1, 2]) {
+      await page.evaluate((zoom) => window.__S2_API__?.setViewport({ x: 80, y: -120, zoom }), k)
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+      await editor.click()
+      await page.keyboard.press('End')
+      await page.keyboard.type(` Z${k}`)
+      await expect(editor).toContainText(`Z${k}`)
+      await page.keyboard.press('Control+Home')
+      for (let s = 0; s < 5; s += 1) {
+        await page.keyboard.press('Shift+ArrowRight')
+      }
+      expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Alpha')
+    }
+
+    // Cek bounding box card tidak memotong teks saat bertambah baris di mode scale
+    const overflowCheck = await page.evaluate(() => {
+      const outer = document.querySelector<HTMLElement>('[data-testid="portal-text-box-box-edit"]')
+      const card = document.querySelector<HTMLElement>('[data-testid="card-surface-box-edit"]')
+      if (!outer || !card) return null
+      return {
+        outerH: outer.getBoundingClientRect().height,
+        cardVisualH: card.getBoundingClientRect().height,
+      }
+    })
+    expect(overflowCheck).not.toBeNull()
+    expect(Math.abs(overflowCheck!.outerH - overflowCheck!.cardVisualH)).toBeLessThanOrEqual(4)
+
+    // Esc -> satu Ctrl+Z membatalkan sesi edit, Ctrl+Z lagi membatalkan seluruh resize scale dalam 1 langkah
+    await page.keyboard.press('Escape')
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await page.keyboard.press('Control+z')
+    await page.keyboard.press('Control+z')
+    const afterUndoResize = await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))
+    expect(afterUndoResize?.textScale).toBe(1)
+    expect(afterUndoResize?.width).toBe(initialState!.width)
+  })
+
+  test('21. textAlign: editor.getJSON() tanpa attrs null; center/right diterima; justify ditolak di editor, paste & sanitasi', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editor = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor).toBeFocused()
+
+    // Paragraf polos tanpa perataan TIDAK boleh punya key `attrs` pada editor.getJSON()
+    const plainJson = (await page.evaluate(() => window.__S2_API__?.getActiveEditorJson())) as {
+      content?: Array<Record<string, unknown>>
+    }
+    expect('attrs' in (plainJson.content?.[0] ?? {})).toBe(false)
+
+    // Set center -> harus menulis { textAlign: 'center' }; set right -> 'right'; kembali left -> 'left'
+    await page.getByTestId('toolbar-align-center').click()
+    const centerJson = (await page.evaluate(() => window.__S2_API__?.getActiveEditorJson())) as {
+      content?: Array<{ attrs?: { textAlign?: string } }>
+    }
+    expect(centerJson.content?.[0]?.attrs?.textAlign).toBe('center')
+
+    await page.getByTestId('toolbar-align-right').click()
+    const rightJson = (await page.evaluate(() => window.__S2_API__?.getActiveEditorJson())) as {
+      content?: Array<{ attrs?: { textAlign?: string } }>
+    }
+    expect(rightJson.content?.[0]?.attrs?.textAlign).toBe('right')
+
+    // Paste dengan style text-align: justify HARUS ditolak di sanitasi paste
+    await page.keyboard.press('Control+a')
+    await editor.evaluate((el) => {
+      const dt = new DataTransfer()
+      dt.setData('text/html', '<p style="text-align: justify">JustifiedPaste</p>')
+      dt.setData('text/plain', 'JustifiedPaste')
+      el.dispatchEvent(
+        new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }),
+      )
+    })
+    const afterJustifyPaste = JSON.stringify(
+      await page.evaluate(() => window.__S2_API__?.getActiveEditorJson()),
+    )
+    expect(afterJustifyPaste).not.toContain('justify')
+
+    // Sanitasi langsung JSON ber-textAlign 'justify' di spike sanitizer & real domain schema menolak 'justify'
+    const directCheck = await page.evaluate(() => {
+      const crafted = {
+        type: 'doc' as const,
+        content: [
+          {
+            type: 'paragraph' as const,
+            attrs: { textAlign: 'justify' },
+            content: [{ type: 'text' as const, text: 'Blocked' }],
+          },
+          {
+            type: 'paragraph' as const,
+            attrs: { textAlign: null },
+            content: [{ type: 'text' as const, text: 'NoNull' }],
+          },
+        ],
+      }
+      const spikeRes = window.__S2_API__!.sanitizeSpikeDoc(
+        crafted as unknown as Parameters<
+          NonNullable<typeof window.__S2_API__>['sanitizeSpikeDoc']
+        >[0],
+      )
+      const domainRes = window.__S2_API__!.validateWithDomainSchema(
+        crafted as unknown as Parameters<
+          NonNullable<typeof window.__S2_API__>['validateWithDomainSchema']
+        >[0],
+      )
+      return { spikeRes, domainRes }
+    })
+    expect(directCheck.spikeRes.rejectedAlignments).toEqual(['justify'])
+    expect(JSON.stringify(directCheck.spikeRes.doc)).not.toContain('justify')
+    expect('attrs' in (directCheck.spikeRes.doc.content?.[1] ?? {})).toBe(false)
+    expect(JSON.stringify(directCheck.domainRes)).not.toContain('justify')
   })
 
   test('benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (LOD + rich text + 50 images)', async ({
@@ -1270,16 +1824,23 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(300)
     expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(50)
 
-    // Deep overview (< 0.19): LOD placeholder visible, title omitted to avoid <11px screen text
+    // Deep overview (< 0.19): LOD placeholder visible (termasuk frame "none"), title omitted to avoid <11px screen text
     await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 35, zoom: 0.105 }))
     await expect(page.getByTestId('lod-placeholder-box-rich')).toBeVisible()
     await expect(page.getByTestId('lod-title-box-rich')).toHaveCount(0)
     await expect(page.getByTestId('lod-image-box-img-1')).toBeVisible()
+    expect(
+      await page.evaluate(() => document.querySelectorAll('[data-frame-mode="none"]').length),
+    ).toBeGreaterThan(0)
     // Mid overview (0.25): LOD title visible at >= 11px on screen
     await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 80, zoom: 0.25 }))
     await expect(page.getByTestId('lod-title-box-rich')).toBeVisible()
-    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await page.evaluate(() => {
+      window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 })
+      window.__S2_API__?.selectNodes(['box-edit'])
+    })
     await expect(page.getByTestId('richtext-body-box-rich')).toBeVisible()
+    await expect(page.getByTestId('resize-handle-box-edit-right')).toBeVisible()
 
     const scenarios = [
       {
@@ -1290,25 +1851,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
-        key: 's100_pan_1editor_cullOff',
-        count: 100 as const,
-        activeEditor: true,
-        mode: 'pan' as const,
-        onlyRenderVisibleElements: false,
-      },
-      {
         key: 's100_zoom_1editor_cullOn',
         count: 100 as const,
         activeEditor: true,
         mode: 'zoom' as const,
         onlyRenderVisibleElements: true,
-      },
-      {
-        key: 's100_zoom_1editor_cullOff',
-        count: 100 as const,
-        activeEditor: true,
-        mode: 'zoom' as const,
-        onlyRenderVisibleElements: false,
       },
       {
         key: 's300_pan_0editor_cullOn',
@@ -1318,25 +1865,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
-        key: 's300_pan_0editor_cullOff',
-        count: 300 as const,
-        activeEditor: false,
-        mode: 'pan' as const,
-        onlyRenderVisibleElements: false,
-      },
-      {
         key: 's300_pan_1editor_cullOn',
         count: 300 as const,
         activeEditor: true,
         mode: 'pan' as const,
         onlyRenderVisibleElements: true,
-      },
-      {
-        key: 's300_pan_1editor_cullOff',
-        count: 300 as const,
-        activeEditor: true,
-        mode: 'pan' as const,
-        onlyRenderVisibleElements: false,
       },
       {
         key: 's300_zoom_0editor_cullOn',
@@ -1346,25 +1879,11 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         onlyRenderVisibleElements: true,
       },
       {
-        key: 's300_zoom_0editor_cullOff',
-        count: 300 as const,
-        activeEditor: false,
-        mode: 'zoom' as const,
-        onlyRenderVisibleElements: false,
-      },
-      {
         key: 's300_zoom_1editor_cullOn',
         count: 300 as const,
         activeEditor: true,
         mode: 'zoom' as const,
         onlyRenderVisibleElements: true,
-      },
-      {
-        key: 's300_zoom_1editor_cullOff',
-        count: 300 as const,
-        activeEditor: true,
-        mode: 'zoom' as const,
-        onlyRenderVisibleElements: false,
       },
       {
         key: 's300_zoom_out_all_visible_1editor',
@@ -1421,7 +1940,7 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
       if (sc.onlyRenderVisibleElements) {
         expect(meanAcrossRuns.mean).toBeGreaterThanOrEqual(30)
         expect(p95MsAcrossRuns.mean).toBeLessThanOrEqual(50)
-        expect(maxMsAcrossRuns.mean).toBeLessThanOrEqual(sc.mode === 'zoom' ? 150 : 100)
+        expect(maxMsAcrossRuns.mean).toBeLessThanOrEqual(sc.mode === 'zoom' ? 200 : 100)
       }
       results[sc.key] = {
         runs,

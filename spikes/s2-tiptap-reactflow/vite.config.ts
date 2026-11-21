@@ -11,9 +11,24 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, '../../src'),
     },
   },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom/client',
+      '@xyflow/react',
+      '@tiptap/core',
+      '@tiptap/react',
+      '@tiptap/starter-kit',
+      '@tiptap/static-renderer/pm/react',
+    ],
+  },
   server: {
     host: '127.0.0.1',
     port: 4175,
     strictPort: true,
+    hmr: false,
+    watch: {
+      ignored: ['**/test-results/**', '**/playwright-report/**'],
+    },
   },
 })

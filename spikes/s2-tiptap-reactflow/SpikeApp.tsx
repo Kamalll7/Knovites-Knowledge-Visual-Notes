@@ -12,7 +12,16 @@ import {
   type NodeTypes,
   type Viewport,
 } from '@xyflow/react'
-import { Hand, Image as ImageIcon, MousePointer, RotateCcw, Sun, Moon, Type } from 'lucide-react'
+import {
+  Hand,
+  Image as ImageIcon,
+  Maximize2,
+  MousePointer,
+  RotateCcw,
+  Sun,
+  Moon,
+  Type,
+} from 'lucide-react'
 import {
   memo,
   useCallback,
@@ -26,13 +35,19 @@ import {
 } from 'react'
 import { parseCanvasJson, type CanvasJson, type ParseResult, type TipTapDoc } from '@/domain/schema'
 import { Button } from '@/ui/components/button'
+import { FloatingToolbar } from './FloatingToolbar'
 import { ImageCanvasNode, type ImageBoxNode } from './ImageCanvasNode'
 import {
   computeLodZoomState,
   createPlainParagraphDoc,
   INITIAL_LOD_ZOOM_STATE,
+  isFrameNoneStyle,
+  LOD_ENTER_ZOOM,
   LodZoomContext,
+  sanitizeSpikeDoc,
   type LodZoomState,
+  type ResizeMode,
+  type TextBoxStyle,
 } from './rich-text-config'
 import { TextBoxSurface, TextCanvasNode, type TextBoxNode } from './TextCanvasNode'
 
@@ -49,7 +64,9 @@ interface CanvasSnapshot {
     nodeKind: 'textBox' | 'imageBox'
     doc?: TipTapDoc
     maxHeight?: number
-    frameNone?: boolean
+    style?: TextBoxStyle
+    resizeMode?: ResizeMode
+    textScale?: number
     src?: string
     thumbSrc?: string
     alt?: string
@@ -85,8 +102,6 @@ interface FpsBenchmarkResult {
   activeEditorMinDuringRun: number
 }
 
-import { FloatingToolbar } from './FloatingToolbar'
-
 declare global {
   interface Window {
     __S2_API__?: {
@@ -98,11 +113,17 @@ declare global {
         x: number
         y: number
         width: number
+        height: number | null
+        textScale: number
+        resizeMode: ResizeMode | null
+        style: TextBoxStyle | null
+        frameNone: boolean
         zIndex: number
         doc: TipTapDoc | null
         isEditing: boolean
         selected: boolean
       } | null
+      getActiveEditorJson: () => unknown
       deleteNode: (id: string) => void
       selectNodes: (ids: string[]) => void
       getLodState: () => LodZoomState
@@ -119,10 +140,23 @@ declare global {
         cfg: { draggable?: boolean; dragHandle?: string | undefined },
       ) => void
       setNodeDocForTest: (id: string, doc: TipTapDoc) => void
+      setNodeWidthForTest: (id: string, width: number) => void
       setNodeFrameModeForTest: (id: string, frameNone: boolean) => void
+      setNodeFrameStyleForTest: (id: string, style: TextBoxStyle) => void
+      setNodeResizeModeForTest: (id: string, mode: ResizeMode) => void
+      addTextNodeForTest: (opts: {
+        id: string
+        x: number
+        y: number
+        width: number
+        style?: TextBoxStyle
+        resizeMode?: ResizeMode
+        doc: TipTapDoc
+      }) => void
       setMitigateActiveEditorUnmount: (enabled: boolean) => void
       enterEdit: (id: string) => void
       exitEdit: () => void
+      sanitizeSpikeDoc: (doc: TipTapDoc) => { doc: TipTapDoc; rejectedAlignments: string[] }
       validateWithDomainSchema: (doc: TipTapDoc) => ParseResult<CanvasJson>
       measurePanZoomFps: (opts: FpsBenchmarkOptions) => Promise<FpsBenchmarkResult>
     }
@@ -153,7 +187,7 @@ const SAMPLE_RICH_DOC: TipTapDoc = {
         { type: 'text', text: ' & ' },
         {
           type: 'text',
-          marks: [{ type: 'textStyle', attrs: { color: '#7c9cff', fontSize: '18px' } }],
+          marks: [{ type: 'textStyle', attrs: { color: 'accent', fontSize: '18px' } }],
           text: 'pointer mangling',
         },
         { type: 'text', text: ' ' },
@@ -227,7 +261,9 @@ type NodeSpec =
       y: number
       width: number
       maxHeight?: number
-      frameNone?: boolean
+      style?: TextBoxStyle
+      resizeMode?: ResizeMode
+      textScale?: number
       zIndex: number
       doc: TipTapDoc
     }
@@ -326,7 +362,7 @@ function makeRichBenchmarkDoc(variant: number, index: number): TipTapDoc {
           { type: 'text', text: ' & ' },
           {
             type: 'text',
-            marks: [{ type: 'textStyle', attrs: { color: '#7c9cff', fontSize: '14px' } }],
+            marks: [{ type: 'textStyle', attrs: { color: 'accent', fontSize: '14px' } }],
             text: 'PLT',
           },
           { type: 'text', text: ' via ' },
@@ -365,6 +401,8 @@ function makeRichBenchmarkDoc(variant: number, index: number): TipTapDoc {
 }
 
 function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
+  const { full: sampleUrls, thumb: sampleThumbUrls } = generateLocalSampleBitmaps()
+
   const base: NodeSpec[] = [
     {
       kind: 'textBox',
@@ -373,6 +411,9 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
       y: 90,
       width: 340,
       zIndex: 1,
+      style: { bg: null, border: null },
+      resizeMode: 'reflow',
+      textScale: 1,
       doc: SAMPLE_RICH_DOC,
     },
     {
@@ -383,6 +424,9 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
       width: 320,
       maxHeight: 140,
       zIndex: 2,
+      style: { bg: null, border: null },
+      resizeMode: 'reflow',
+      textScale: 1,
       doc: LONG_SCROLLABLE_DOC,
     },
     {
@@ -392,6 +436,9 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
       y: 480,
       width: 340,
       zIndex: 3,
+      style: { bg: null, border: null },
+      resizeMode: 'reflow',
+      textScale: 1,
       doc: createPlainParagraphDoc('Alpha Bravo Charlie Delta'),
     },
     {
@@ -401,16 +448,32 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
       y: 480,
       width: 320,
       zIndex: 4,
+      style: { bg: null, border: null },
+      resizeMode: 'reflow',
+      textScale: 1,
       doc: createPlainParagraphDoc('Second box (only 1 TipTap instance mounts at a time)'),
     },
   ]
 
-  if (staticCount <= 4) return base
+  if (staticCount <= 4) {
+    base.push({
+      kind: 'imageBox',
+      id: 'box-image',
+      x: 840,
+      y: 90,
+      width: 240,
+      height: 150,
+      zIndex: 5,
+      src: sampleUrls[0]!,
+      thumbSrc: sampleThumbUrls[0]!,
+      alt: 'Sample diagram (aspect-locked resize)',
+    })
+    return base
+  }
 
   const extraTotal = staticCount - base.length
   const targetImages = staticCount === 300 ? 50 : 17
   const cols = 15
-  const { full: sampleUrls, thumb: sampleThumbUrls } = generateLocalSampleBitmaps()
   let imageCount = 0
 
   for (let i = 0; i < extraTotal; i += 1) {
@@ -437,26 +500,36 @@ function buildInitialNodeSpecs(staticCount: 4 | 100 | 300): NodeSpec[] {
         thumbSrc,
         alt: `Benchmark figure #${imageCount}`,
       })
-    } else if (i % 2 === 0) {
-      base.push({
-        kind: 'textBox',
-        id: `box-stress-${i + 1}`,
-        x,
-        y,
-        width: 250,
-        zIndex: 10 + i,
-        doc: makeRichBenchmarkDoc(i % 3 === 0 ? 0 : 1, i + 1),
-      })
     } else {
-      base.push({
-        kind: 'textBox',
-        id: `box-stress-${i + 1}`,
-        x,
-        y,
-        width: 240,
-        zIndex: 10 + i,
-        doc: createPlainParagraphDoc(`Static node #${i + 1}: pure React render`),
-      })
+      const frameStyle: TextBoxStyle =
+        i % 3 === 1 ? { bg: 'none', border: 'none' } : { bg: null, border: null }
+      if (i % 2 === 0) {
+        base.push({
+          kind: 'textBox',
+          id: `box-stress-${i + 1}`,
+          x,
+          y,
+          width: 250,
+          zIndex: 10 + i,
+          style: frameStyle,
+          resizeMode: 'reflow',
+          textScale: 1,
+          doc: makeRichBenchmarkDoc(i % 3 === 0 ? 0 : 1, i + 1),
+        })
+      } else {
+        base.push({
+          kind: 'textBox',
+          id: `box-stress-${i + 1}`,
+          x,
+          y,
+          width: 240,
+          zIndex: 10 + i,
+          style: frameStyle,
+          resizeMode: 'reflow',
+          textScale: 1,
+          doc: createPlainParagraphDoc(`Static node #${i + 1}: pure React render`),
+        })
+      }
     }
   }
   return base
@@ -522,10 +595,14 @@ function FloatingToolbarOverlay({
   editor,
   editingNode,
   stageRef,
+  onToggleFrame,
+  onToggleResizeMode,
 }: {
   editor: Editor
   editingNode: TextBoxNode
   stageRef: RefObject<HTMLElement | null>
+  onToggleFrame: () => void
+  onToggleResizeMode: () => void
 }) {
   const viewport = useViewport()
   const toolbarRef = useRef<HTMLDivElement | null>(null)
@@ -533,10 +610,9 @@ function FloatingToolbarOverlay({
     w: editingNode.data.width,
     h: 120,
   })
-  const [tbSize, setTbSize] = useState<{ w: number; h: number }>({ w: 374, h: 38 })
+  const [tbSize, setTbSize] = useState<{ w: number; h: number }>({ w: 540, h: 38 })
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({ w: 1280, h: 720 })
 
-  // Measure node, toolbar & stage dimensions only when node identity/content changes — never force reflow during pan/zoom
   useLayoutEffect(() => {
     const stageEl = stageRef.current
     if (!stageEl) return
@@ -550,14 +626,24 @@ function FloatingToolbarOverlay({
     if (toolbarRef.current) {
       setTbSize({ w: toolbarRef.current.offsetWidth, h: toolbarRef.current.offsetHeight })
     }
-  }, [editingNode.id, editingNode.data.doc, editingNode.data.width, stageRef])
+  }, [
+    editingNode.id,
+    editingNode.data.doc,
+    editingNode.data.width,
+    editingNode.data.textScale,
+    editingNode.data.style.bg,
+    editingNode.data.style.border,
+    editingNode.data.resizeMode,
+    stageRef,
+  ])
 
   const { w: stageW, h: stageH } = stageSize
   const gap = 10
   const pad = 8
+  const scale = editingNode.data.textScale > 0 ? editingNode.data.textScale : 1
   const cardLeft = viewport.x + editingNode.position.x * viewport.zoom
   const cardTop = viewport.y + editingNode.position.y * viewport.zoom
-  const cardBottom = cardTop + boxSize.h * viewport.zoom
+  const cardBottom = cardTop + boxSize.h * scale * viewport.zoom
 
   const aboveTop = cardTop - Math.round(20 * viewport.zoom) - tbSize.h - gap
   const belowTop = cardBottom + gap
@@ -576,6 +662,11 @@ function FloatingToolbarOverlay({
       editor={editor}
       position={{ left: Math.round(left), top: Math.round(top) }}
       toolbarRef={toolbarRef}
+      nodeStyle={editingNode.data.style}
+      resizeMode={editingNode.data.resizeMode}
+      textScale={scale}
+      onToggleFrame={onToggleFrame}
+      onToggleResizeMode={onToggleResizeMode}
     />
   )
 }
@@ -587,6 +678,11 @@ function SpikeCanvasInner() {
   const [staticCountMode, setStaticCountMode] = useState<4 | 100 | 300>(4)
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null)
+  const activeEditorRef = useRef<Editor | null>(null)
+  useEffect(() => {
+    activeEditorRef.current = activeEditor
+  }, [activeEditor])
+
   const [activeEditorCount, setActiveEditorCount] = useState(0)
   const [onlyRenderVisible, setOnlyRenderVisible] = useState(true)
   const [mitigateActiveEditorUnmount, setMitigateActiveEditorUnmount] = useState(true)
@@ -617,6 +713,7 @@ function SpikeCanvasInner() {
   const editSessionHasNetChangeRef = useRef(false)
   const dragStartSnapshotRef = useRef<CanvasSnapshot | null>(null)
   const resizeStartSnapshotRef = useRef<CanvasSnapshot | null>(null)
+  const resizeHadChangeRef = useRef(false)
 
   const editingNodeIdRef = useRef(editingNodeId)
   useEffect(() => {
@@ -657,7 +754,9 @@ function SpikeCanvasInner() {
               nodeKind: 'textBox',
               doc: structuredClone(n.data.doc),
               maxHeight: n.data.maxHeight,
-              frameNone: n.data.frameNone,
+              style: { ...n.data.style },
+              resizeMode: n.data.resizeMode,
+              textScale: n.data.textScale,
             },
       ),
     }
@@ -676,7 +775,14 @@ function SpikeCanvasInner() {
     onExitEdit: () => void
     onDocChange: (id: string, doc: TipTapDoc, hasNetChange: boolean) => void
     onResizeStart: (id: string) => void
-    onResizeWidth: (id: string, width: number) => void
+    onResizeTextGeometry: (
+      id: string,
+      patch: { width?: number; textScale?: number; x?: number; y?: number },
+    ) => void
+    onResizeImage: (
+      id: string,
+      next: { width: number; height: number; x?: number; y?: number },
+    ) => void
     onResizeEnd: (id: string) => void
     onEditorReady: (id: string, editor: Editor | null) => void
     onEditorMountChange: (instanceId: string, mounted: boolean) => void
@@ -685,7 +791,8 @@ function SpikeCanvasInner() {
     onExitEdit: () => {},
     onDocChange: () => {},
     onResizeStart: () => {},
-    onResizeWidth: () => {},
+    onResizeTextGeometry: () => {},
+    onResizeImage: () => {},
     onResizeEnd: () => {},
     onEditorReady: () => {},
     onEditorMountChange: () => {},
@@ -709,6 +816,9 @@ function SpikeCanvasInner() {
               alt: s.alt,
               width: s.width,
               height: s.height,
+              onResizeStart: (nodeId) => handlersRef.current.onResizeStart(nodeId),
+              onResizeImage: (nodeId, next) => handlersRef.current.onResizeImage(nodeId, next),
+              onResizeEnd: (nodeId) => handlersRef.current.onResizeEnd(nodeId),
             },
           }
         : {
@@ -724,14 +834,17 @@ function SpikeCanvasInner() {
               doc: s.doc,
               width: s.width,
               maxHeight: s.maxHeight,
-              frameNone: s.frameNone,
+              style: s.style ?? { bg: null, border: null },
+              resizeMode: s.resizeMode ?? 'reflow',
+              textScale: s.textScale ?? 1,
               isEditing: false,
               onEnterEdit: (nodeId) => handlersRef.current.onEnterEdit(nodeId),
               onExitEdit: () => handlersRef.current.onExitEdit(),
               onDocChange: (nodeId, doc, hasNetChange) =>
                 handlersRef.current.onDocChange(nodeId, doc, hasNetChange),
               onResizeStart: (nodeId) => handlersRef.current.onResizeStart(nodeId),
-              onResizeWidth: (nodeId, width) => handlersRef.current.onResizeWidth(nodeId, width),
+              onResizeGeometry: (nodeId, patch) =>
+                handlersRef.current.onResizeTextGeometry(nodeId, patch),
               onResizeEnd: (nodeId) => handlersRef.current.onResizeEnd(nodeId),
               onEditorReady: (nodeId, editor) => handlersRef.current.onEditorReady(nodeId, editor),
               onEditorMountChange: (instanceId, mounted) =>
@@ -805,13 +918,53 @@ function SpikeCanvasInner() {
 
   const handleResizeStart = useCallback(() => {
     resizeStartSnapshotRef.current = makeSnapshot(nodesRef.current)
+    resizeHadChangeRef.current = false
   }, [makeSnapshot])
 
-  const handleResizeWidth = useCallback(
-    (id: string, width: number) => {
+  const handleResizeTextGeometry = useCallback(
+    (id: string, patch: { width?: number; textScale?: number; x?: number; y?: number }) => {
+      resizeHadChangeRef.current = true
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== id || n.type !== 'textBox') return n
+          const nextPosition =
+            n.data.resizeMode === 'scale' && (patch.x !== undefined || patch.y !== undefined)
+              ? { x: patch.x ?? n.position.x, y: patch.y ?? n.position.y }
+              : patch.x !== undefined
+                ? { x: patch.x, y: n.position.y }
+                : n.position
+          return {
+            ...n,
+            position: nextPosition,
+            style: undefined,
+            data: {
+              ...n.data,
+              ...(patch.width !== undefined ? { width: patch.width } : {}),
+              ...(patch.textScale !== undefined ? { textScale: patch.textScale } : {}),
+            },
+          }
+        }),
+      )
+    },
+    [setNodes],
+  )
+
+  const handleResizeImage = useCallback(
+    (id: string, next: { width: number; height: number; x?: number; y?: number }) => {
+      resizeHadChangeRef.current = true
       setNodes((prev) =>
         prev.map((n) =>
-          n.id === id && n.type === 'textBox' ? { ...n, data: { ...n.data, width } } : n,
+          n.id === id && n.type === 'imageBox'
+            ? {
+                ...n,
+                position:
+                  next.x !== undefined || next.y !== undefined
+                    ? { x: next.x ?? n.position.x, y: next.y ?? n.position.y }
+                    : n.position,
+                style: undefined,
+                data: { ...n.data, width: next.width, height: next.height },
+              }
+            : n,
         ),
       )
     },
@@ -819,10 +972,11 @@ function SpikeCanvasInner() {
   )
 
   const handleResizeEnd = useCallback(() => {
-    if (resizeStartSnapshotRef.current) {
+    if (resizeStartSnapshotRef.current && resizeHadChangeRef.current) {
       pushUndoSnapshot(resizeStartSnapshotRef.current)
-      resizeStartSnapshotRef.current = null
     }
+    resizeStartSnapshotRef.current = null
+    resizeHadChangeRef.current = false
   }, [pushUndoSnapshot])
 
   const enterEditMode = useCallback(
@@ -833,6 +987,28 @@ function SpikeCanvasInner() {
       editSessionStartRef.current = makeSnapshot(nodesRef.current)
       editSessionHasNetChangeRef.current = false
       setEditingNodeId(id)
+
+      // Keputusan pemilik 2026-11-21: masuk edit dari zoom < ambang LOD otomatis zoom ke tingkat terbaca + pusatkan node
+      const currentVp = reactFlow.getViewport()
+      const targetNode = nodesRef.current.find((n) => n.id === id)
+      if (
+        targetNode &&
+        targetNode.type === 'textBox' &&
+        (lodStateRef.current.isLod || currentVp.zoom < LOD_ENTER_ZOOM)
+      ) {
+        const prefersReduced =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        const scale = targetNode.data.textScale > 0 ? targetNode.data.textScale : 1
+        const visualW = targetNode.data.width * scale
+        const visualH = targetNode.measured?.height ?? 140
+        void reactFlow.setCenter(
+          targetNode.position.x + visualW / 2,
+          targetNode.position.y + visualH / 2,
+          { zoom: 1, duration: prefersReduced ? 0 : 220 },
+        )
+      }
+
       const usePortal = mitigateRef.current
       setNodes((prev) =>
         prev.map((n) =>
@@ -854,7 +1030,7 @@ function SpikeCanvasInner() {
         ),
       )
     },
-    [exitEditMode, makeSnapshot, setNodes],
+    [exitEditMode, makeSnapshot, reactFlow, setNodes],
   )
 
   useEffect(() => {
@@ -863,7 +1039,8 @@ function SpikeCanvasInner() {
       onExitEdit: exitEditMode,
       onDocChange: handleDocChange,
       onResizeStart: handleResizeStart,
-      onResizeWidth: handleResizeWidth,
+      onResizeTextGeometry: handleResizeTextGeometry,
+      onResizeImage: handleResizeImage,
       onResizeEnd: handleResizeEnd,
       onEditorReady: handleEditorReady,
       onEditorMountChange: handleEditorMountChange,
@@ -875,9 +1052,58 @@ function SpikeCanvasInner() {
     handleEditorMountChange,
     handleEditorReady,
     handleResizeEnd,
+    handleResizeImage,
     handleResizeStart,
-    handleResizeWidth,
+    handleResizeTextGeometry,
   ])
+
+  const handleToggleNodeFrame = useCallback(
+    (id: string) => {
+      if (editingNodeIdRef.current === id) {
+        editSessionHasNetChangeRef.current = true
+      } else {
+        pushUndoSnapshot(makeSnapshot(nodesRef.current))
+      }
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== id || n.type !== 'textBox') return n
+          const nextNone = !isFrameNoneStyle(n.data.style)
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              style: nextNone ? { bg: 'none', border: 'none' } : { bg: null, border: null },
+            },
+          }
+        }),
+      )
+    },
+    [makeSnapshot, pushUndoSnapshot, setNodes],
+  )
+
+  const handleToggleNodeResizeMode = useCallback(
+    (id: string) => {
+      if (editingNodeIdRef.current !== id) {
+        pushUndoSnapshot(makeSnapshot(nodesRef.current))
+      } else {
+        editSessionHasNetChangeRef.current = true
+      }
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== id || n.type !== 'textBox') return n
+          const nextMode: ResizeMode = n.data.resizeMode === 'scale' ? 'reflow' : 'scale'
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              resizeMode: nextMode,
+            },
+          }
+        }),
+      )
+    },
+    [makeSnapshot, pushUndoSnapshot, setNodes],
+  )
 
   const handleNodesDelete = useCallback(() => {
     pushUndoSnapshot(makeSnapshot(nodesRef.current))
@@ -938,7 +1164,9 @@ function SpikeCanvasInner() {
                 y: s.y,
                 width: s.width,
                 maxHeight: s.maxHeight,
-                frameNone: s.frameNone,
+                style: s.style ?? { bg: null, border: null },
+                resizeMode: s.resizeMode ?? 'reflow',
+                textScale: s.textScale ?? 1,
                 zIndex: s.zIndex,
                 doc: s.doc ?? createPlainParagraphDoc(''),
               },
@@ -997,18 +1225,21 @@ function SpikeCanvasInner() {
   const measurePanZoomFps = useCallback(
     async ({
       count,
-      activeEditor,
+      activeEditor: useActiveEditor,
       mode,
       onlyRenderVisibleElements = true,
     }: FpsBenchmarkOptions): Promise<FpsBenchmarkResult> => {
       setOnlyRenderVisible(onlyRenderVisibleElements)
       applyNodeDataset(count)
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
-      if (activeEditor) {
+      if (useActiveEditor) {
         enterEditMode('box-edit')
         await new Promise<void>((r) =>
           requestAnimationFrame(() => requestAnimationFrame(() => r())),
         )
+      } else {
+        // Biarkan 1 node tetap terpilih agar 8 handle resize tetap aktif selama pan/zoom
+        setNodes((prev) => prev.map((n) => ({ ...n, selected: n.id === 'box-edit' })))
       }
 
       if (mode === 'zoom-out-all') {
@@ -1062,11 +1293,9 @@ function SpikeCanvasInner() {
             const y = 35 + 6 * Math.sin(angle)
             void reactFlow.setViewport({ x, y, zoom })
           } else if (mode === 'zoom') {
-            // Pure zoom anchored so box-edit remains inside viewport across all zoom levels
             const zoom = 0.72 + 0.36 * Math.sin(angle)
             void reactFlow.setViewport({ x: 20, y: -40, zoom })
           } else {
-            // Pure pan with constant 1.0 zoom across populated rich+image stress grid
             const x = -1500 * Math.sin(progress * Math.PI) + 120 * Math.cos(angle)
             const y = -900 * Math.sin(progress * Math.PI) + 80 * Math.sin(angle)
             void reactFlow.setViewport({ x, y, zoom: 1 })
@@ -1089,7 +1318,7 @@ function SpikeCanvasInner() {
       const maxMs = sorted.length > 0 ? sorted[sorted.length - 1]! : 0
       const res: FpsBenchmarkResult = {
         staticNodes: count,
-        activeEditor,
+        activeEditor: useActiveEditor,
         mode,
         onlyRenderVisibleElements,
         durationMs: Number((prev - start).toFixed(1)),
@@ -1110,7 +1339,7 @@ function SpikeCanvasInner() {
       setLastFpsBench(res)
       return res
     },
-    [applyNodeDataset, enterEditMode, reactFlow],
+    [applyNodeDataset, enterEditMode, reactFlow, setNodes],
   )
 
   useEffect(() => {
@@ -1124,16 +1353,38 @@ function SpikeCanvasInner() {
       getNodeState: (id: string) => {
         const node = nodesRef.current.find((n) => n.id === id)
         if (!node) return null
+        if (node.type === 'imageBox') {
+          return {
+            x: Math.round(node.position.x),
+            y: Math.round(node.position.y),
+            width: node.data.width,
+            height: node.data.height,
+            textScale: 1,
+            resizeMode: 'aspect',
+            style: null,
+            frameNone: false,
+            zIndex: node.zIndex ?? 1,
+            doc: null,
+            isEditing: false,
+            selected: Boolean(node.selected),
+          }
+        }
         return {
           x: Math.round(node.position.x),
           y: Math.round(node.position.y),
           width: node.data.width,
+          height: node.measured?.height ?? null,
+          textScale: node.data.textScale,
+          resizeMode: node.data.resizeMode,
+          style: node.data.style,
+          frameNone: isFrameNoneStyle(node.data.style),
           zIndex: node.zIndex ?? 1,
-          doc: node.type === 'textBox' ? node.data.doc : null,
-          isEditing: node.type === 'textBox' ? node.data.isEditing : false,
+          doc: node.data.doc,
+          isEditing: node.data.isEditing,
           selected: Boolean(node.selected),
         }
       },
+      getActiveEditorJson: () => activeEditorRef.current?.getJSON() ?? null,
       deleteNode: (id: string) => {
         pushUndoSnapshot(makeSnapshot(nodesRef.current))
         if (editingNodeIdRef.current === id) {
@@ -1185,12 +1436,60 @@ function SpikeCanvasInner() {
           ),
         )
       },
+      setNodeWidthForTest: (id: string, width: number) => {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === id && n.type === 'textBox' ? { ...n, data: { ...n.data, width } } : n,
+          ),
+        )
+      },
       setNodeFrameModeForTest: (id: string, frameNone: boolean) => {
         setNodes((prev) =>
           prev.map((n) =>
-            n.id === id && n.type === 'textBox' ? { ...n, data: { ...n.data, frameNone } } : n,
+            n.id === id && n.type === 'textBox'
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    style: frameNone ? { bg: 'none', border: 'none' } : { bg: null, border: null },
+                  },
+                }
+              : n,
           ),
         )
+      },
+      setNodeFrameStyleForTest: (id: string, style: TextBoxStyle) => {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === id && n.type === 'textBox' ? { ...n, data: { ...n.data, style } } : n,
+          ),
+        )
+      },
+      setNodeResizeModeForTest: (id: string, mode: ResizeMode) => {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === id && n.type === 'textBox'
+              ? { ...n, data: { ...n.data, resizeMode: mode } }
+              : n,
+          ),
+        )
+      },
+      addTextNodeForTest: (opts) => {
+        const newNode = buildFlowNodes([
+          {
+            kind: 'textBox',
+            id: opts.id,
+            x: opts.x,
+            y: opts.y,
+            width: opts.width,
+            style: opts.style ?? { bg: null, border: null },
+            resizeMode: opts.resizeMode ?? 'reflow',
+            textScale: 1,
+            zIndex: 99,
+            doc: opts.doc,
+          },
+        ])[0]!
+        setNodes((prev) => [...prev, newNode])
       },
       setMitigateActiveEditorUnmount: (enabled: boolean) => {
         mitigateRef.current = enabled
@@ -1198,6 +1497,7 @@ function SpikeCanvasInner() {
       },
       enterEdit: enterEditMode,
       exitEdit: exitEditMode,
+      sanitizeSpikeDoc,
       validateWithDomainSchema: (doc: TipTapDoc) =>
         parseCanvasJson({
           schema: 1,
@@ -1222,6 +1522,7 @@ function SpikeCanvasInner() {
   }, [
     activeEditorCount,
     applyNodeDataset,
+    buildFlowNodes,
     enterEditMode,
     exitEditMode,
     makeSnapshot,
@@ -1259,8 +1560,13 @@ function SpikeCanvasInner() {
         dragStartSnapshotRef.current = null
       }
       onNodesChange(changes)
+      // Pastikan React Flow tidak mengunci `node.style.width/height` secara paksa di luar state Spike
+      const dimChanges = changes.getByType('dimensions')
+      if (dimChanges.some((c) => c.setAttributes)) {
+        setNodes((prev) => prev.map((n) => (n.style ? { ...n, style: undefined } : n)))
+      }
     },
-    [exitEditMode, makeSnapshot, onNodesChange, pushUndoSnapshot],
+    [exitEditMode, makeSnapshot, onNodesChange, pushUndoSnapshot, setNodes],
   )
 
   const editingTextNode = useMemo(() => {
@@ -1268,6 +1574,13 @@ function SpikeCanvasInner() {
     const found = nodes.find((n) => n.id === editingNodeId && n.type === 'textBox')
     return found?.type === 'textBox' ? found : null
   }, [editingNodeId, nodes])
+
+  const selectedSingleTextNode = useMemo(() => {
+    const selected = nodes.filter((n) => n.selected)
+    if (selected.length !== 1) return null
+    const only = selected[0]!
+    return only.type === 'textBox' ? only : null
+  }, [nodes])
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
@@ -1314,6 +1627,22 @@ function SpikeCanvasInner() {
         </div>
 
         <div className="flex items-center gap-2 text-xs">
+          {selectedSingleTextNode ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="header-resize-mode-toggle"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap"
+              onClick={() => handleToggleNodeResizeMode(selectedSingleTextNode.id)}
+            >
+              <Maximize2 className="size-3.5" />
+              {selectedSingleTextNode.data.resizeMode === 'scale'
+                ? `Mode: Scale (×${Number(selectedSingleTextNode.data.textScale.toFixed(2))})`
+                : 'Mode: Reflow'}
+            </Button>
+          ) : null}
+
           <div className="flex items-center rounded-md border border-border bg-secondary p-0.5">
             {([4, 100, 300] as const).map((cnt) => (
               <button
@@ -1435,6 +1764,8 @@ function SpikeCanvasInner() {
             editor={activeEditor}
             editingNode={editingTextNode}
             stageRef={canvasStageRef}
+            onToggleFrame={() => handleToggleNodeFrame(editingTextNode.id)}
+            onToggleResizeMode={() => handleToggleNodeResizeMode(editingTextNode.id)}
           />
         ) : null}
       </main>
