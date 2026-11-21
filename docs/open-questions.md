@@ -16,16 +16,18 @@ Nama produk sudah ditetapkan: **Knovites (Knowledge Visual Notes)**.
 
 ## Keputusan pemilik (2026-11-21)
 
-Ringkasan keputusan yang diambil pemilik pada 2026-11-21. Detail dan tindak lanjut ada di entri masing-masing di bawah.
+Ringkasan keputusan yang diambil pemilik pada 2026-11-21 (ditetapkan tanpa mengubah makna butir sebelumnya). Detail dan tindak lanjut ada di entri masing-masing di bawah:
 
-- `textAlign`: masuk schema (Opsi 1).
-- Warna teks: token tema semantik (Opsi 1).
+- `textAlign`: masuk schema (Opsi 1 — `left | center | right`, tanpa menulis `attrs: { textAlign: null }`, atribut ekstra `Link` di-strip).
+- Warna teks & highlight: token tema semantik (Opsi 1), lulus WCAG AA di tema dark & light.
 - Frame teks `"none"`: nilai `"none"` pada `style.bg` / `style.border` (Opsi 1), tanpa properti `frame` baru.
-- Blok kode: scroll horizontal (Opsi 2), bukan `pre-wrap`.
-- Edit di zoom `<` ambang LOD: zoom otomatis ke tingkat terbaca (Opsi 1).
-- Peta S3: kapsul berlabel (A), sub-cincin stagger (A), bobot sudut subtree terlihat bottom-up (A).
-- Root virtual punya halaman home.
+- Blok kode: scroll horizontal (Opsi 2 — `white-space: pre; overflow-x: auto`), bukan `pre-wrap`.
+- Edit di zoom `<` ambang LOD: zoom otomatis ke tingkat terbaca dan memusatkan node (Opsi 1).
+- Mode resize teks (keputusan tambahan 2026-11-21): dipilih dengan **gesture** — **handle sudut = `scale` (`textScale`)**, **handle sisi = `reflow`**; toggle per node di prototipe S2b **bukan** desain final.
+- Peta S3: kapsul berlabel adaptif (Opsi A), sub-cincin stagger untuk sibling padat (Opsi A), dan bobot sudut dari subtree yang sedang terlihat secara *bottom-up* (Opsi A).
+- Root virtual punya halaman home (bentuk data menunggu pilihan opsi di bawah).
 - Repo aplikasi publik; hosting ditunda sampai M8.
+- **Status Spike S2:** ditutup pada **2026-11-21** dengan status **`LOLOS BERSYARAT`**; seluruh syarat tersisa untuk implementasi M4 dicatat di bagian **Syarat M4** pada [`docs/plan.md`](plan.md).
 
 ## Catatan temuan agent
 
@@ -105,21 +107,30 @@ Format entri:
 - Rekomendasi: **Opsi 1** — zoom otomatis ke tingkat terbaca saat masuk edit dari mode zoom `<` ambang LOD.
 - Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — saat masuk edit dari zoom `<` ambang LOD, kamera otomatis zoom ke tingkat terbaca. Tindak lanjut M4 T4.4: implementasikan transisi kamera dan perbarui tes (S2b Tes #14 memverifikasi `setCenter` ke `zoom = 1.0`).
 
+### 2026-11-21 — Pemilihan mode resize teks lewat GESTURE: sudut = `scale`, sisi = `reflow` (penutup S2)
+- Task: Spike S2 / M4 (`T4.3`, `FR-CVS-03`, `FR-CVS-06`)
+- Konteks: Prototipe Spike S2b sempat menyediakan tombol toggle `Reflow` / `Scale` per node di toolbar untuk menguji kedua mekanisme secara terpisah.
+- Keputusan: **[Diputuskan pemilik 2026-11-21]** — Mode resize teks dipilih langsung lewat **gesture handle**:
+  - **4 handle sudut** (`top-left`, `top-right`, `bottom-right`, `bottom-left`) = mode **`scale`** (mengubah skala visual teks non-destruktif `textScale` di `[0.5, 3.0]` tanpa menulis ulang `fontSize` dokumen).
+  - **4 handle sisi** (`top`, `right`, `bottom`, `left`; terutama sisi kanan/kiri untuk lebar `w`) = mode **`reflow`** (mengubah lebar kotak teks `w`, baris membungkus ulang, tinggi otomatis).
+  - **Toggle `Reflow` / `Scale` per node di prototipe S2b BUKAN desain final** dan tidak dibawa ke UI M4; M4 mengimplementasikan pemisahan lewat gesture handle di atas.
+- Catatan tindak lanjut M4: tentukan apakah sisi atas/bawah pada node teks tetap disembunyikan atau bertindak netral/`reflow` vertikal bila nanti ada tinggi tetap, dan pastikan `ResizeHandles` di M4 memetakan prop `resizeMode` per handle (sudut vs sisi), bukan per node.
+
 ### 2026-11-21 — Proposal dampak skema, format, FR, UI, & sinkronisasi dua perangkat dari Spike S2b (menunggu persetujuan sebelum M4)
 - Task: Spike S2b (`FR-CVS-01`, `FR-CVS-03`, `FR-CVS-04`, `FR-CVS-05`, `FR-CVS-06`, `FR-CVS-08`, `FR-TXT-01`, `FR-TXT-03`, `FR-TXT-04`, `FR-TXT-06`, `FR-TXT-08`, `FR-IMG-03`, `docs/data-format.md` §5.4)
-- Ringkasan status: seluruh prototipe S2b berada di `spikes/s2-tiptap-reactflow/`; **`src/domain/schema/`, `src/domain/serialize/`, dan `docs/data-format.md` belum diubah** sampai M4 dimulai dan keputusan terbuka di bawah disetujui pemilik.
+- Ringkasan status: **Spike S2 ditutup pada 2026-11-21 (`LOLOS BERSYARAT`)**; prototipe berada di `spikes/s2-tiptap-reactflow/`, syarat tersisa dipindahkan ke `Syarat M4` di [`docs/plan.md`](plan.md), dan **`src/domain/schema/`, `src/domain/serialize/`, serta `docs/data-format.md` belum diubah** sampai M4 dimulai dan keputusan terbuka di bawah disetujui pemilik.
 - Proposal teknis & opsi per komponen (tidak mengunci keputusan yang belum dipilih pemilik):
   1. **`style.bg` / `style.border` (`null | #rrggbb | "none"`, tanpa properti `frame` baru):**
      - `null` = `Auto` (`--surface` / `--border` tema aktif); `"none"` = transparan tanpa latar & tanpa border; toggle `"kotak di belakang teks"` menyetel `bg` dan `border` sekaligus.
      - **[Belum diputuskan]:** apakah `style.bg` / `style.border` juga memakai token tema semantik (atau tetap `#rrggbb` bebas di samping `"none"`). Jika hex tetap diizinkan untuk latar kartu custom (mis. latar terang pada tema dark), token teks terang (`--text-token-*`) bisa turun kontrasnya di atas kartu custom tersebut — opsi mitigasi M4: batasi palet kartu ke token tema atau pasangan kontras adaptif.
-  2. **Geometri teks & `resizePolicy` (`width`, `height`, `heightMode`, `textScale`, `resizeMode`):**
-     - Kontrak konseptual S2b memakai `resizePolicy`: **`text`** (`minW: 160`, `maxW: 1200`, `minScale: 0.5`, `maxScale: 3.0`, mode `reflow` vs `scale`), **`image`** (`minW: 80`, `minH: 60`, `maxW: 2000`, `maxH: 2000`, `keepAspectRatio: true` default + `Shift` bebas), dan **`terminal`** (`minW: 320`, `maxW: 1400`, `minH: 180`, `maxH: 900`, `free`, kontrak dokumen saja — tanpa widget runtime di M4).
-     - **Scale teks non-destruktif (`textScale`):** `textScale` di `[0.5, 3.0]` menskalakan kartu secara visual (`transform: scale(textScale)`) tanpa menulis ulang atribut `fontSize` tiap run ProseMirror di `content`. Untuk mode `reflow`, tinggi tetap otomatis (`heightMode: "auto"`, tidak menulis `h` pada elemen teks jika memakai aturan §5.4 saat ini, atau meninjau apakah `heightMode: "fixed"` dibutuhkan nanti bila kotak teks boleh dikunci tingginya secara manual).
-     - **[Keputusan menunggu pemilik — UX toggle vs gestur untuk mode `reflow`/`scale`]:**
-       - *(Opsi A — `[Rekomendasi]` awal di S2b):* **Toggle eksplisit (`Reflow` / `Scale`) di toolbar floating** (dan pilihan aktif node) agar pengguna punya kendali jelas apakah sudut mengulang tata letak paragraf atau memperbesar blok teks. *Pro:* prediktif di semua 8 handle, tidak ada kejutan tidak sengaja saat menyeret sudut. *Kontra:* satu klik tambahan saat ingin berganti perilaku.
-       - *(Opsi B):* **Pemisahan berbasis gestur/handle** (sisi kiri/kanan = selalu `reflow`, 4 sudut = selalu `scale`, atau modifier `Alt`/`Shift` saat drag sudut). *Pro:* lebih cepat tanpa pindah mode di toolbar. *Kontra:* sudut sering ditarik pengguna untuk "sekadar melebar + merapikan", sehingga otomatis masuk `scale` dapat membingungkan dan memerlukan pembatalan/reset scale yang jelas; selain itu `Shift` di S2b/Spec (`FR-CVS-03`) sudah dipakai untuk toggle rasio gambar.
-     - **[Keputusan menunggu pemilik — Tampilan ukuran font di toolbar saat `textScale !== 1`]:**
-       - Saat kartu di-scale (`textScale != 1`, mis. `1.5x` dengan teks dokumen dasar `16 px`), ukuran efektif di kanvas (zoom `1.0`) menjadi `24 px`. Toolbar S2b menampilkan **`base` + indikator efektif `(24px)`** (`[Rekomendasi]`) agar pengguna memahami mengapa angka di dokumen tetap `16` sementara tampilan lebih besar, sekaligus menghindari kebingungan dengan perubahan `fontSize` per-span di dalam dokumen.
+  2. **Geometri teks & `resizePolicy` (`width`, `height`, `heightMode`, `textScale`):**
+     - Kontrak konseptual S2b memakai `resizePolicy`: **`text`** (`minW: 160`, `maxW: 1200`, `minScale: 0.5`, `maxScale: 3.0`), **`image`** (`minW: 80`, `minH: 60`, `maxW: 2000`, `maxH: 2000`, `FR-CVS-03`), dan **`terminal`** (`minW: 320`, `maxW: 1400`, `minH: 180`, `maxH: 900`, `free`, kontrak dokumen saja — tanpa widget runtime di M4).
+     - Pemisahan `reflow` vs `scale` pada teks sudah **`[Diputuskan pemilik 2026-11-21]`** memakai **gesture** (handle sisi = `reflow`, handle sudut = `scale` via `textScale` `[0.5, 3.0]` tanpa mengubah `fontSize` dokumen; toggle di S2b hanya prototipe). Tinggi kotak tetap otomatis (`Auto`).
+     - **[Keputusan menunggu pemilik — Arah modifier `Shift` pada resize gambar (`FR-CVS-03`):**
+       - Kebiasaan aplikasi desain umum (Figma/Canva) membiarkan **sisi bebas / atau sudut kunci vs `Shift` mengunci rasio**, sedangkan `spec-canvas.md` §6.4 (`FR-CVS-03`) & prototipe S2b mengunci rasio secara default dan **`Shift` membuka kunci rasio** (`keepAspectRatio: true`, tahan `Shift` = bebas). Pemilik perlu mengonfirmasi apakah tetap `Shift` membuka kunci (PRD) atau `Shift` mengunci.
+     - **[Rekomendasi, belum diputuskan] — Batas zoom minimum saat masuk edit & tampilan ukuran font di toolbar:**
+       - *(Zoom edit):* rekomendasikan menaikkan zoom minimum masuk edit ke sekitar **`0.7`** (font dasar `16 px` baru terbaca `>= 11 px` di zoom `~0.69`), tidak hanya saat zoom di bawah ambang LOD `0.32`.
+       - *(Toolbar `textScale`):* saat kartu memiliki `textScale !== 1` (mis. `1.5x` dengan teks dokumen dasar `16 px`), tampilkan **`base` + indikator efektif `(24px)`** agar jelas bagi pengguna.
   3. **Token warna semantik (`accent`, `warning`, `success`, `danger`, `violet`), `Highlight`, & perilaku paste hex (`[Rekomendasi]`):**
      - Di S2b seluruh 5 token warna teks dan 4 pasangan `Highlight` (`warning`, `success`, `accent`, `danger`) terukur `>= 4.5:1` WCAG AA pada tema dark maupun light, baik pada kartu `Auto` maupun `frame: "none"`.
      - **[Rekomendasi — belum diputuskan pemilik] Perlakuan `#rrggbb` saat paste HTML/rich-text:**
@@ -143,12 +154,38 @@ Format entri:
   3. **Formula bobot sudut (`FR-MAP-03`):** *(Opsi A — **rekomendasi**)* akumulasi subtree yang **sedang terlihat** (*bottom-up*) + boost kecil jalur fokus & koefisien tersembunyi `0.35 * log2(1 + hidden)` vs *(Opsi B)* formula PRD awal `1 + 0.5 * log2(1 + hidden + visible)`.
 - Status: **[Diputuskan pemilik 2026-11-21: Opsi A untuk ketiganya]** — (1) kapsul berlabel adaptif, (2) sub-cincin stagger, (3) bobot sudut dari subtree yang sedang terlihat (bottom-up). Berlaku sebagai dasar M3 T3.2/T3.4; syarat M3 lain di `plan.md` dan `docs/spikes/s3-radial.md` tetap berlaku.
 
-### 2026-11-21 — Bentuk data halaman home root virtual (dari keputusan pemilik)
-- Task: M3 / `data-format.md` §5.1 (belum dicek terhadap isi berkas)
-- Masalah atau ambiguitas: Pemilik memutuskan bahwa root virtual punya halaman catatan sendiri (home). Root saat ini virtual, yaitu bukan node berfolder, sehingga belum jelas di mana kanvas dan isi halaman home disimpan, bagaimana id dan path-nya, dan bagaimana ia memengaruhi peta, pencarian, serta undo/hapus.
-- Opsi yang dipertimbangkan: belum ada; agent diminta menyusun opsi (mis. folder khusus di repo knowledge, atau node nyata di bawah root) beserta dampaknya ke §5.1, skema, `buildTree`, dan M2 (Dexie).
-- Keputusan sementara (opsi paling sederhana): belum ditetapkan.
-- Perlu keputusan pemilik: ya (setelah agent menyusun opsi, sebelum M3 dikunci).
+### 2026-11-21 — Bentuk data halaman home root (dari keputusan pemilik: root punya halaman home)
+- Task: M3 / M4 / M6 (`data-format.md` §5.1, §5.3, §5.4, §5.9; `FR-MAP-01`, `FR-PAGE`, `FR-NODE`, `FR-SRC-01`, `FR-LNK`, `FR-SYNC`)
+- Masalah atau ambiguitas: Pemilik memutuskan bahwa root virtual punya halaman catatan sendiri (*home*). Saat ini `data-format.md` §5.1 mendefinisikan akar repo (`knowledge-repo/`) hanya berisi `knovites.json` + folder node tingkat atas (`<slug>/node.json`), tanpa halaman/kanvas di root. Perubahan menyentuh aturan `buildTree`, Dexie, pencegahan hapus root, pencarian, link silang, sync GitHub, dan migrasi repo v1.
+- Opsi bentuk data dan lokasi:
+
+  1. **Opsi 1 — Kanvas akar langsung di root repo (`canvas.json` + `assets/` sejajar `knovites.json`), ID internal/domain tetap `__root__` (atau `rootCanvasId`), tanpa `node.json` di root:**
+     - *Bentuk repo:* `knowledge-repo/knovites.json`, opsional `knowledge-repo/canvas.json`, opsional `knowledge-repo/assets/*` untuk gambar di halaman home, sementara folder anak tingkat atas tetap `knowledge-repo/<slug>/node.json`.
+     - *Dampak `data-format.md` §5.1 & §5.9:* §5.1 diperbarui mengizinkan `canvas.json` & `assets/` langsung di root (namun `assets` tetap slug terlarang untuk sub-node); §5.9 tetap memakai tabel `canvases` (`nodeId = '__root__'` dan `path = ''` atau `'canvas.json'`) serta `assets` (`nodeId = '__root__'`).
+     - *Dampak skema Zod:* `knovites.json` dan `canvas.json` v1/v2 tetap valid tanpa membutuhkan `node.json` palsu di root (bila ditambah, `knovites.json` hanya membaca metadata judul atau tetap v1 aditif).
+     - *Dampak `buildTree` (`src/domain/tree/`):* aturan *"folder tanpa parent `node.json` = orphan"* **tidak rusak**, karena subfolder anak tingkat atas memang punya `parentId: null`; cukup memindai opsional `canvas.json` & `assets/` di root sebagai milik node virtual/home tanpa mencampurkannya ke `extraFiles` anak.
+     - *Dampak Dexie & `basePath` (`M2`):* perlu dukungan `canvases` dan `assets` dengan `nodeId = '__root__'` (atau `null` tidak bisa jadi PK, pakai konstanta kanonik `'__root__'`) serta kesepakatan `basePath = ''` untuk folder root (perhatikan `resolveParentPath` & penghitung `path` di `src/storage/repository.ts` saat path relatif ke file git adalah `'canvas.json'` dan `'assets/<hash>.<ext>'`, bukan `'<path>/canvas.json'`).
+     - *Dampak undo / hapus (`FR-NODE-05`):* `__root__` tidak ada di `tree.nodes` sebagai folder yang bisa dihapus, dipindah, atau di-rename foldernya; tombol hapus/move nonaktif atau ditolak pada operasi pohon (`reason: 'cannot_delete_root'`). Isi kanvas home tetap punya Undo kanvas (`Ctrl+Z`, `FR-CVS-06`).
+     - *Dampak peta (`M3`), navigasi, & pencarian (`FR-SRC-01`):* pusat peta (`__root__`) membuka rute `/home` atau `/n/__root__` (alias bersih, mis. `#/home` atau klik ganda node pusat di `#/`); indexer pencarian mengindeks teks `canvas.json` milik `'__root__'` bersama judul `knovites.json`; tautan silang keluar (`node.links`) & tag di halaman home **tidak ada** kecuali `knovites.json` diperluas, tetapi *mention* `[[` / link ke sub-node tetap bekerja.
+     - *Dampak sync (`Prasyarat M6`):* `collectDirtyFiles` & planner M6 mengenali `path = 'canvas.json'` dan `'assets/...'`; inisialisasi repo kosong dapat membuat `knovites.json` saja (halaman home dibuat *lazy* saat pertama kali diisi).
+     - *Dampak migrasi repo v1 & tes:* **0 breaking change** pada repo v1 yang belum punya `canvas.json` di root (otomatis dianggap halaman home kosong); tambah unit test `buildTree`, `storage` (`nodeId = '__root__'`, `path = ''` vs `'canvas.json'`), sync path root, dan e2e klik-dua-kali node pusat di peta.
+
+  2. **Opsi 2 — Folder berslug cadangan khusus di bawah root (mis. `knowledge-repo/_home/` berisi `node.json` + `canvas.json` + `assets/` atau `canvas.json` saja):**
+     - *Bentuk repo:* anak khusus di bawah root dengan slug terlarang/cadangan seperti `_home/` (harus diawali karakter non-slug normal seperti `_` agar tidak bentrok dengan catatan user berjudul `"Home"` -> `home/`).
+     - *Dampak `data-format.md` §5.1 & §5.9:* harus menambah slug cadangan baru ke daftar terlarang §5.1 dan mendefinisikan perilaku folder khusus yang tidak tampil sebagai cabang anak di peta. §5.9 tidak perlu penanganan `path = ''` khusus karena memakai folder nyata `_home/`.
+     - *Dampak skema Zod & `buildTree`:* `slugify` memang tidak menghasilkan awalan `_`, jadi `_home` aman dari bentrok slug baru, tetapi `buildTree` harus memisahkan entri `_home/` dari `tree.rootIds` agar tidak digambar ganda (di pusat peta sekaligus di cincin depth 1), serta menangani repo lama atau manual user yang mengedit/menghapus folder `_home/`. Jika hanya berisi `canvas.json` tanpa `node.json`, melanggar aturan §5.1 *"Folder adalah node jika dan hanya jika berisi `node.json`"* dan ditandai `missing_parent_ignored`.
+     - *Dampak Dexie & `basePath`:* mudah di `repository.ts` karena memakai `path = '_home'`, namun butuh guard khusus agar `_home` tidak ikut terhitung di total anak root / badge jumlah turunan / outline tree.
+     - *Dampak undo / hapus / pindah / sync / migrasi:* seluruh operasi `renameNode` (ubah slug?), `moveNode`, `deleteNode`, dan `buildTree` perlu pengecualian khusus agar `_home` tidak pernah dipindah ke bawah node lain, tidak ikut `delete`, dan tidak menimpa `knovites.json.title`. Repo v1 yang belum punya `_home/` harus membuat folder baru di commit pertama atau mengemulasi kosong sampai diedit; rawan membingungkan pengguna saat menelusuri repo GitHub langsung (ada folder sistem tersembunyi `_home` sementara root sendiri punya `knovites.json`).
+
+  3. **Opsi 3 — Mengubah root menjadi node nyata penuh (`node.json` + `canvas.json` + `assets/` langsung di akar `knowledge-repo/`):**
+     - *Bentuk repo:* `knowledge-repo/` sendiri memiliki `node.json` (ULID tetap, `order: 'a0'`), `canvas.json`, dan `assets/`, di samping `knovites.json` (atau `knovites.json` menyatu / `title` disinkronkan).
+     - *Dampak `data-format.md` §5.1 & §5.9:* **perubahan besar** pada kontrak §5.1 & §5.3 (`schema: 2`, migrasi wajib); root tidak lagi virtual melainkan node dengan folder `path = ''`. Duplikasi makna `title` antara `knovites.json.title` dan `node.json.title` akar harus diselesaikan.
+     - *Dampak skema Zod & `buildTree`:* `buildTree` harus dirombak agar entri `path: ''` (root) sah memiliki `node.json`, padahal selama ini root dirangkai lewat `parentId: null` dan `resolveParentPath` memakai pemisah `/`; selain itu `rootIds` berubah menjadi 1 ID tunggal (atau memisahkan children root dengan cara baru) dan seluruh invariant test M1/M2 yang mengasumsikan `node.path` non-kosong (`/^[a-z0-9-]+...$/`) harus ditulis ulang.
+     - *Dampak Dexie & `basePath`:* banyak fungsi `repository.ts` membentuk path file anak dari `${nodePath}/canvas.json` dan `${nodePath}/assets/...` — pada `path === ''` hal ini menghasilkan `'/canvas.json'` (slash awal yang ditolak Git Data API GitHub!) kecuali setiap titik ditulis ulang bercabang khusus `nodePath ? `${nodePath}/...` : '...'`.
+     - *Dampak undo / hapus / peta / pencarian / sync / migrasi:* kelebihan satu-satunya adalah halaman home mendapat fitur `node.json` penuh (tag, status, `links` langsung di root) dengan ID ULID seragam; namun kekurangannya besar: butuh migrasi repo v1 untuk membuat `node.json` root deterministik (berisiko konflik jika dua perangkat offline memigrasi repo v1 dengan ULID root berbeda!).
+
+- **Rekomendasi (`[Rekomendasi]`):** **Opsi 1** (halaman home disimpan sebagai `canvas.json` + `assets/` opsional langsung di akar `knowledge-repo/` sejajar `knovites.json`, dengan ID kanonik internal tetap e.g. `'__root__'` — dan jika nanti membutuhkan `tags`/`links` di root, cukup tambahkan opsional di `knovites.json` alih-alih `node.json` terpisah). *Alasan:* (1) 100% kompatibel mundur dengan repo v1 (nol migrasi ULID dua perangkat yang rawan konflik); (2) tidak ada folder sistem tersembunyi `_home` yang melanggar aturan folder §5.1; (3) `tree.nodes`, `rootIds`, dan aturan *missing parent* di `domain/tree` tetap utuh; (4) jalur file Git root (`'canvas.json'`, `'assets/...'`) dapat ditangani lewat satu helper `resolveCanvasFilePath(nodePath)` & `resolveAssetFilePath(nodePath, asset)` yang bersih.
+- **Status:** **`[Keputusan menunggu pemilik]`** (memilih Opsi 1, 2, atau 3 sebelum M3/M4 implementasi halaman home dimulai; **jangan** mengubah schema atau kode sekarang).
 
 ### 2026-11-18 — Detail aturan skema & sanitizer TipTap (`T1.1`)
 - Task: T1.1 / `data-format.md` §5.3–§5.4
