@@ -291,7 +291,193 @@ function assertRadialInvariants(layout: RadialLayoutResult): void {
   }
 }
 
+const GOLDEN_RADIAL_SHA256: Readonly<Record<string, string>> = {
+  'unbalanced150:root:t1:s1': '85878e25389bc9ee986ae63ba307ff5613132b030803eb36426a97a996c80bd0',
+  'unbalanced150:root:t2:s1': '52c21eb3d21a1b5a2d2b1d950f8c03f58cdfb38cb7fdf4944a0305bad08602ab',
+  'unbalanced150:root:t0:s0.85': '8b0fc8e0704cc033333a3fc846f4f88f6c015f94a71e116ed77021357baa7975',
+  'unbalanced150:root:t0:s0.35': '20ff2fc56c16ac7744ca689d4d62e7239025daa7c1606c1d2e43063373124356',
+  'unbalanced150:middle:t1:s1': '18f92442c8362115c66821fc2bb9408b8ee86449dc8146f86c7d41e2d56680f9',
+  'unbalanced150:middle:t2:s1': '650f56d25f96078af5f1c24d7c81e67b6ce8feea92295195ad33e289e18f9d68',
+  'unbalanced150:middle:t0:s0.85':
+    '2cfe9d9617837eaad2ef0227c834126ee66af6ad94ee437a9ce677ee2a7ecf8e',
+  'unbalanced150:middle:t0:s0.35':
+    'ef0dc509de02fe8f0dd5eec8d400e5bc8bb07de452169dc8bd7501788b0f5b8d',
+  'unbalanced150:leaf:t1:s1': '3b12f48db3d9dab53b273ac129f31b2150e8aca3ee47e8ce5a2ba995b974d998',
+  'unbalanced150:leaf:t2:s1': '653dd5554dcbf5f0c12c538c49cae5c405d49214b87975a82828e579efe3f5c2',
+  'unbalanced150:leaf:t0:s0.85': 'de3bad5d36edf789b44d757a8dfeb89ec778e7c95b925f6848975a16ae05410f',
+  'unbalanced150:leaf:t0:s0.35': '3facf7cefb8e5bf40e3da0921bd4b8d9ffe732126b7462cdca95d67dd4967e20',
+  'unbalanced150:withChildren:t1:s1':
+    '889324f53a16f4c412ad8cf599598e072f4d52326b55b90e92a0e5f8571c3e33',
+  'unbalanced150:withChildren:t2:s1':
+    'eef96a5a132c88274fd958c8498822bc7c3015bfda452cb4bac7a8c903021520',
+  'unbalanced150:withChildren:t0:s0.85':
+    '1e6e6c4da64665837f42748cce76b8a2e63ff87a3c3531fca7618ef26694c449',
+  'unbalanced150:withChildren:t0:s0.35':
+    '563333e964a42085ef2b11c7a253ddd3fd94e20c2347d56d388b9f1a120a717f',
+  'wide60Children:root:t1:s1': 'a7b0c968cfa6f940ce2c00fb56e58251ad17672250cb6481091e16d2be3d16bf',
+  'wide60Children:root:t2:s1': '5e244d5ba9bb4e6cb10f1e5772fb7930087526448942c018b2f3f743bc370297',
+  'wide60Children:root:t0:s0.85':
+    'd13132c75cf6c8e6f0e769b4c67215a33c6d3bef9461fe185d4d80d198e7e5dd',
+  'wide60Children:root:t0:s0.35':
+    'bd6364abdef69c51a6ca350d73c32012a81fe2c2773d4fa99216d8f04ec2e39e',
+  'wide60Children:middle:t1:s1': '19d7d6853c159bcf15b0a6fb895d92f546a6255ae3a337b22052aa8639fba4f1',
+  'wide60Children:middle:t2:s1': '5ccd2f877b60457cf759db017fca6eb15398e0cd18be9e10fb85793ff5c911af',
+  'wide60Children:middle:t0:s0.85':
+    '779b4a95f02cdf7c112414bac651a07aabcad988a83b8a68fc5ee250a507b250',
+  'wide60Children:middle:t0:s0.35':
+    '7f9dc0785915ae8a48d728723db0fb560647021f88f50af7d11bfaad4f9fb093',
+  'wide60Children:leaf:t1:s1': 'e22f8d490e178ea948afe08eb56534b42c99427ff48b5184a077b0d56e27fe51',
+  'wide60Children:leaf:t2:s1': '21125476c747296bf579ca68804b375af3e14b6b64702b9391246260305bc2b8',
+  'wide60Children:leaf:t0:s0.85':
+    '305c42bd171c84bea7bd797e3e1053c219c5f5490b0c541aa707203ce111369d',
+  'wide60Children:leaf:t0:s0.35':
+    'a33a0ee0506dec88bf20b07f8dec0c47670e1849dbf4370dda95b66d65b082e3',
+  'wide60Children:withChildren:t1:s1':
+    '12abc3bdeff96905c9deba28c671f7a5c62b8de83eb1db70af382efcac5e8c08',
+  'wide60Children:withChildren:t2:s1':
+    '15d101b21f4fae5f2b4759df04a349d438e17f45df6f13b6e8914fc4963a6c60',
+  'wide60Children:withChildren:t0:s0.85':
+    '58cb868f798d534432730d9060151e74806c73709b06284d1fe34258abfe5da1',
+  'wide60Children:withChildren:t0:s0.35':
+    '75d9b00ea17f1be6da39b144ce570fbcc3a13d30d39c1d2bb66fe7c03750963b',
+  'chainDepth12:root:t1:s1': 'f046e7fbcc7e28272ca4857cfad4f88ad96aff6d496644854fa0ae841ea501b3',
+  'chainDepth12:root:t2:s1': 'c26ad401470a976b7ff7eeec9ef03d9dd4133eeb29a098401bc2d83d5ba60a63',
+  'chainDepth12:root:t0:s0.85': '85520764f624b762bd2408ece33922ac5b6af3e2032d3e2ddedc2537fe9e7d4a',
+  'chainDepth12:root:t0:s0.35': '1a685a66d74ce9ce24fbb994d7b79f325106276b1b1194c42a1ce166e4c1f974',
+  'chainDepth12:middle:t1:s1': '88862eee46b3fc8eaa45a0e3d7797597a1b8a3290463bba72d8d7307d22bac99',
+  'chainDepth12:middle:t2:s1': '43a6e6bf9201b1f33178f3615c73cf5b93a6d3b5ea0d72bfb8fa5e06e31ddf3e',
+  'chainDepth12:middle:t0:s0.85':
+    '6d77ba909a295004a8d783773a83c17e7534ba328a659b3670808997df54359a',
+  'chainDepth12:middle:t0:s0.35':
+    '15c989642454f8805acd7eac02822f059181fae3a68e971d5b23bb26e48aba06',
+  'chainDepth12:leaf:t1:s1': '9645844be7332b21cb41f51850adf69aec8fa4c90f81767d090ca32330d372c8',
+  'chainDepth12:leaf:t2:s1': '6a91ed04539f3dd1b714bc59da0d0a40ee3a7516a0fb32a17b3a51a1f28272b9',
+  'chainDepth12:leaf:t0:s0.85': '71e965f592b96a1be77b88e6cf2c37ac64613b3352f5d35cb57b7788ee727f73',
+  'chainDepth12:leaf:t0:s0.35': '342de8800783ba5f56b60669a5fd865edd003c0c11f335853b23c051944d4927',
+  'chainDepth12:withChildren:t1:s1':
+    '1139287cb178f77321512565416e8a9b30c823bae0ec203edef6e9fed36bf21f',
+  'chainDepth12:withChildren:t2:s1':
+    '8fcb943cd89562c37de1e2f67f8baf1f8d0a0ebd1ab2da7da543e02344b52655',
+  'chainDepth12:withChildren:t0:s0.85':
+    '6d69d9bbc46d95eabc8e9d230e725f89383aa4fa300b4ad2a211a4f485334002',
+  'chainDepth12:withChildren:t0:s0.35':
+    'c0dc4c0438390b19a73582ad1a96302305af2191b024da5115bbc9d0eb66b054',
+  'root20Children:root:t1:s1': '7afca6e7769d60feea16b78bb57e08e0aa5f33328f36b3e2f78fcf8ff931e6ee',
+  'root20Children:root:t2:s1': 'c4f7186fb90411dab403f9a4e44069c206cdbad84f7dc63ad9ab1030c0942cd5',
+  'root20Children:root:t0:s0.85':
+    'fbe6a0ca8bd25e70b3c1e71ef45999b61725182844932e27ba0e3b04bb696127',
+  'root20Children:root:t0:s0.35':
+    '3b08075a3ceb658e270c5976bb2cacdfb4414a7a23041a319952fada8ce59fd4',
+  'root20Children:middle:t1:s1': '2b3a373f2e73f7eca274a8462eba2f190d27c992dde95fd71dc7572006ae66a7',
+  'root20Children:middle:t2:s1': '32caecef674bb6210f1a570bc80955ee0b07f264ccc3c27e1c58397fd4021f4b',
+  'root20Children:middle:t0:s0.85':
+    'b17e8d182ed234787c8ad4fd229fd1943fc3b12d7ce0bfd43cea3c97b7f86088',
+  'root20Children:middle:t0:s0.35':
+    'fc86fd23ffd5d854873f40dfb6300b21196581c6e709c01ed1ccc8b7d2044fd4',
+  'root20Children:leaf:t1:s1': '5c23ae5a277039b9c965f489b8677ab6aa938770fc347318a0586f4010cab427',
+  'root20Children:leaf:t2:s1': 'deb7f6ad472f7559d6d08a4c751127f9418ab54f389695eeeaa8c03339c3f995',
+  'root20Children:leaf:t0:s0.85':
+    'fc92956a79a054b61b894990329a7e61493f8a66bd80cd8bb9b0920637777455',
+  'root20Children:leaf:t0:s0.35':
+    '51ad212cf08acb071072f0d273b793c5663696f62971852298d71b66695b9088',
+  'root20Children:withChildren:t1:s1':
+    '7afca6e7769d60feea16b78bb57e08e0aa5f33328f36b3e2f78fcf8ff931e6ee',
+  'root20Children:withChildren:t2:s1':
+    'c4f7186fb90411dab403f9a4e44069c206cdbad84f7dc63ad9ab1030c0942cd5',
+  'root20Children:withChildren:t0:s0.85':
+    'fbe6a0ca8bd25e70b3c1e71ef45999b61725182844932e27ba0e3b04bb696127',
+  'root20Children:withChildren:t0:s0.35':
+    '3b08075a3ceb658e270c5976bb2cacdfb4414a7a23041a319952fada8ce59fd4',
+  'large2000:root:t1:s1': '4a61089e1065ebae633cb989a6df4aaa7a2de153b93bcaea3352f41ec4dc348e',
+  'large2000:root:t2:s1': 'd23a803853346c23e9db3293803509801e03a289b0f90e323f527063d309e53f',
+  'large2000:root:t0:s0.85': '0a6fb46c64050dab7aedd8a40c6c78eff93eb0192535fcfe37f7a67719d0956e',
+  'large2000:root:t0:s0.35': 'd32e82c9ad4be9a1282d5ba12af017e2e5d52a2ac9a22eaceeeca4823e344f0d',
+  'large2000:middle:t1:s1': '04c9f7ed8c0b2d3933dc3f92fb6f5ccf313bbf6a27ec42472e8b24a3b194db50',
+  'large2000:middle:t2:s1': '0c629ec46f75974289800bf2dad65278225b990fa5df845889be061ee9a37a3d',
+  'large2000:middle:t0:s0.85': '2f9571ca8b991b89282e763a021bcfb200fd38ce35c1cb290a1f64cca7049fe4',
+  'large2000:middle:t0:s0.35': '03886af9c43f45f0c4c36ea0146f91bac15c5c932563be37a017ec0485319b75',
+  'large2000:leaf:t1:s1': '53a1deab8027f7542f31b85b488f99a40b60f3fffa953e97b0842c0476d77d98',
+  'large2000:leaf:t2:s1': 'b97ba9680f7d88ae3c922bca54682f24aaff22569b7ba707457b4ca8ba69fa56',
+  'large2000:leaf:t0:s0.85': '56ef035262daecf8fd2eaa054662f04bb67ae6ca75c21a9c588390d4cc3230a1',
+  'large2000:leaf:t0:s0.35': '54914925ea0b52318351039a4cc98af212a86bbd21ca4a2ce4416f0d88a0441b',
+  'large2000:withChildren:t1:s1':
+    '88c2752530656d8330f08be4c272007263a0bb12bcb9f18461ab0427b867ebfa',
+  'large2000:withChildren:t2:s1':
+    '507d271717680b79e09873089c5cadfc6de815b675a9ad9a239bbe38ff696e8e',
+  'large2000:withChildren:t0:s0.85':
+    'a267dfb4b79a5e21910c4dba55211b2fb0736803c7ddb1929d7ce89f8aa82209',
+  'large2000:withChildren:t0:s0.35':
+    'e2d20743dd38a80e7cc5774722a4be94f1e1f6f0fa152cdf5516b3564ab9d86b',
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text)
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 describe('computeRadialLayout (FR-MAP-03)', () => {
+  it('matches pre-refactor golden SHA-256 hashes across all 5 mandatory datasets, focuses, tiers, and scales', async () => {
+    const { createMandatoryDatasets } = await import('@/domain/datasets')
+    const datasets = Object.values(createMandatoryDatasets())
+    expect(datasets).toHaveLength(5)
+
+    let checked = 0
+    for (const ds of datasets) {
+      const { state: tree } = buildTree(ds.entries)
+      const middleId = ds.entries[Math.floor(ds.entries.length / 2)]?.node?.id ?? MAP_ROOT_ID
+      let leafId = ds.entries[ds.entries.length - 1]?.node?.id ?? MAP_ROOT_ID
+      for (const e of ds.entries) {
+        const id = e.node?.id
+        if (id && (tree.nodes[id]?.childrenIds.length ?? 0) === 0) {
+          leafId = id
+          break
+        }
+      }
+      let withChildrenId = MAP_ROOT_ID
+      let maxChildren = 0
+      for (const n of Object.values(tree.nodes)) {
+        if (n.childrenIds.length > maxChildren) {
+          maxChildren = n.childrenIds.length
+          withChildrenId = n.id
+        }
+      }
+
+      const focuses = {
+        root: MAP_ROOT_ID,
+        middle: middleId,
+        leaf: leafId,
+        withChildren: withChildrenId,
+      }
+      for (const [focusKind, focusId] of Object.entries(focuses)) {
+        for (const [scale, tier] of [
+          [1, 1] as const,
+          [1, 2] as const,
+          [0.85, 0] as const,
+          [0.35, 0] as const,
+        ]) {
+          const visible = computeVisible({
+            tree,
+            rootTitle: ds.manifest.title,
+            focusId,
+            zoomTier: tier,
+          })
+          const layout = computeRadialLayout({
+            visible,
+            measureText: fixedWidthMeasure(7.5),
+            scale,
+            tier,
+          })
+          const key = `${ds.id}:${focusKind}:t${tier}:s${scale}`
+          const actualHash = await sha256Hex(JSON.stringify(layout))
+          expect(actualHash, `golden hash mismatch for ${key}`).toBe(GOLDEN_RADIAL_SHA256[key])
+          checked += 1
+        }
+      }
+    }
+    expect(checked).toBe(80)
+  })
+
   it('enforces exact stagger thresholds at >= 12 (2 rings) and >= 34 (3 rings)', () => {
     const s11 = computeRadialLayout({
       visible: makeStarVisible(11),
