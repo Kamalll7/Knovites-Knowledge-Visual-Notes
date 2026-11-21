@@ -19,7 +19,7 @@ export const ImageCanvasNode = memo(function ImageCanvasNode({
   selected,
 }: NodeProps<ImageBoxNode>) {
   const { src, thumbSrc, alt, width, height } = data
-  const isLod = useContext(LodZoomContext)
+  const { isLod } = useContext(LodZoomContext)
 
   if (isLod) {
     return (

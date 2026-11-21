@@ -5,9 +5,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useNodesState,
+  useOnViewportChange,
   useReactFlow,
   useViewport,
-  useViewportStore,
   ViewportPortal,
   type NodeTypes,
   type Viewport,
@@ -27,7 +27,13 @@ import {
 import { parseCanvasJson, type CanvasJson, type ParseResult, type TipTapDoc } from '@/domain/schema'
 import { Button } from '@/ui/components/button'
 import { ImageCanvasNode, type ImageBoxNode } from './ImageCanvasNode'
-import { createPlainParagraphDoc, LOD_ZOOM_THRESHOLD, LodZoomContext } from './rich-text-config'
+import {
+  computeLodZoomState,
+  createPlainParagraphDoc,
+  INITIAL_LOD_ZOOM_STATE,
+  LodZoomContext,
+  type LodZoomState,
+} from './rich-text-config'
 import { TextBoxSurface, TextCanvasNode, type TextBoxNode } from './TextCanvasNode'
 
 type CanvasNode = TextBoxNode | ImageBoxNode
@@ -91,11 +97,16 @@ declare global {
       getNodeState: (id: string) => {
         x: number
         y: number
+        width: number
         zIndex: number
         doc: TipTapDoc | null
         isEditing: boolean
         selected: boolean
       } | null
+      deleteNode: (id: string) => void
+      selectNodes: (ids: string[]) => void
+      getLodState: () => LodZoomState
+      getLodSwitchCount: () => number
       getAllNodeCount: () => number
       getImageNodeCount: () => number
       getActiveEditorCount: () => number
@@ -466,9 +477,36 @@ function percentile(sorted: readonly number[], p: number): number {
   return sorted[idx]!
 }
 
-function LodZoomProvider({ children }: { children: ReactNode }) {
-  const isLodZoom = useViewportStore((s) => s.transform[2] < LOD_ZOOM_THRESHOLD)
-  return <LodZoomContext.Provider value={isLodZoom}>{children}</LodZoomContext.Provider>
+function LodViewportObserver({ onZoom }: { onZoom: (zoom: number) => void }) {
+  useOnViewportChange({
+    onChange: (vp) => {
+      onZoom(vp.zoom)
+    },
+  })
+  return null
+}
+
+function LodZoomProvider({
+  onLodStateChange,
+  onLodSwitch,
+  lodState,
+  children,
+}: {
+  onLodStateChange?: (next: LodZoomState) => void
+  onLodSwitch?: () => void
+  lodState: LodZoomState
+  children: ReactNode
+}) {
+  const prevIsLodRef = useRef(lodState.isLod)
+  useEffect(() => {
+    onLodStateChange?.(lodState)
+    if (lodState.isLod !== prevIsLodRef.current) {
+      prevIsLodRef.current = lodState.isLod
+      onLodSwitch?.()
+    }
+  }, [lodState, onLodStateChange, onLodSwitch])
+
+  return <LodZoomContext.Provider value={lodState}>{children}</LodZoomContext.Provider>
 }
 
 const FooterZoomLabel = memo(function FooterZoomLabel({ nodeCount }: { nodeCount: number }) {
@@ -521,7 +559,7 @@ function FloatingToolbarOverlay({
   const cardTop = viewport.y + editingNode.position.y * viewport.zoom
   const cardBottom = cardTop + boxSize.h * viewport.zoom
 
-  const aboveTop = cardTop - tbSize.h - gap
+  const aboveTop = cardTop - Math.round(20 * viewport.zoom) - tbSize.h - gap
   const belowTop = cardBottom + gap
   let top: number
   if (aboveTop >= pad) {
@@ -557,6 +595,19 @@ function SpikeCanvasInner() {
     mitigateRef.current = mitigateActiveEditorUnmount
   }, [mitigateActiveEditorUnmount])
   const [lastFpsBench, setLastFpsBench] = useState<FpsBenchmarkResult | null>(null)
+  const [lodState, setLodState] = useState<LodZoomState>(INITIAL_LOD_ZOOM_STATE)
+  const lodStateRef = useRef<LodZoomState>(INITIAL_LOD_ZOOM_STATE)
+  const lodSwitchCountRef = useRef(0)
+
+  const handleViewportZoom = useCallback((zoom: number) => {
+    setLodState((prev) => computeLodZoomState(zoom, prev))
+  }, [])
+  const handleLodStateChange = useCallback((next: LodZoomState) => {
+    lodStateRef.current = next
+  }, [])
+  const handleLodSwitch = useCallback(() => {
+    lodSwitchCountRef.current += 1
+  }, [])
 
   const canvasStageRef = useRef<HTMLElement | null>(null)
   const leakedCanvasKeydownsRef = useRef(0)
@@ -565,6 +616,7 @@ function SpikeCanvasInner() {
   const editSessionStartRef = useRef<CanvasSnapshot | null>(null)
   const editSessionHasNetChangeRef = useRef(false)
   const dragStartSnapshotRef = useRef<CanvasSnapshot | null>(null)
+  const resizeStartSnapshotRef = useRef<CanvasSnapshot | null>(null)
 
   const editingNodeIdRef = useRef(editingNodeId)
   useEffect(() => {
@@ -623,12 +675,18 @@ function SpikeCanvasInner() {
     onEnterEdit: (id: string) => void
     onExitEdit: () => void
     onDocChange: (id: string, doc: TipTapDoc, hasNetChange: boolean) => void
+    onResizeStart: (id: string) => void
+    onResizeWidth: (id: string, width: number) => void
+    onResizeEnd: (id: string) => void
     onEditorReady: (id: string, editor: Editor | null) => void
     onEditorMountChange: (instanceId: string, mounted: boolean) => void
   }>({
     onEnterEdit: () => {},
     onExitEdit: () => {},
     onDocChange: () => {},
+    onResizeStart: () => {},
+    onResizeWidth: () => {},
+    onResizeEnd: () => {},
     onEditorReady: () => {},
     onEditorMountChange: () => {},
   })
@@ -672,6 +730,9 @@ function SpikeCanvasInner() {
               onExitEdit: () => handlersRef.current.onExitEdit(),
               onDocChange: (nodeId, doc, hasNetChange) =>
                 handlersRef.current.onDocChange(nodeId, doc, hasNetChange),
+              onResizeStart: (nodeId) => handlersRef.current.onResizeStart(nodeId),
+              onResizeWidth: (nodeId, width) => handlersRef.current.onResizeWidth(nodeId, width),
+              onResizeEnd: (nodeId) => handlersRef.current.onResizeEnd(nodeId),
               onEditorReady: (nodeId, editor) => handlersRef.current.onEditorReady(nodeId, editor),
               onEditorMountChange: (instanceId, mounted) =>
                 handlersRef.current.onEditorMountChange(instanceId, mounted),
@@ -742,6 +803,28 @@ function SpikeCanvasInner() {
     )
   }, [pushUndoSnapshot, setNodes])
 
+  const handleResizeStart = useCallback(() => {
+    resizeStartSnapshotRef.current = makeSnapshot(nodesRef.current)
+  }, [makeSnapshot])
+
+  const handleResizeWidth = useCallback(
+    (id: string, width: number) => {
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === id && n.type === 'textBox' ? { ...n, data: { ...n.data, width } } : n,
+        ),
+      )
+    },
+    [setNodes],
+  )
+
+  const handleResizeEnd = useCallback(() => {
+    if (resizeStartSnapshotRef.current) {
+      pushUndoSnapshot(resizeStartSnapshotRef.current)
+      resizeStartSnapshotRef.current = null
+    }
+  }, [pushUndoSnapshot])
+
   const enterEditMode = useCallback(
     (id: string) => {
       if (editingNodeIdRef.current && editingNodeIdRef.current !== id) {
@@ -757,7 +840,7 @@ function SpikeCanvasInner() {
             ? {
                 ...n,
                 selected: n.id === id,
-                draggable: n.id !== id,
+                draggable: true,
                 data: {
                   ...n.data,
                   isEditing: n.id === id,
@@ -779,10 +862,22 @@ function SpikeCanvasInner() {
       onEnterEdit: enterEditMode,
       onExitEdit: exitEditMode,
       onDocChange: handleDocChange,
+      onResizeStart: handleResizeStart,
+      onResizeWidth: handleResizeWidth,
+      onResizeEnd: handleResizeEnd,
       onEditorReady: handleEditorReady,
       onEditorMountChange: handleEditorMountChange,
     }
-  }, [enterEditMode, exitEditMode, handleDocChange, handleEditorMountChange, handleEditorReady])
+  }, [
+    enterEditMode,
+    exitEditMode,
+    handleDocChange,
+    handleEditorMountChange,
+    handleEditorReady,
+    handleResizeEnd,
+    handleResizeStart,
+    handleResizeWidth,
+  ])
 
   const handleNodesDelete = useCallback(() => {
     pushUndoSnapshot(makeSnapshot(nodesRef.current))
@@ -1032,12 +1127,32 @@ function SpikeCanvasInner() {
         return {
           x: Math.round(node.position.x),
           y: Math.round(node.position.y),
+          width: node.data.width,
           zIndex: node.zIndex ?? 1,
           doc: node.type === 'textBox' ? node.data.doc : null,
           isEditing: node.type === 'textBox' ? node.data.isEditing : false,
           selected: Boolean(node.selected),
         }
       },
+      deleteNode: (id: string) => {
+        pushUndoSnapshot(makeSnapshot(nodesRef.current))
+        if (editingNodeIdRef.current === id) {
+          editSessionStartRef.current = null
+          editSessionHasNetChangeRef.current = false
+          setEditingNodeId(null)
+          setActiveEditor(null)
+        }
+        setNodes((prev) => prev.filter((n) => n.id !== id))
+      },
+      selectNodes: (ids: string[]) => {
+        const idSet = new Set(ids)
+        if (editingNodeIdRef.current && !idSet.has(editingNodeIdRef.current)) {
+          exitEditMode()
+        }
+        setNodes((prev) => prev.map((n) => ({ ...n, selected: idSet.has(n.id) })))
+      },
+      getLodState: () => lodStateRef.current,
+      getLodSwitchCount: () => lodSwitchCountRef.current,
       getAllNodeCount: () => nodesRef.current.length,
       getImageNodeCount: () => nodesRef.current.filter((n) => n.type === 'imageBox').length,
       getActiveEditorCount: () => activeEditorCount,
@@ -1109,7 +1224,9 @@ function SpikeCanvasInner() {
     applyNodeDataset,
     enterEditMode,
     exitEditMode,
+    makeSnapshot,
     measurePanZoomFps,
+    pushUndoSnapshot,
     reactFlow,
     setNodes,
     tool,
@@ -1117,6 +1234,22 @@ function SpikeCanvasInner() {
 
   const handleNodesChangeWrapped = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
+      const editingId = editingNodeIdRef.current
+      if (editingId) {
+        const removes = changes.getByType('remove')
+        if (removes.some((c) => c.id === editingId)) {
+          pushUndoSnapshot(makeSnapshot(nodesRef.current))
+          editSessionStartRef.current = null
+          editSessionHasNetChangeRef.current = false
+          setEditingNodeId(null)
+          setActiveEditor(null)
+        } else {
+          const selects = changes.getByType('select')
+          if (selects.some((c) => c.id === editingId && c.selected === false)) {
+            exitEditMode()
+          }
+        }
+      }
       const posChanges = changes.getByType('position')
       if (posChanges.some((c) => c.dragging === true) && !dragStartSnapshotRef.current) {
         dragStartSnapshotRef.current = makeSnapshot(nodesRef.current)
@@ -1127,7 +1260,7 @@ function SpikeCanvasInner() {
       }
       onNodesChange(changes)
     },
-    [makeSnapshot, onNodesChange, pushUndoSnapshot],
+    [exitEditMode, makeSnapshot, onNodesChange, pushUndoSnapshot],
   )
 
   const editingTextNode = useMemo(() => {
@@ -1243,7 +1376,11 @@ function SpikeCanvasInner() {
         }}
         className="relative flex-1 overflow-hidden"
       >
-        <LodZoomProvider>
+        <LodZoomProvider
+          lodState={lodState}
+          onLodStateChange={handleLodStateChange}
+          onLodSwitch={handleLodSwitch}
+        >
           <ReactFlow<CanvasNode>
             nodes={nodes}
             edges={[]}
@@ -1266,6 +1403,7 @@ function SpikeCanvasInner() {
             maxZoom={4}
             defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           >
+            <LodViewportObserver onZoom={handleViewportZoom} />
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
             {mitigateActiveEditorUnmount && editingTextNode ? (
               <ViewportPortal>

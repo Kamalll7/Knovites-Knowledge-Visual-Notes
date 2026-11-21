@@ -1012,13 +1012,257 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     )
   })
 
+  test('13. resize dan drag gagang saat mengedit di ViewportPortal mengikuti posisi dan ukuran tanpa lompatan (reflow & scale)', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('text-box-box-rich').dblclick()
+    await expect(page.getByTestId('active-tiptap-editor')).toBeVisible()
+    await expect(page.getByTestId('portal-text-box-box-rich')).toBeVisible()
+
+    const placeholder = page.getByTestId('text-box-box-rich')
+    const portalCard = page.getByTestId('card-surface-box-rich')
+    const prosemirror = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+
+    // Helper: check card surface & placeholder geometry & active editor width stay synchronized
+    const measureAlignment = async () => {
+      const phBox = await placeholder.boundingBox()
+      const cardBox = await portalCard.boundingBox()
+      const pmBox = await prosemirror.boundingBox()
+      expect(phBox).not.toBeNull()
+      expect(cardBox).not.toBeNull()
+      expect(pmBox).not.toBeNull()
+      return { phBox: phBox!, cardBox: cardBox!, pmBox: pmBox! }
+    }
+
+    const initialAlign = await measureAlignment()
+    expect(Math.abs(initialAlign.cardBox.width - initialAlign.phBox.width)).toBeLessThanOrEqual(1.5)
+    expect(Math.abs(initialAlign.cardBox.height - initialAlign.phBox.height)).toBeLessThanOrEqual(
+      1.5,
+    )
+
+    // 1) Drag top handle WHILE editing in ViewportPortal
+    const dragHandle = page.getByTestId('drag-handle-box-rich')
+    await expect(dragHandle).toBeVisible()
+    const handleBox = await dragHandle.boundingBox()
+    expect(handleBox).not.toBeNull()
+    const beforePos = await page.evaluate(() => window.__S2_API__?.getNodeState('box-rich'))
+
+    await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(
+      handleBox!.x + handleBox!.width / 2 + 110,
+      handleBox!.y + handleBox!.height / 2 + 70,
+      { steps: 10 },
+    )
+    const midDragAlign = await measureAlignment()
+    expect(Math.abs(midDragAlign.cardBox.x - midDragAlign.phBox.x)).toBeLessThanOrEqual(1.5)
+    expect(Math.abs(midDragAlign.cardBox.y - midDragAlign.phBox.y)).toBeLessThanOrEqual(1.5)
+    await page.mouse.up()
+
+    const afterDragPos = await page.evaluate(() => window.__S2_API__?.getNodeState('box-rich'))
+    expect(afterDragPos!.x).toBeGreaterThan(beforePos!.x + 80)
+    expect(afterDragPos!.y).toBeGreaterThan(beforePos!.y + 50)
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+
+    const afterDragAlign = await measureAlignment()
+    expect(Math.abs(afterDragAlign.cardBox.x - afterDragAlign.phBox.x)).toBeLessThanOrEqual(1.5)
+    expect(Math.abs(afterDragAlign.cardBox.y - afterDragAlign.phBox.y)).toBeLessThanOrEqual(1.5)
+
+    // 2) Width resize WHILE editing: text reflows and card/placeholder heights grow identically (`ukuran kotak = ukuran editor`)
+    const resizeHandle = page.getByTestId('resize-handle-box-rich')
+    await expect(resizeHandle).toBeVisible()
+    const rBox = await resizeHandle.boundingBox()
+    expect(rBox).not.toBeNull()
+
+    await page.mouse.move(rBox!.x + rBox!.width / 2, rBox!.y + rBox!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rBox!.x + rBox!.width / 2 - 140, rBox!.y + rBox!.height / 2, {
+      steps: 10,
+    })
+    await page.mouse.up()
+
+    const afterResizeState = await page.evaluate(() => window.__S2_API__?.getNodeState('box-rich'))
+    expect(afterResizeState!.width).toBeLessThanOrEqual(230)
+    const afterResizeAlign = await measureAlignment()
+    expect(afterResizeAlign.cardBox.width).toBeLessThanOrEqual(232)
+    expect(afterResizeAlign.cardBox.height).toBeGreaterThan(initialAlign.cardBox.height + 10)
+    expect(
+      Math.abs(afterResizeAlign.cardBox.width - afterResizeAlign.phBox.width),
+    ).toBeLessThanOrEqual(1.5)
+    expect(
+      Math.abs(afterResizeAlign.cardBox.height - afterResizeAlign.phBox.height),
+    ).toBeLessThanOrEqual(1.5)
+    // ProseMirror inner editor width + card padding (14*2 + border 1*2 = 30px) matches card width
+    expect(
+      Math.abs(afterResizeAlign.cardBox.width - (afterResizeAlign.pmBox.width + 30)),
+    ).toBeLessThanOrEqual(2)
+
+    // Editor still accepts typing seamlessly after drag + resize
+    await prosemirror.click()
+    await page.keyboard.type(' REFLOW_OK')
+    await expect(prosemirror).toContainText('REFLOW_OK')
+
+    // 3) Scale while editing (`0.75` and `1.5`): ViewportPortal box & editor scale cleanly without mismatch
+    for (const k of [0.75, 1.5]) {
+      await page.evaluate((zoom) => window.__S2_API__?.setViewport({ x: 40, y: 20, zoom }), k)
+      await page.evaluate(
+        () =>
+          new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      )
+      const scaled = await measureAlignment()
+      expect(Math.abs(scaled.cardBox.width - afterResizeState!.width * k)).toBeLessThanOrEqual(2.5)
+      expect(Math.abs(scaled.cardBox.width - scaled.phBox.width)).toBeLessThanOrEqual(1.5)
+      expect(Math.abs(scaled.cardBox.height - scaled.phBox.height)).toBeLessThanOrEqual(1.5)
+      expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+    }
+  })
+
+  test('14. edit di zoom < ambang LOD: editor tampil penuh tanpa reset zoom dengan caret & seleksi berfungsi', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 180, y: 120, zoom: 0.25 }))
+    await expect(page.getByTestId('lod-placeholder-box-edit')).toBeVisible()
+    await expect(page.getByTestId('text-box-box-edit')).toHaveAttribute('data-lod', 'true')
+
+    // Double-click LOD box -> stays at zoom 0.25 and mounts full TipTap editor + screen-space toolbar
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editor = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor).toBeVisible()
+    await expect(editor).toBeFocused()
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+    expect((await page.evaluate(() => window.__S2_API__?.getViewport()))?.zoom).toBeCloseTo(0.25, 2)
+    await expect(page.getByTestId('floating-toolbar')).toBeVisible()
+
+    // Caret typing, keyboard selection, and toolbar formatting all work at zoom 0.25
+    await page.keyboard.type(' LOW_ZOOM')
+    await expect(editor).toContainText('LOW_ZOOM')
+
+    await page.keyboard.press('Home')
+    for (let i = 0; i < 6; i += 1) {
+      await page.keyboard.press('ArrowRight')
+    }
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press('Shift+ArrowRight')
+    }
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('Bravo')
+    await page.getByTestId('toolbar-bold').click()
+    await expect(editor.locator('strong', { hasText: 'Bravo' })).toBeVisible()
+    await expect(editor).toBeFocused()
+  })
+
+  test('15. node yang sedang diedit dihapus atau pilihan berpindah: editor unmount bersih tanpa kebocoran dan tanpa kehilangan teks', async ({
+    page,
+  }) => {
+    await page.goto('/')
+
+    // (a) Switch editing target by double-clicking another box -> 1 instance, prior edits preserved statically
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editor1 = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor1).toBeFocused()
+    await page.keyboard.type(' PERSIST_SWITCH')
+    await page.getByTestId('text-box-box-second').dblclick()
+    await expect(page.getByTestId('richtext-body-box-edit')).toContainText('PERSIST_SWITCH')
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(1)
+
+    // (b) Move selection away while editing -> clean unmount (0 instances), typed text kept
+    const editor2 = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor2).toBeFocused()
+    await page.keyboard.type(' PERSIST_SELECT')
+    await page.evaluate(() => window.__S2_API__?.selectNodes(['box-rich']))
+    await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(0)
+    await expect(page.getByTestId('richtext-body-box-second')).toContainText('PERSIST_SELECT')
+
+    // (c) Delete the actively edited node mid-edit -> clean unmount, shortcuts work again, Ctrl+Z restores with typed text
+    await page.getByTestId('text-box-box-edit').dblclick()
+    const editor3 = page.locator('[data-testid="active-tiptap-editor"] .ProseMirror')
+    await expect(editor3).toBeFocused()
+    await page.keyboard.type(' BEFORE_DELETE')
+    await expect(editor3).toContainText('BEFORE_DELETE')
+
+    await page.evaluate(() => window.__S2_API__?.deleteNode('box-edit'))
+    await expect(page.getByTestId('active-tiptap-editor')).toHaveCount(0)
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(0)
+    expect(await page.evaluate(() => window.__S2_API__?.getNodeState('box-edit'))).toBeNull()
+
+    // Shortcuts no longer blocked by stale editingNodeId
+    await page.keyboard.press('t')
+    expect(await page.evaluate(() => window.__S2_API__?.getTool())).toBe('text')
+
+    // Canvas Ctrl+Z restores deleted node with its typed text intact
+    await page.keyboard.press('Control+z')
+    await expect(page.getByTestId('richtext-body-box-edit')).toContainText('BEFORE_DELETE')
+    expect(await page.evaluate(() => window.__S2_API__?.getActiveEditorCount())).toBe(0)
+  })
+
+  test('16. LOD: font judul placeholder >= 11 px di layar atau disembunyikan dan bebas kedip di sekitar ambang zoom', async ({
+    page,
+  }) => {
+    await page.goto('/')
+
+    // 1) Overview LOD (zoom 0.25 in [0.23, 0.32)): title is visible and rendered screen font >= 11 px
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 80, zoom: 0.25 }))
+    const lodTitle = page.getByTestId('lod-title-box-rich')
+    await expect(lodTitle).toBeVisible()
+    const screenFontPx = await lodTitle.evaluate((el) => {
+      const worldPx = parseFloat(getComputedStyle(el).fontSize)
+      return worldPx * 0.25
+    })
+    expect(screenFontPx).toBeGreaterThanOrEqual(11)
+
+    // 2) Deep overview LOD (zoom 0.105 < 0.19): title hidden so no sub-11px unreadable text renders
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 35, zoom: 0.105 }))
+    await expect(page.getByTestId('lod-placeholder-box-rich')).toBeVisible()
+    await expect(page.getByTestId('lod-title-box-rich')).toHaveCount(0)
+
+    // 3) Hysteresis check around LOD boundaries [0.32..0.40]: zero flicker while oscillating inside deadband
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
+    await expect(page.getByTestId('richtext-body-box-rich')).toBeVisible()
+    const baseSwitches = await page.evaluate(() => window.__S2_API__?.getLodSwitchCount() ?? 0)
+
+    // Oscillating above LOD_ENTER_ZOOM (0.32) while exiting from zoom=1 stays non-LOD with 0 switches
+    for (const z of [0.38, 0.33, 0.39, 0.34, 0.37, 0.33]) {
+      await page.evaluate((zoom) => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom }), z)
+      await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+    }
+    expect(await page.evaluate(() => window.__S2_API__?.getLodSwitchCount())).toBe(baseSwitches)
+    expect((await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod).toBe(false)
+
+    // Crossing below LOD_ENTER_ZOOM (0.32) enters LOD once (+1 switch), then oscillating inside [0.32..0.40) causes 0 switches
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 0.3 }))
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod)
+      .toBe(true)
+    const afterEnterSwitches = await page.evaluate(
+      () => window.__S2_API__?.getLodSwitchCount() ?? 0,
+    )
+    expect(afterEnterSwitches).toBe(baseSwitches + 1)
+
+    for (const z of [0.34, 0.38, 0.33, 0.39, 0.35, 0.395]) {
+      await page.evaluate((zoom) => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom }), z)
+      await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+    }
+    expect(await page.evaluate(() => window.__S2_API__?.getLodSwitchCount())).toBe(
+      afterEnterSwitches,
+    )
+    expect((await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod).toBe(true)
+
+    // Crossing above LOD_EXIT_ZOOM (0.40) exits LOD cleanly
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 0.42 }))
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__S2_API__?.getLodState()))?.isLod)
+      .toBe(false)
+  })
+
   test('benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (LOD + rich text + 50 images)', async ({
     page,
   }) => {
     test.setTimeout(360_000)
     await page.goto('/')
 
-    // Verify dataset composition & LOD switching below zoom threshold (0.35)
+    // Verify dataset composition & LOD switching below enter threshold (0.32)
     await page.evaluate(() => window.__S2_API__?.setStaticNodeCount(100))
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(100)
     expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(17)
@@ -1026,9 +1270,14 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
     expect(await page.evaluate(() => window.__S2_API__?.getAllNodeCount())).toBe(300)
     expect(await page.evaluate(() => window.__S2_API__?.getImageNodeCount())).toBe(50)
 
+    // Deep overview (< 0.19): LOD placeholder visible, title omitted to avoid <11px screen text
     await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 35, zoom: 0.105 }))
-    await expect(page.getByTestId('lod-text-box-rich')).toBeVisible()
+    await expect(page.getByTestId('lod-placeholder-box-rich')).toBeVisible()
+    await expect(page.getByTestId('lod-title-box-rich')).toHaveCount(0)
     await expect(page.getByTestId('lod-image-box-img-1')).toBeVisible()
+    // Mid overview (0.25): LOD title visible at >= 11px on screen
+    await page.evaluate(() => window.__S2_API__?.setViewport({ x: 100, y: 80, zoom: 0.25 }))
+    await expect(page.getByTestId('lod-title-box-rich')).toBeVisible()
     await page.evaluate(() => window.__S2_API__?.setViewport({ x: 0, y: 0, zoom: 1 }))
     await expect(page.getByTestId('richtext-body-box-rich')).toBeVisible()
 
@@ -1158,15 +1407,21 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
         if (!sc.onlyRenderVisibleElements || sc.mode === 'zoom-out-all') {
           expect(res!.renderedDomNodesMin).toBe(sc.count)
         }
-        // Enforce >= 30 fps CI threshold from docs/testing.md §9.5 for all cullOn scenarios (including zoom-out-all with LOD)
+        // Enforce >= 30 fps CI threshold (docs/testing.md §9.5) AND p95/max latency gates grounded in docs/spec-ui-nfr.md §7.1 (< 100 ms)
         if (sc.onlyRenderVisibleElements) {
           expect(res!.meanFps).toBeGreaterThanOrEqual(30)
+          expect(res!.p95Ms).toBeLessThanOrEqual(50)
+          expect(res!.maxMs).toBeLessThanOrEqual(sc.mode === 'zoom' ? 200 : 100)
         }
         runs.push(res!)
       }
       const meanAcrossRuns = summarize(runs.map((x) => x.meanFps))
+      const p95MsAcrossRuns = summarize(runs.map((x) => x.p95Ms))
+      const maxMsAcrossRuns = summarize(runs.map((x) => x.maxMs))
       if (sc.onlyRenderVisibleElements) {
         expect(meanAcrossRuns.mean).toBeGreaterThanOrEqual(30)
+        expect(p95MsAcrossRuns.mean).toBeLessThanOrEqual(50)
+        expect(maxMsAcrossRuns.mean).toBeLessThanOrEqual(sc.mode === 'zoom' ? 150 : 100)
       }
       results[sc.key] = {
         runs,
@@ -1174,7 +1429,8 @@ test.describe('Spike S2 — TipTap + React Flow isolation, parity, and FPS', () 
           meanFps: meanAcrossRuns,
           p50Fps: summarize(runs.map((x) => x.p50Fps)),
           p95Fps: summarize(runs.map((x) => x.p95Fps)),
-          maxMs: summarize(runs.map((x) => x.maxMs)),
+          p95Ms: p95MsAcrossRuns,
+          maxMs: maxMsAcrossRuns,
           domMin: Math.min(...runs.map((x) => x.renderedDomNodesMin)),
           domMax: Math.max(...runs.map((x) => x.renderedDomNodesMax)),
           activeEditorMinDuringRun: Math.min(...runs.map((x) => x.activeEditorMinDuringRun)),

@@ -1,10 +1,15 @@
 import type { Editor } from '@tiptap/react'
-import { type Node, type NodeProps } from '@xyflow/react'
+import { NodeResizeControl, type Node, type NodeProps } from '@xyflow/react'
 import { GripHorizontal } from 'lucide-react'
 import { memo, useContext } from 'react'
 import type { TipTapDoc } from '@/domain/schema'
 import { ActiveTipTapEditor } from './ActiveTipTapEditor'
-import { extractDocTitle, LodZoomContext } from './rich-text-config'
+import {
+  extractDocTitle,
+  INITIAL_LOD_ZOOM_STATE,
+  LodZoomContext,
+  type LodZoomState,
+} from './rich-text-config'
 import { StaticTextContent } from './StaticTextContent'
 
 export interface TextBoxNodeData extends Record<string, unknown> {
@@ -19,6 +24,9 @@ export interface TextBoxNodeData extends Record<string, unknown> {
   onEnterEdit: (id: string) => void
   onExitEdit: (id: string) => void
   onDocChange: (id: string, doc: TipTapDoc, hasNetChange: boolean) => void
+  onResizeStart?: (id: string) => void
+  onResizeWidth?: (id: string, width: number) => void
+  onResizeEnd?: (id: string) => void
   onEditorReady?: (id: string, editor: Editor | null) => void
   onEditorMountChange: (instanceId: string, mounted: boolean) => void
 }
@@ -29,7 +37,7 @@ export interface TextBoxSurfaceProps {
   id: string
   data: TextBoxNodeData
   selected?: boolean
-  isLod?: boolean
+  lodState?: LodZoomState
   inPortal?: boolean
 }
 
@@ -37,7 +45,7 @@ export function TextBoxSurface({
   id,
   data,
   selected = false,
-  isLod = false,
+  lodState = INITIAL_LOD_ZOOM_STATE,
   inPortal = false,
 }: TextBoxSurfaceProps) {
   const {
@@ -51,6 +59,9 @@ export function TextBoxSurface({
     onEnterEdit,
     onExitEdit,
     onDocChange,
+    onResizeStart,
+    onResizeWidth,
+    onResizeEnd,
     onEditorReady,
     onEditorMountChange,
   } = data
@@ -63,16 +74,20 @@ export function TextBoxSurface({
     }
   }
 
-  if (isLod && !isEditing) {
+  if (lodState.isLod && !isEditing) {
     return (
       <div
         data-testid={`text-box-${id}`}
         data-lod="true"
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          onEnterEdit(id)
+        }}
         className="select-none"
         style={{ width: `${width}px` }}
       >
         <div
-          data-testid={`card-surface-${id}`}
+          data-testid={`lod-placeholder-${id}`}
           data-frame-mode={frameNone ? 'none' : 'card'}
           className="rounded-xl border p-3.5"
           style={{
@@ -81,12 +96,17 @@ export function TextBoxSurface({
             minHeight: '76px',
           }}
         >
-          <div
-            data-testid={`lod-text-${id}`}
-            className="truncate text-sm font-semibold text-foreground"
-          >
-            {extractDocTitle(doc)}
-          </div>
+          {lodState.showLodTitle ? (
+            <div
+              data-testid={`lod-title-${id}`}
+              className="truncate font-semibold text-foreground"
+              style={{ fontSize: `${lodState.lodFontPx}px`, lineHeight: 1.2 }}
+            >
+              {extractDocTitle(doc)}
+            </div>
+          ) : (
+            <div className="h-2.5 w-3/4 rounded bg-muted-foreground/30" />
+          )}
           <div className="mt-2 h-2 w-2/3 rounded bg-muted" />
         </div>
       </div>
@@ -108,17 +128,38 @@ export function TextBoxSurface({
       className="group relative"
       style={{ width: `${width}px` }}
     >
-      {/* Top-edge drag handle (outside layout flow so card geometry never shifts in edit mode) */}
-      {!isEditing ? (
+      {/* Top-edge drag handle inside React Flow node slot (outside ViewportPortal so XYDrag stays bound even while editing) */}
+      {!inPortal ? (
         <div
           data-testid={`drag-handle-${id}`}
           aria-label={`Drag handle for ${id}`}
-          className={`knovites-drag-handle absolute -top-5 left-2 right-2 flex h-4 cursor-grab items-center justify-center rounded-t-md border border-b-0 border-border bg-secondary/95 text-muted-foreground transition-opacity active:cursor-grabbing ${
-            selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          className={`knovites-drag-handle absolute -top-5 left-2 right-2 z-20 flex h-4 cursor-grab items-center justify-center rounded-t-md border border-b-0 border-border bg-secondary/95 text-muted-foreground transition-opacity active:cursor-grabbing ${
+            selected || isEditing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >
           <GripHorizontal className="size-3.5" />
         </div>
+      ) : null}
+
+      {!inPortal && (selected || isEditing) ? (
+        <NodeResizeControl
+          nodeId={id}
+          position="right"
+          resizeDirection="horizontal"
+          minWidth={160}
+          maxWidth={720}
+          onResizeStart={() => onResizeStart?.(id)}
+          onResize={(_event, params) => onResizeWidth?.(id, Math.round(params.width))}
+          onResizeEnd={() => onResizeEnd?.(id)}
+          className="nodrag z-20 flex items-center justify-center rounded border border-border bg-card shadow-sm"
+          style={{ width: '10px', height: '24px' }}
+        >
+          <span
+            data-testid={`resize-handle-${id}`}
+            aria-label={`Resize width for ${id}`}
+            className="block h-3 w-0.5 rounded bg-muted-foreground"
+          />
+        </NodeResizeControl>
       ) : null}
 
       {/* Card surface: identical padding, font, background, border between static & edit mode */}
@@ -166,33 +207,62 @@ export const TextCanvasNode = memo(function TextCanvasNode({
   data,
   selected,
 }: NodeProps<TextBoxNode>) {
-  const isZoomLod = useContext(LodZoomContext)
+  const lodState = useContext(LodZoomContext)
 
-  // When active editor is hosted in ViewportPortal (culling-resilient mitigation), keep a hidden layout placeholder
-  // inside React Flow's node slot so bounds/selection stay intact without duplicate TipTap instances or testids.
+  // When active editor is hosted in ViewportPortal (culling-resilient mitigation), keep an invisible layout placeholder
+  // inside React Flow's node slot with active drag + resize handles so XYDrag/XYResizer & bounds stay intact.
   if (data.isEditing && data.renderInViewportPortal) {
     return (
-      <div
-        data-testid={`text-box-${id}`}
-        data-editing="true"
-        data-portal-placeholder="true"
-        aria-hidden="true"
-        className="pointer-events-none invisible"
-        style={{ width: `${data.width}px` }}
-      >
+      <div className="relative" style={{ width: `${data.width}px` }}>
         <div
-          className="rounded-xl border p-3.5"
-          style={{
-            maxHeight: data.maxHeight !== undefined ? `${data.maxHeight}px` : undefined,
-          }}
+          data-testid={`drag-handle-${id}`}
+          aria-label={`Drag handle for ${id}`}
+          style={{ pointerEvents: 'all' }}
+          className="knovites-drag-handle absolute -top-5 left-2 right-2 z-20 flex h-4 cursor-grab items-center justify-center rounded-t-md border border-b-0 border-border bg-secondary/95 text-muted-foreground opacity-100 active:cursor-grabbing"
         >
-          <div className="knovites-richtext">
-            <StaticTextContent doc={data.doc} />
+          <GripHorizontal className="size-3.5" />
+        </div>
+        <NodeResizeControl
+          nodeId={id}
+          position="right"
+          resizeDirection="horizontal"
+          minWidth={160}
+          maxWidth={720}
+          onResizeStart={() => data.onResizeStart?.(id)}
+          onResize={(_event, params) => data.onResizeWidth?.(id, Math.round(params.width))}
+          onResizeEnd={() => data.onResizeEnd?.(id)}
+          className="nodrag z-20 flex items-center justify-center rounded border border-border bg-card shadow-sm"
+          style={{ pointerEvents: 'all', width: '10px', height: '24px' }}
+        >
+          <span
+            data-testid={`resize-handle-${id}`}
+            aria-label={`Resize width for ${id}`}
+            className="block h-3 w-0.5 rounded bg-muted-foreground"
+          />
+        </NodeResizeControl>
+        <div
+          data-testid={`text-box-${id}`}
+          data-editing="true"
+          data-portal-placeholder="true"
+          data-lod="false"
+          aria-hidden="true"
+          className="pointer-events-none invisible"
+          style={{ width: `${data.width}px` }}
+        >
+          <div
+            className="rounded-xl border p-3.5"
+            style={{
+              maxHeight: data.maxHeight !== undefined ? `${data.maxHeight}px` : undefined,
+            }}
+          >
+            <div className="knovites-richtext">
+              <StaticTextContent doc={data.doc} />
+            </div>
           </div>
         </div>
       </div>
     )
   }
 
-  return <TextBoxSurface id={id} data={data} selected={selected} isLod={isZoomLod} />
+  return <TextBoxSurface id={id} data={data} selected={selected} lodState={lodState} />
 })

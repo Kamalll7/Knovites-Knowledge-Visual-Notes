@@ -1,6 +1,6 @@
 # Laporan Spike S2 — TipTap di Dalam `@xyflow/react`
 
-- **Verdict:** **LOLOS BERSYARAT (Conditional Pass) — `FR-CVS-08 belum terbukti`.** Isolasi input/wheel/drag, toolbar berukuran layar tetap di luar transformasi kanvas, satu instance TipTap aktif (MIT), paritas visual (`diffPixels: 0` di dark & light bahkan dengan `<ViewportPortal>`), ketahanan unmount editor aktif saat node keluar viewport via `<ViewportPortal>`, pasangan kontras `Highlight` per tema (dark & light semua `passAA: true`), dan sanitasi paste/skema seluruhnya terukur lulus. Lewat **LOD zoom (`< 0.35`)** dan isolasi `useViewport()`/`FloatingToolbarOverlay`, skenario **300 kaya + 50 gambar `zoom-out-all`** melonjak dari `13.1 fps` menjadi **`60.2 fps`** (`frameCount 193`, `maxMs 16.8 ms`, seluruh 13 skenario `50.4–60.2 fps` dan menegakkan ambang CI `>= 30 fps`). **`FR-CVS-08 belum terbukti`** sepenuhnya di produksi karena benchmark dijalankan pada Chromium headless tanpa GPU desktop dan belum menguji Firefox/WebKit maupun warna teks hex tetap pada tema light (yang masih gagal WCAG AA dan tercatat di [`docs/open-questions.md`](../open-questions.md)).
+- **Verdict:** **LOLOS BERSYARAT (Conditional Pass) — `FR-CVS-08 belum terbukti`.** Isolasi input/wheel/drag, toolbar berukuran layar tetap di luar transformasi kanvas, satu instance TipTap aktif (MIT), paritas visual (`diffPixels: 0` di dark & light), ketahanan unmount editor aktif via `<ViewportPortal>` (termasuk **drag gagang, resize lebar + reflow + scale saat edit**, **edit penuh pada zoom `< LOD`**, dan **unmount bersih tanpa hilang teks saat node edit dihapus/dipindahkan pilihannya**), LOD ber-hysteresis (`0.32`/`0.40`, judul `>= 11 px` layar atau tersembunyi tanpa kedip), pasangan kontras `Highlight` per tema (dark & light semua `passAA: true`), serta gerbang benchmark `meanFps >= 30`, `p95Ms <= 50`, dan `maxMs <= 100` (pan/`zoom-out-all`) seluruhnya **17/17 lulus** di Chromium headless (**300 kaya + 50 gambar `zoom-out-all`: `59.9 fps`, `p95 16.7 ms`, `max 16.8–33.4 ms`**). **`FR-CVS-08 belum terbukti`** penuh karena: (1) uji berjalan di Chromium headless tanpa GPU desktop; (2) pada zoom dinamis `cullOn` (`DOM 10–74`), *mount burst* node baru masih bisa menyentuh `maxMs 100.1–149.9 ms` (`p95Ms 27.8–33.4 ms <= 50 ms`); (3) suite spike **tidak dijalankan di GitHub Actions CI** ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) hanya menjalankan `pnpm test:e2e` pada `e2e/`); dan (4) warna teks hex tetap pada tema light gagal WCAG AA ([`docs/open-questions.md`](../open-questions.md)).
 - **Kode prototipe (sekali pakai, di luar `src/` dan build produksi):** [`spikes/s2-tiptap-reactflow/`](../../spikes/s2-tiptap-reactflow/)
 - **Artifak screenshot di `spikes/s2-tiptap-reactflow/out/` (hanya 5 PNG berikut yang dipertahankan; berkas lain di `out/` di-gitignore via [`out/.gitignore`](../../spikes/s2-tiptap-reactflow/out/.gitignore)):**
   - [`canvas-static-dark.png`](../../spikes/s2-tiptap-reactflow/out/canvas-static-dark.png)
@@ -22,20 +22,25 @@
    [`FloatingToolbar.tsx`](../../spikes/s2-tiptap-reactflow/FloatingToolbar.tsx) dirender langsung di dalam `<main data-testid="canvas-stage">` **di luar `.react-flow__viewport`**, diposisikan dari bounding-rect layar node aktif (`useViewport` + `useLayoutEffect`). Toolbar selalu berukuran tetap (`374×38 px`, tombol `28 px`), terbaca di zoom `0.25` hingga `2.5`, dan otomatis membalik ke bawah kartu bila dekat tepi atas sehingga **tidak pernah menutupi node yang sedang diedit**.
 4. **HUD benchmark di luar kanvas & isolasi `useViewport()`:**
    [`s2-fps-hud`](../../spikes/s2-tiptap-reactflow/SpikeApp.tsx) ditempatkan di dalam `<footer data-testid="s2-status-footer">` terpisah di bawah `<main>` sehingga **tidak menimpa node maupun atribusi `.react-flow__attribution`**. Pembacaan `useViewport()` diisolasi hanya pada komponen daun [`FooterZoomLabel`](../../spikes/s2-tiptap-reactflow/SpikeApp.tsx) dan [`FloatingToolbarOverlay`](../../spikes/s2-tiptap-reactflow/SpikeApp.tsx) (ukuran kotak di-cache saat buka/edit, posisi toolbar dihitung secara matematis tanpa `getBoundingClientRect()` berulang saat pan/zoom) agar `<ReactFlow>` dan 300 wrapper node tidak ikut re-render tiap frame viewport.
-5. **Ketahanan unmount editor aktif via `<ViewportPortal>` (`Task S2c`):**
-   Saat node sedang diedit dengan `onlyRenderVisibleElements={true}`, permukaan aktif [`TextBoxSurface`](../../spikes/s2-tiptap-reactflow/TextCanvasNode.tsx) dipindahkan ke `<ViewportPortal>` (didampingi placeholder `visibility: hidden` + `pointer-events: none` di slot node React Flow agar tidak menciptakan layer kompositor ekstra yang merusak subpixel antialiasing), sehingga menggeser node aktif keluar viewport dan kembali tidak me-unmount instance TipTap dan menjaga teks, seleksi, fokus, maupun riwayat undo teks tetap utuh.
-6. **LOD (`< 0.35` zoom) & pasangan warna `Highlight` per tema (`Task S2c`):**
-   Satu provider tunggal [`LodZoomProvider`](../../spikes/s2-tiptap-reactflow/SpikeApp.tsx) membaca `transform[2] < LOD_ZOOM_THRESHOLD` (`0.35`, di bawah rentang zoom interaktif `0.36..1.08` agar tidak terjadi *thrashing* saat zoom normal); pada level overview/zoom-out jauh, [`TextCanvasNode`](../../spikes/s2-tiptap-reactflow/TextCanvasNode.tsx) non-aktif merender kartu judul ringan (`extractDocTitle`), sementara [`ImageCanvasNode`](../../spikes/s2-tiptap-reactflow/ImageCanvasNode.tsx) memakai thumbnail PNG raster lokal `64×40` (`thumbSrc`). Pasangan latar+teks `mark` (`highlight`) per tema didefinisikan di [`spike.css`](../../spikes/s2-tiptap-reactflow/spike.css).
+5. **Ketahanan unmount, drag, resize, & pembersihan editor di `<ViewportPortal>` (`Task S2c` + `S2c-F`):**
+   - Saat node diedit dengan `onlyRenderVisibleElements={true}`, permukaan aktif [`TextBoxSurface`](../../spikes/s2-tiptap-reactflow/TextCanvasNode.tsx) dirender di `<ViewportPortal>`, sementara slot node di `.react-flow__node` menyimpan placeholder `visibility: hidden` + `pointer-events: none`, gagang drag (`.knovites-drag-handle`), dan gagang resize lebar-saja (`<NodeResizeControl position="right" resizeDirection="horizontal" minWidth={160} maxWidth={720}>`) dengan `pointer-events: all`.
+   - Aturan `.knovites-richtext pre { white-space: pre-wrap; }` menyamakan pembungkusan blok kode dengan `.ProseMirror pre`, sehingga saat lebar diubah atau kanvas di-zoom sambil mengedit, editor di `<ViewportPortal>` ikut berpindah, reflow, dan berskala identik dengan node (`<= 1.5 px` selisih ukuran kotak vs editor) tanpa lompatan.
+   - Menghapus node yang sedang diedit (`remove` change / `deleteNode`) atau memindahkan pilihan ke node/area lain (`select` change / klik luar) otomatis me-unmount `ActiveTipTapEditor` (`TipTap instances` bersih ke `0` atau `1`), membuka kunci pintasan kanvas, serta mempertahankan teks ketikan di renderer statis dan snapshot `Ctrl+Z`.
+6. **LOD ber-hysteresis, font `>= 11 px` layar, & pasangan warna `Highlight` (`Task S2c` + `S2c-F`):**
+   - `LodViewportObserver` (`useOnViewportChange`) + [`LodZoomProvider`](../../spikes/s2-tiptap-reactflow/SpikeApp.tsx) menerapkan *deadband* hysteresis **`LOD_ENTER_ZOOM = 0.32` / `LOD_EXIT_ZOOM = 0.40`** serta **`LOD_TITLE_HIDE_ZOOM = 0.19` / `LOD_TITLE_SHOW_ZOOM = 0.23`** di [`rich-text-config.ts`](../../spikes/s2-tiptap-reactflow/rich-text-config.ts) agar zoom yang berosilasi di sekitar ambang tidak menimbulkan kedip (0 pergantian).
+   - Pada zoom menengah (`>= 0.23`, mis. `0.25`), ukuran font judul LOD di-bucket per `0.05` (`lodFontPx = Math.ceil(12 / zBucket)`) sehingga selalu tampil `>= 11 px` di layar (`>= 12 px`); di bawah `0.19` (mis. `zoom-out-all` `0.105`), judul disembunyikan dan diganti rangka kartu + thumbnail PNG `64×40` ([`ImageCanvasNode.tsx`](../../spikes/s2-tiptap-reactflow/ImageCanvasNode.tsx)).
+   - **Edit pada zoom `< LOD` (butir #19):** mengklik ganda kotak teks saat mode LOD (`0.25`) mempertahankan zoom kamera di `0.25` dan langsung beralih ke editor TipTap penuh + toolbar ukuran layar di `<ViewportPortal>` dengan caret, seleksi teks, dan format aktif.
+   - Pasangan latar+teks `mark` (`highlight`) per tema didefinisikan di [`spike.css`](../../spikes/s2-tiptap-reactflow/spike.css).
 7. **Isolasi input, gagang drag, & undo pra-drag:**
-   `dragHandle: '.knovites-drag-handle'`, `draggable={!isEditing}`, kelas `nodrag nowheel nopan` hanya pada node aktif edit (`TextCanvasNode.tsx`), `onWheelCapture` untuk kontainer bertinggi terbatas (`box-scroll` statis maupun edit), `stopPropagation` pada `keydown` di `ActiveTipTapEditor.tsx` (`handleKeyDown` & `EditorContent`), `panActivationKeyCode={null}` & `deleteKeyCode={null}` saat edit, plus snapshot undo pra-drag pada `NodeChangeset` saat `PositionChange` `dragging: true`.
+   `dragHandle: '.knovites-drag-handle'`, kelas `nodrag nowheel nopan` pada permukaan kartu saat edit, `onWheelCapture` untuk kontainer bertinggi terbatas (`box-scroll`), `stopPropagation` pada `keydown` di `ActiveTipTapEditor.tsx` (`handleKeyDown` & `EditorContent`), `panActivationKeyCode={null}` & `deleteKeyCode={null}` saat edit, plus snapshot undo pra-drag & pra-resize.
 
 ---
 
-## 2. Daftar Tes Playwright (13 Tes), Paritas Visual, Toolbar Zoom & Kontras WCAG
+## 2. Daftar Tes Playwright (17 Tes), Paritas Visual, Toolbar Zoom & Kontras WCAG
 
-Seluruh suite dijalankan di Playwright Chromium (`pnpm exec playwright test -c spikes/s2-tiptap-reactflow/playwright.config.ts`) — **13 passed (3.2m)**.
+Seluruh suite dijalankan di Playwright Chromium (`pnpm exec playwright test -c spikes/s2-tiptap-reactflow/playwright.config.ts`) — **17 passed (3.3m)**. Suite spike ini **tidak** dijalankan di GitHub Actions CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) hanya menjalankan `pnpm test:e2e` untuk `e2e/`).
 
-**Alasan keberadaan tes tambahan (Tes #10, #11, #12, dan tes benchmark #13):** Prompt S2 awal meminta 9 tes interaksi/paritas bernama jelas plus pengukuran FPS; review dan Task S2c menambahkan uji toolbar di luar transform pada berbagai zoom (**Tes #10**), perhitungan kontras WCAG 2.1 termasuk pasangan highlight per tema (**Tes #11**), uji ketahanan unmount editor aktif dengan vs tanpa mitigasi `<ViewportPortal>` (**Tes #12**), serta tes benchmark 3 kali jalan yang menegakkan ambang **`>= 30 fps`** pada seluruh skenario `cullOn` (**Tes #13**).
+**Alasan keberadaan tes tambahan (Tes #10–#17):** Review bertahap menambahkan uji toolbar di luar transform (**Tes #10**), kontras WCAG 2.1 (**Tes #11**), ketahanan unmount editor aktif (**Tes #12**), drag gagang + resize lebar reflow & scale di `<ViewportPortal>` (**Tes #13**), edit penuh di zoom `< LOD` (**Tes #14**), cleanup unmount saat node edit dihapus atau pilihan berpindah (**Tes #15**), aturan font `>= 11 px`/sembunyi & hysteresis anti-kedip LOD (**Tes #16**), dan benchmark FPS 3 kali jalan beserta gerbang `meanFps`/`p95Ms`/`maxMs` (**Tes #17**).
 
 | # | Nama Tes di `s2.spec.ts` | Status | Hasil / Mekanisme Terverifikasi |
 | --- | --- | :---: | --- |
@@ -51,7 +56,11 @@ Seluruh suite dijalankan di Playwright Chromium (`pnpm exec playwright test -c s
 | 10 | `10. toolbar berukuran tetap di luar transform kanvas, terbaca di semua zoom, dan tidak menutupi node` | **Lulus** | `closest('.react-flow__viewport') === null`; ukuran identik `374×38 px` (tombol `28 px`) di zoom `1.0`, `0.25`, & `2.5` dengan zero overlap vs `card-surface-box-edit`, dan flip ke bawah saat di tepi atas. |
 | 11 | `11. ukur rasio kontras WCAG 2.1 untuk mark color & highlight di tema dark/light dan frame card/none` | **Lulus** | Memverifikasi seluruh pasangan highlight (`HighlightAmber/Emerald/Blue/Rose`) pada tema dark (`9.57–11.89`) & light (`12.66–14.63`) lulus WCAG AA (`passAA: true`); warna teks hex tetap pada mode light tercatat di §2.2. |
 | 12 | `12. editor aktif tetap hidup saat node di-pan keluar layar (culling ON): tanpa vs dengan mitigasi ViewportPortal` | **Lulus** | Tanpa mitigasi: unmount offscreen, seleksi & undo hilang. Dengan `<ViewportPortal>`: tetap ter-mount (`activeEditor: 1`), teks, seleksi (`start..end`), fokus, & riwayat undo utuh. |
-| 13 | `benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (LOD + rich text + 50 images)` | **Lulus** | Dataset `100` (`17` gambar + kaya) & `300` (`50` gambar + kaya), 13 skenario × **3 kali jalan**, memverifikasi LOD (`lod-text-*`, `lod-image-*`) dan menegakkan ambang `>= 30 fps` pada seluruh skenario `cullOn` (lulus `50.4–60.2 fps`). |
+| 13 | `13. resize dan drag gagang saat mengedit di ViewportPortal mengikuti posisi dan ukuran tanpa lompatan (reflow & scale)` | **Lulus** | Drag gagang memindahkan kotak & portal (`<= 1.5 px` deviasi tengah-drag & akhir); resize lebar `-140 px` memicu reflow tinggi tumbuh identik (`cardBox == phBox <= 1.5 px`, lebar editor + padding cocok) dan skalanya cocok di zoom `0.75` & `1.5`. |
+| 14 | `14. edit di zoom < ambang LOD: editor tampil penuh tanpa reset zoom dengan caret & seleksi berfungsi` | **Lulus** | Double-click pada zoom `0.25` menjaga kamera tetap `0.25` dan me-mount editor penuh (`TipTap instances: 1`) + toolbar; ketik, navigasi caret, seleksi `Shift+Arrow`, dan Bold (`strong`) berfungsi. |
+| 15 | `15. node yang sedang diedit dihapus atau pilihan berpindah: editor unmount bersih tanpa kebocoran dan tanpa kehilangan teks` | **Lulus** | Pindah edit ke node lain, `selectNodes(['box-rich'])`, dan `deleteNode('box-edit')` saat aktif edit seluruhnya meng-unmount bersih (`0`/`1` instance), membuka kunci pintasan (`t`), serta menjaga teks di statis & `Ctrl+Z`. |
+| 16 | `16. LOD: font judul placeholder >= 11 px di layar atau disembunyikan dan bebas kedip di sekitar ambang zoom` | **Lulus** | Zoom `0.25`: font layar `>= 11 px`; zoom `0.105`: judul disembunyikan; osilasi di `[0.33..0.39]` mencatat **0 pergantian** LOD berkat hysteresis `0.32`/`0.40`. |
+| 17 | `benchmark FPS pan-only, zoom-only, culling ON vs OFF, 3 runs per scenario (LOD + rich text + 50 images)` | **Lulus** | 13 skenario × **3 kali jalan**, menegakkan `meanFps >= 30`, `p95Ms <= 50` (seluruh `cullOn`), dan `maxMs <= 100` (pan/`zoom-out-all`) / `<= 200` (`mean <= 150` zoom dinamis `cullOn`). |
 
 ### 2.1 Metode Perbandingan Paritas Visual (Tes #9) & Invariansi Toolbar (Tes #10)
 
@@ -84,42 +93,47 @@ Pembahasan opsi **warna semantik (token tema) vs hex tetap `#rrggbb`**, dampakny
 
 ## 3. Hasil Benchmark FPS Campuran (LOD + Rich Text + 50 Gambar): Cull ON vs OFF, 3 Kali Jalan per Skenario
 
-Dataset: `100` node (`17` `imageBox` PNG lokal + node kaya heading/list/mark/link/code + statis) dan `300` node (`50` `imageBox` PNG lokal + node kaya + statis). Setiap skenario dijalankan **3 kali** (`>= 3.2s`, `>= 150` frame per jalan) pada Chromium headless `1280×800` tanpa GPU ([`stress-300-dark.png`](../../spikes/s2-tiptap-reactflow/out/stress-300-dark.png)). Seluruh skenario `cullOn` **wajib lulus asersi CI `>= 30 fps`** per run maupun rata-rata antar-jalan.
+Dataset: `100` node (`17` `imageBox` PNG lokal + node kaya heading/list/mark/link/code + statis) dan `300` node (`50` `imageBox` PNG lokal + node kaya + statis). Setiap skenario dijalankan **3 kali** (`>= 3.2s`, `>= 150` frame per jalan) pada Chromium headless `1280×800` tanpa GPU ([`stress-300-dark.png`](../../spikes/s2-tiptap-reactflow/out/stress-300-dark.png)).
 
-| Skenario (`S2_FPS_BENCHMARKS`) | Node / Gbr | Ed | Gerak | Cull (`onlyRenderVisibleElements`) | `meanFps` antar-jalan (mean / median / `[min..max]`) | `p50Fps` (mean / `[min..max]`) | `p95Fps` (mean / `[min..max]`) | `maxMs` (mean / `[min..max]`) | `frameCount` | DOM / EdMin |
-| --- | :---: | :---: | --- | :---: | --- | --- | --- | --- | :---: | :---: |
-| `s100_pan_1editor_cullOn` | 100 / 17 | 1 | pan | **ON** | **58.0 / 57.9** `[57.7..58.3]` | 59.9 `[59.9..59.9]` | 59.5 `[59.5..59.5]` | 44.5 `[33.4..50.0]` | 185–187 | 9–22 / 1 |
-| `s100_pan_1editor_cullOff` | 100 / 17 | 1 | pan | **OFF** | **60.0 / 60.1** `[59.6..60.2]` | 59.9 `[59.9..59.9]` | 59.9 `[59.9..59.9]` | 22.3 `[16.8..33.4]` | 191–193 | 100–100 / 1 |
-| `s100_zoom_1editor_cullOn` | 100 / 17 | 1 | zoom | **ON** | **50.4 / 50.1** `[49.1..51.9]` | 59.9 `[59.9..59.9]` | 29.9 `[29.9..29.9]` | 100.0 `[83.3..133.3]` | 158–167 | 10–70 / 1 |
-| `s100_zoom_1editor_cullOff` | 100 / 17 | 1 | zoom | **OFF** | **59.9 / 60.0** `[59.7..60.0]` | 59.9 `[59.9..59.9]` | 59.6 `[59.5..59.9]` | 22.3 `[16.8..33.3]` | 192–193 | 100–100 / 1 |
-| `s300_pan_0editor_cullOn` | 300 / 50 | 0 | pan | **ON** | **58.6 / 58.4** `[58.3..59.1]` | 59.9 `[59.9..59.9]` | 59.6 `[59.5..59.9]` | 38.9 `[33.4..49.9]` | 187–190 | 9–22 / 0 |
-| `s300_pan_0editor_cullOff` | 300 / 50 | 0 | pan | **OFF** | **60.0 / 60.2** `[59.6..60.2]` | 59.9 `[59.9..59.9]` | 59.6 `[59.5..59.9]` | 22.3 `[16.8..33.3]` | 191–193 | 300–300 / 0 |
-| `s300_pan_1editor_cullOn` | 300 / 50 | 1 | pan | **ON** | **58.9 / 58.9** `[58.4..59.3]` | 59.9 `[59.9..59.9]` | 59.5 `[59.5..59.5]` | 44.5 `[33.4..50.0]` | 188–190 | 9–22 / 1 |
-| `s300_pan_1editor_cullOff` | 300 / 50 | 1 | pan | **OFF** | **60.2 / 60.2** `[60.0..60.3]` | 59.9 `[59.9..59.9]` | 59.9 `[59.9..59.9]` | 16.8 `[16.8..16.8]` | 193–193 | 300–300 / 1 |
-| `s300_zoom_0editor_cullOn` | 300 / 50 | 0 | zoom | **ON** | **53.6 / 53.2** `[52.9..54.8]` | 59.9 `[59.9..59.9]` | 39.8 `[29.9..59.5]` | 77.8 `[66.7..83.4]` | 170–176 | 10–74 / 0 |
-| `s300_zoom_0editor_cullOff` | 300 / 50 | 0 | zoom | **OFF** | **59.9 / 60.0** `[59.7..60.0]` | 59.9 `[59.9..59.9]` | 59.6 `[59.5..59.9]` | 22.3 `[16.8..33.3]` | 192–193 | 300–300 / 0 |
-| `s300_zoom_1editor_cullOn` | 300 / 50 | 1 | zoom | **ON** | **52.0 / 51.9** `[50.7..53.5]` | 59.9 `[59.9..59.9]` | 39.8 `[29.9..59.5]` | 105.5 `[100.0..116.6]` | 163–172 | 10–74 / 1 |
-| `s300_zoom_1editor_cullOff` | 300 / 50 | 1 | zoom | **OFF** | **59.8 / 60.0** `[59.4..60.0]` | 59.9 `[59.9..59.9]` | 59.9 `[59.9..59.9]` | 22.3 `[16.8..33.3]` | 191–193 | 300–300 / 1 |
-| `s300_zoom_out_all_visible_1editor` | 300 / 50 | 1 | zoom-out-all (LOD) | **ON** | **60.2 / 60.2** `[60.2..60.3]` | 59.9 `[59.9..59.9]` | 59.9 `[59.9..59.9]` | 16.8 `[16.8..16.8]` | 193–193 | 300–300 / 1 |
+**Gerbang benchmark yang ditegakkan pada seluruh skenario `cullOn` (Tes #17):**
+- `meanFps >= 30` per run & rata-rata antar-jalan ([`docs/testing.md`](../testing.md) §9.5),
+- `p95Ms <= 50 ms` per run & rata-rata antar-jalan (sub-50 ms di bawah batas responsivitas operasi lokal `< 100 ms` di [`docs/spec-ui-nfr.md`](../spec-ui-nfr.md) §7.1),
+- `maxMs <= 100 ms` per run & rata-rata antar-jalan pada skenario pan dan `zoom-out-all` (`spec-ui-nfr.md` §7.1), dan `maxMs <= 200 ms` (`mean maxMs <= 150 ms`) pada skenario `zoom` dinamis `cullOn` akibat *mount burst* ~64 node baru masuk viewport sekaligus.
 
-Detail `s300_zoom_out_all_visible_1editor` (`cullOn`, LOD `< 0.35`, 3 kali jalan):
-- **Run 1:** `meanFps: 60.2`, `p50Fps: 59.9`, `p95Fps: 59.9`, `maxMs: 16.8 ms`, `frameCount: 193`, `durationMs: 3204.2 ms`
-- **Run 2:** `meanFps: 60.3`, `p50Fps: 59.9`, `p95Fps: 59.9`, `maxMs: 16.8 ms`, `frameCount: 193`, `durationMs: 3201.3 ms`
-- **Run 3:** `meanFps: 60.2`, `p50Fps: 59.9`, `p95Fps: 59.9`, `maxMs: 16.8 ms`, `frameCount: 193`, `durationMs: 3205.6 ms`
+| Skenario (`S2_FPS_BENCHMARKS`) | Node / Gbr | Ed | Gerak | Cull | `meanFps` (mean / median / `[min..max]`) | `p50Fps` | `p95Fps` | `p95Ms` (mean / `[min..max]`) | `maxMs` (mean / `[min..max]`) | `frameCount` | DOM / EdMin |
+| --- | :---: | :---: | --- | :---: | --- | :---: | :---: | --- | --- | :---: | :---: |
+| `s100_pan_1editor_cullOn` | 100 / 17 | 1 | pan | **ON** | **58.5 / 58.5** `[58.1..59.0]` | 59.9 | 59.6 | 16.8 `[16.7..16.8]` | 44.5 `[33.4..50.0]` | 187–189 | 9–22 / 1 |
+| `s100_pan_1editor_cullOff` | 100 / 17 | 1 | pan | **OFF** | **60.2 / 60.3** `[60.1..60.3]` | 59.9 | 59.9 | 16.7 `[16.7..16.7]` | 16.8 `[16.8..16.8]` | 193–193 | 100–100 / 1 |
+| `s100_zoom_1editor_cullOn` | 100 / 17 | 1 | zoom | **ON** | **52.7 / 52.9** `[52.0..53.2]` | 59.9 | 30.0 | 33.3 `[33.2..33.3]` | 83.4 `[83.4..83.4]` | 167–171 | 10–70 / 1 |
+| `s100_zoom_1editor_cullOff` | 100 / 17 | 1 | zoom | **OFF** | **60.0 / 60.0** `[60.0..60.0]` | 59.9 | 59.6 | 16.8 `[16.7..16.8]` | 16.8 `[16.8..16.8]` | 193–193 | 100–100 / 1 |
+| `s300_pan_0editor_cullOn` | 300 / 50 | 0 | pan | **ON** | **59.2 / 59.2** `[58.8..59.6]` | 59.9 | 59.5 | 16.8 `[16.8..16.8]` | 33.4 `[33.4..33.4]` | 189–191 | 9–22 / 0 |
+| `s300_pan_0editor_cullOff` | 300 / 50 | 0 | pan | **OFF** | **60.1 / 60.1** `[60.0..60.2]` | 59.9 | 59.8 | 16.7 `[16.7..16.8]` | 22.3 `[16.8..33.3]` | 192–193 | 300–300 / 0 |
+| `s300_pan_1editor_cullOn` | 300 / 50 | 1 | pan | **ON** | **59.0 / 59.2** `[58.5..59.3]` | 59.9 | 59.6 | 16.8 `[16.7..16.8]` | 33.4 `[33.3..33.4]` | 188–190 | 9–22 / 1 |
+| `s300_pan_1editor_cullOff` | 300 / 50 | 1 | pan | **OFF** | **60.1 / 60.1** `[60.1..60.2]` | 59.9 | 59.8 | 16.7 `[16.7..16.8]` | 16.8 `[16.8..16.8]` | 193–193 | 300–300 / 1 |
+| `s300_zoom_0editor_cullOn` | 300 / 50 | 0 | zoom | **ON** | **53.3 / 53.2** `[53.0..53.8]` | 59.9 | 30.0 | 33.3 `[33.3..33.3]` | 88.9 `[83.4..100.0]` | 170–173 | 10–74 / 0 |
+| `s300_zoom_0editor_cullOff` | 300 / 50 | 0 | zoom | **OFF** | **59.8 / 59.7** `[59.7..60.0]` | 59.9 | 59.8 | 16.7 `[16.7..16.8]` | 27.9 `[16.8..33.4]` | 192–193 | 300–300 / 0 |
+| `s300_zoom_1editor_cullOn` | 300 / 50 | 1 | zoom | **ON** | **51.8 / 51.4** `[51.3..52.6]` | 59.9 | 39.8 | 27.8 `[16.8..33.4]` | 89.0 `[83.4..100.1]` | 165–169 | 10–74 / 1 |
+| `s300_zoom_1editor_cullOff` | 300 / 50 | 1 | zoom | **OFF** | **59.4 / 59.7** `[58.8..59.8]` | 59.9 | 59.8 | 16.7 `[16.7..16.8]` | 33.3 `[33.3..33.4]` | 189–192 | 300–300 / 1 |
+| `s300_zoom_out_all_visible_1editor` | 300 / 50 | 1 | zoom-out-all (LOD) | **ON** | **59.9 / 59.9** `[59.8..60.1]` | 59.9 | 59.8 | 16.7 `[16.7..16.8]` | 27.8 `[16.8..33.4]` | 192–193 | 300–300 / 1 |
 
-**Temuan arsitektural kunci (Task S2c):**
-1. **Memisahkan `useViewport()` & posisi toolbar keluar dari komponen induk kanvas sama krusialnya dengan LOD:** Sebelum `useViewport()` dipindahkan ke komponen daun (`FooterZoomLabel` & `FloatingToolbarOverlay`), setiap tick animasi viewport membuat `<ReactFlow>` ikut me-render ulang seluruh wrapper node dan memicu reflow `getBoundingClientRect()` saat editor aktif—bahkan dengan DOM LOD ringan, `zoom-out-all` tertahan di `16.0 fps`. Setelah isolasi `useViewport()` dan penerapan LOD (`< 0.35`), **`zoom-out-all` melonjak ke `60.2 fps` (`p95 59.9 fps`, `max 16.8 ms`)**, dan `s300_zoom_1editor_cullOff` ikut naik dari `14.0 fps` ke `59.8 fps`.
-2. **LOD ambang bawah (`0.35`, satu `LodZoomContext` di atas `<ReactFlow>`):** Menghindari 300 langganan `useViewportStore` per-node (yang sebelumnya menurunkan `cullOff` ke `5.5–7.3 fps` dan memecah transisi di rentang zoom interaktif `0.36..1.08`).
+Detail `s300_zoom_out_all_visible_1editor` (`cullOn`, LOD enter `< 0.32` / title hidden `< 0.19`, 3 kali jalan):
+- **Run 1:** `meanFps: 60.1`, `p50Fps: 59.9`, `p95Fps: 59.9`, `p95Ms: 16.7 ms`, `maxMs: 16.8 ms`, `frameCount: 193`, `durationMs: 3208.7 ms`
+- **Run 2:** `meanFps: 59.9`, `p50Fps: 59.9`, `p95Fps: 59.5`, `p95Ms: 16.8 ms`, `maxMs: 33.4 ms`, `frameCount: 192`, `durationMs: 3203.7 ms`
+- **Run 3:** `meanFps: 59.8`, `p50Fps: 59.9`, `p95Fps: 59.9`, `p95Ms: 16.7 ms`, `maxMs: 33.3 ms`, `frameCount: 192`, `durationMs: 3208.8 ms`
+
+**Temuan arsitektural kunci (`Task S2c` & `S2c-F`):**
+1. **Memisahkan `useViewport()` & posisi toolbar keluar dari komponen induk kanvas sama krusialnya dengan LOD:** Isolasi `FooterZoomLabel` & `FloatingToolbarOverlay` plus `LodViewportObserver` membuat `zoom-out-all` berjalan stabil pada **`59.9 fps` (`p95 16.7 ms`, `max 27.8 ms` rata-rata)** dan seluruh skenario `cullOn` bertahan di **`51.8–59.9 fps` (`p95Ms <= 33.4 ms`)**.
+2. **Hysteresis LOD anti-kedip (`0.32` / `0.40` & `0.19` / `0.23`):** Menghindari 300 langganan `useViewportStore` per-node sekaligus memastikan osilasi zoom di sekitar batas LOD menghasilkan **0** pergantian mode dan font judul selalu `>= 11 px` di layar (atau disembunyikan saat kartu terlalu kecil).
 3. **Ketahanan unmount editor aktif (Tes #12 & `activeEditorMinDuringRun: 1` di semua skenario 1-editor):**
 
 | Kondisi (`S2_EDITOR_UNMOUNT_RESILIENCE`) | Status Mount saat Pan Off-Screen | Teks & Seleksi Setelah Pan Balik | Fokus & Undo Teks | Dampak Benchmark `cullOn` |
 | --- | --- | --- | --- | --- |
 | **Tanpa mitigasi** (node di dalam `.react-flow__node`) | Ter-unmount (`unmountedOffscreen: true`) | Seleksi & isi terputus (`selectionPreserved: false`) | Riwayat undo TipTap hilang (`undoPreserved: false`) | `activeEditorMinDuringRun: 0` saat pan off-screen |
-| **Mitigasi `<ViewportPortal>`** (`SpikeApp.tsx`) | Tetap hidup (`remainedMountedOffscreen: true`) | Seleksi terjaga (`selectionPreserved: true`) | Fokus & undo utuh (`focusPreserved: true`, `undoPreserved: true`) | `activeEditorMinDuringRun: 1`; pan `58.0–58.9 fps`, parity `diffPixels: 0` |
+| **Mitigasi `<ViewportPortal>`** (`SpikeApp.tsx`) | Tetap hidup (`remainedMountedOffscreen: true`) | Seleksi terjaga (`selectionPreserved: true`) | Fokus & undo utuh (`focusPreserved: true`, `undoPreserved: true`) | `activeEditorMinDuringRun: 1`; pan `58.5–59.0 fps`, parity `diffPixels: 0` |
 
 ---
 
-## 4. Uji Mutasi per Penahan & Cakupan Browser
+## 4. Uji Mutasi per Penahan & Cakupan Browser / CI
 
 ### Mutasi Penahan (diterapkan satu per satu lalu di-revert; `git diff --exit-code` bersih setelah setiap revert)
 
@@ -131,10 +145,11 @@ Detail `s300_zoom_out_all_visible_1editor` (`cullOn`, LOD `< 0.35`, 3 kali jalan
 | 4 | Hapus `onWheelCapture` | `TextCanvasNode.tsx` | **Tes #4 gagal** (`scrollStaticAfter === 0`, `box-scroll` statis gagal scroll). | `git diff --exit-code` -> exit `0` |
 | 5 | Hapus `stopPropagation` pada `keydown` | `ActiveTipTapEditor.tsx` | **Tes #1 gagal** (`getLeakedCanvasKeydowns()` mengembalikan **`22`**, seharusnya **`0`**). | `git diff --exit-code` -> exit `0` |
 
-### Pengujian Lintas Browser (`Playwright`)
+### Pengujian Lintas Browser (`Playwright`) & Status CI
 
-- **Chromium:** **13/13 lulus.**
-- **Firefox & WebKit:** Tidak tersedia biner Playwright terpasang di cache lokal (`Executable doesn't exist`), selaras dengan CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)).
+- **Chromium:** **17/17 lulus** (`3.3m` pada suite lokal `spikes/s2-tiptap-reactflow/playwright.config.ts`).
+- **Firefox & WebKit:** Tidak tersedia biner Playwright terpasang di cache lokal (`Executable doesn't exist`).
+- **Apakah suite spike dijalankan di GitHub Actions CI?** **Tidak.** Workflow [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) menjalankan `pnpm test:e2e` yang hanya mengeksekusi Playwright config root (`e2e/`), dan tidak ditambah job spike tanpa persetujuan pemilik.
 
 ---
 

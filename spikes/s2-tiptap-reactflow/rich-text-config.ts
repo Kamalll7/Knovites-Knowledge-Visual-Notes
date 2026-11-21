@@ -205,9 +205,41 @@ export function sanitizePastedSlice(slice: Slice): Slice {
   return new Slice(sanitizeFragment(slice.content), slice.openStart, slice.openEnd)
 }
 
-// Set below normal 0.36..1.08 zoom sweep to avoid LOD DOM thrashing, while triggering overview/zoom-out-all (<0.35)
-export const LOD_ZOOM_THRESHOLD = 0.35
-export const LodZoomContext = createContext(false)
+// Hysteresis thresholds to prevent LOD flicker around boundary zooms:
+// Enter LOD below 0.32 (normal 0.36..1.08 zoom sweep never enters), exit only above 0.40.
+// Hide LOD title below 0.19 (when screen card is too small for >= 11px text), show again >= 0.23.
+export const LOD_ENTER_ZOOM = 0.32
+export const LOD_EXIT_ZOOM = 0.4
+export const LOD_TITLE_HIDE_ZOOM = 0.19
+export const LOD_TITLE_SHOW_ZOOM = 0.23
+export const LOD_MIN_SCREEN_FONT_PX = 11
+
+export interface LodZoomState {
+  isLod: boolean
+  showLodTitle: boolean
+  lodFontPx: number
+}
+
+export const INITIAL_LOD_ZOOM_STATE: LodZoomState = {
+  isLod: false,
+  showLodTitle: false,
+  lodFontPx: 14,
+}
+
+export function computeLodZoomState(zoom: number, prev: LodZoomState): LodZoomState {
+  const isLod = prev.isLod ? zoom < LOD_EXIT_ZOOM : zoom < LOD_ENTER_ZOOM
+  const showLodTitle =
+    isLod && (prev.showLodTitle ? zoom >= LOD_TITLE_HIDE_ZOOM : zoom >= LOD_TITLE_SHOW_ZOOM)
+  // Bucket zoom in 0.05 increments so screen fontSize = lodFontPx * zoom always stays >= 12px (>= 11px) without per-frame churn
+  const zBucket = Math.max(LOD_TITLE_HIDE_ZOOM, Math.floor(zoom * 20) / 20)
+  const lodFontPx = showLodTitle ? Math.ceil((LOD_MIN_SCREEN_FONT_PX + 1) / zBucket) : 0
+  if (prev.isLod === isLod && prev.showLodTitle === showLodTitle && prev.lodFontPx === lodFontPx) {
+    return prev
+  }
+  return { isLod, showLodTitle, lodFontPx }
+}
+
+export const LodZoomContext = createContext<LodZoomState>(INITIAL_LOD_ZOOM_STATE)
 
 export function extractDocTitle(doc: TipTapDoc): string {
   const walk = (nodes?: TipTapDoc['content']): string => {
