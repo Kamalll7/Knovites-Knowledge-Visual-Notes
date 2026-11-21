@@ -110,6 +110,13 @@ export interface ScreenTierResolution {
   readonly effectiveFontPx: number
 }
 
+export interface CollisionStats {
+  passesUsed: number
+  overlapChecks: number
+  edgeCrossChecks: number
+  allocations: number
+}
+
 export interface RadialLayoutInput {
   readonly visible: ComputeVisibleResult
   readonly measureText: TextMeasurerFn
@@ -118,6 +125,8 @@ export interface RadialLayoutInput {
   /** Optional requested tier; downgraded if effective on-screen font `< 11 px`. */
   readonly tier?: ZoomTier
   readonly config?: Partial<RadialLayoutConfig>
+  /** Optional read-only counter sink for collision profiling and CI pair-check gates. */
+  readonly stats?: CollisionStats
 }
 
 export interface BoxBounds {

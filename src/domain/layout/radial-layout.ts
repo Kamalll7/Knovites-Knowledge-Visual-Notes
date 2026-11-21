@@ -8,6 +8,7 @@ import {
   mergeRadialConfig,
   resolveScreenZoomTier,
   type BoxBounds,
+  type CollisionStats,
   type PlacedMutableNode,
   type RadialFontSpec,
   type RadialGeometryDiagnostics,
@@ -28,6 +29,7 @@ export {
   formatLayoutFont,
   resolveScreenZoomTier,
   type BoxBounds,
+  type CollisionStats,
   type RadialFontSpec,
   type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
@@ -187,6 +189,7 @@ export function computeRadialLayout(input: RadialLayoutInput): RadialLayoutResul
     prepared.childrenMap,
     placed,
     config,
+    input.stats,
   )
   return finalizeRadialResult(rootId, scale, resolution, placedPreOrder, placed, passesUsed)
 }

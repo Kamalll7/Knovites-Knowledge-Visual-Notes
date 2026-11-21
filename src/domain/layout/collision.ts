@@ -3,6 +3,7 @@ import { pushSubtreeOutward } from './rings'
 import {
   mergeRadialConfig,
   type BoxBounds,
+  type CollisionStats,
   type PlacedMutableNode,
   type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
@@ -97,6 +98,7 @@ export function resolveCollisionsAndCrossings(
   childrenMap: Map<string, string[]>,
   placed: Map<string, PlacedMutableNode>,
   config: RadialLayoutConfig,
+  stats?: CollisionStats,
 ): number {
   let passesUsed = 0
   for (let pass = 0; pass < config.maxCollisionPasses; pass += 1) {
@@ -105,10 +107,15 @@ export function resolveCollisionsAndCrossings(
     for (let i = 0; i < placedPreOrder.length; i += 1) {
       const a = placed.get(placedPreOrder[i]!)!
       const boxA = occupiedBounds(a)
+      if (stats) stats.allocations += 1
       for (let j = i + 1; j < placedPreOrder.length; j += 1) {
         const b = placed.get(placedPreOrder[j]!)!
         if (b.id === rootId) continue
         const boxB = occupiedBounds(b)
+        if (stats) {
+          stats.allocations += 1
+          stats.overlapChecks += 1
+        }
         if (!boxesOverlapWithGap(boxA, boxB, config.minGapPx)) continue
 
         if (a.parentId !== null && a.parentId === b.parentId) {
@@ -164,13 +171,17 @@ export function resolveCollisionsAndCrossings(
         parent.x - child.x,
         parent.y - child.y,
       )
+      if (stats) stats.allocations += 2
 
       for (const otherId of placedPreOrder) {
         if (otherId === child.id || otherId === parent.id) continue
         const other = placed.get(otherId)!
-        if (
-          !segmentIntersectsBox(pAnchor.x, pAnchor.y, cAnchor.x, cAnchor.y, occupiedBounds(other))
-        ) {
+        const otherBox = occupiedBounds(other)
+        if (stats) {
+          stats.allocations += 1
+          stats.edgeCrossChecks += 1
+        }
+        if (!segmentIntersectsBox(pAnchor.x, pAnchor.y, cAnchor.x, cAnchor.y, otherBox)) {
           continue
         }
         if (other.depth < parent.depth && parent.id !== rootId) {
@@ -198,5 +209,6 @@ export function resolveCollisionsAndCrossings(
     passesUsed = pass + 1
     if (!adjusted) break
   }
+  if (stats) stats.passesUsed = passesUsed
   return passesUsed
 }

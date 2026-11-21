@@ -17,6 +17,7 @@ export {
   formatLayoutFont,
   resolveScreenZoomTier,
   type BoxBounds,
+  type CollisionStats,
   type RadialFontSpec,
   type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
