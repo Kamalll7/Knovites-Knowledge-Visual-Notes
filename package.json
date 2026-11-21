@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "perf:layout": "KNOVITES_PERF=1 vitest run src/domain/layout/radial-layout.test.ts",
     "check:bundle": "node scripts/check-bundle.mjs",
     "test:e2e": "playwright test",
     "audit": "pnpm audit"

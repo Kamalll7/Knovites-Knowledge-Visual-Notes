@@ -9,12 +9,17 @@ import {
   computeVisible,
   resolveScreenZoomTier,
   type ComputeVisibleResult,
+  type CollisionStats,
   type RadialLayoutResult,
   type TextMeasurerFn,
   type VisibleMapNode,
 } from '@/domain/layout'
-import { computeRadialLayoutReference } from '@/domain/layout/__reference__/collision-reference'
+import {
+  computeRadialLayoutReference,
+  resolveCollisionsAndCrossingsReference,
+} from '@/domain/layout/__reference__/collision-reference'
 import { resolveCollisionsAndCrossings } from '@/domain/layout/collision'
+import { type PlacedMutableNode } from '@/domain/layout/types'
 import { clipRayToNodeEdge } from '@/domain/layout/edges'
 import { finalizeRadialResult } from '@/domain/layout/radial-layout'
 import { assignInitialPolarNodes } from '@/domain/layout/rings'
@@ -24,6 +29,14 @@ import { buildTree, type TreeBuildEntry } from '@/domain/tree'
 const MIN_REQUIRED_GAP_PX = 12
 const MIN_REQUIRED_SCREEN_FONT_PX = 11
 
+/**
+ * GOLDEN HASH UPDATE PROCEDURE (T3.2c):
+ * - NEVER modify `GOLDEN_RADIAL_SHA256` or `GOLDEN_WORST300_SHA256` during performance refactors.
+ * - Updating golden hashes is ONLY permitted after an explicitly approved behavioral change:
+ *   1. Stop and report the behavioral diff before touching hashes.
+ *   2. Run manually once: `UPDATE_GOLDEN=1 pnpm vitest run src/domain/layout/radial-layout.test.ts -t "golden"`
+ *   3. Inspect and commit the approved hash map update (CI never sets `UPDATE_GOLDEN`).
+ */
 const GOLDEN_WORST300_SHA256 = '2c91e249b3bea508ec838a70339fd779e695c78320452a7078b4f9e54f5cf773'
 
 function buildWorstCaseVisible(maxVisibleNodes = 300): ComputeVisibleResult {
@@ -567,7 +580,139 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
       tier: 2,
     })
     const worstHash = await sha256Hex(JSON.stringify(worstLayout))
+    if (process.env.UPDATE_GOLDEN === '1' && !process.env.CI) {
+      console.info(`[UPDATE_GOLDEN] GOLDEN_WORST300_SHA256=${worstHash}`)
+    }
     expect(worstHash, 'golden hash mismatch for worstCase300').toBe(GOLDEN_WORST300_SHA256)
+  })
+
+  it('preserves exact candidate pre-order tie-breaking across multiple grid cells', () => {
+    const capsule = {
+      shape: 'capsule' as const,
+      displayTitle: 'Node',
+      isTruncated: false,
+      labelVisible: true,
+      width: 120,
+      height: 40,
+      radius: null,
+      localLabelBox: null,
+    }
+    const makePlacedMap = (): Map<string, PlacedMutableNode> => {
+      const entries: [string, PlacedMutableNode][] = [
+        [
+          MAP_ROOT_ID,
+          {
+            id: MAP_ROOT_ID,
+            parentId: null,
+            depth: 0,
+            kind: 'root',
+            spec: { ...capsule, shape: 'circle', width: 104, height: 104, radius: 52 },
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 4,
+            r: 0,
+            theta: 0,
+            x: 0,
+            y: -400,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI * 2,
+          },
+        ],
+        [
+          'p',
+          {
+            id: 'p',
+            parentId: MAP_ROOT_ID,
+            depth: 1,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 2,
+            r: 1200,
+            theta: -Math.PI / 2,
+            x: -1200,
+            y: 0,
+            wedgeStart: -Math.PI,
+            wedgeEnd: 0,
+          },
+        ],
+        [
+          'c',
+          {
+            id: 'c',
+            parentId: 'p',
+            depth: 2,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 1200,
+            theta: Math.PI / 2,
+            x: 1200,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI,
+          },
+        ],
+        [
+          'earlierFar',
+          {
+            id: 'earlierFar',
+            parentId: MAP_ROOT_ID,
+            depth: 2,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 700,
+            theta: Math.PI / 2,
+            x: 700,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI,
+          },
+        ],
+        [
+          'laterNear',
+          {
+            id: 'laterNear',
+            parentId: MAP_ROOT_ID,
+            depth: 2,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 700,
+            theta: -Math.PI / 2,
+            x: -700,
+            y: 0,
+            wedgeStart: -Math.PI,
+            wedgeEnd: 0,
+          },
+        ],
+      ]
+      return new Map(entries)
+    }
+
+    const order = [MAP_ROOT_ID, 'p', 'c', 'earlierFar', 'laterNear']
+    const children = new Map<string, string[]>([
+      [MAP_ROOT_ID, ['p', 'earlierFar', 'laterNear']],
+      ['p', ['c']],
+      ['c', []],
+      ['earlierFar', []],
+      ['laterNear', []],
+    ])
+    const cfg = { ...DEFAULT_RADIAL_LAYOUT_CONFIG, maxCollisionPasses: 1 }
+    const actualPlaced = makePlacedMap()
+    const refPlaced = makePlacedMap()
+
+    resolveCollisionsAndCrossings(MAP_ROOT_ID, order, children, actualPlaced, cfg)
+    resolveCollisionsAndCrossingsReference(MAP_ROOT_ID, order, children, refPlaced, cfg)
+    expect(Array.from(actualPlaced.entries())).toEqual(Array.from(refPlaced.entries()))
   })
 
   it('matches frozen reference implementation byte-for-byte on all mandatory datasets and >= 200 random trees', async () => {
@@ -1193,6 +1338,50 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     expect(pWorst.visibleCount).toBe(300)
     expect(pWorst.total.medianMs).toBeGreaterThan(0)
   }, 60_000)
+
+  it('enforces deterministic spatial-grid pair-check and zero-allocation bounds in CI (no wall-clock)', async () => {
+    const { createMandatoryDatasets } = await import('@/domain/datasets')
+    const measure = fixedWidthMeasure(7.5)
+    const runWithStats = (visible: ComputeVisibleResult, tier: 0 | 1 | 2) => {
+      const stats: CollisionStats = {
+        passesUsed: 0,
+        overlapChecks: 0,
+        edgeCrossChecks: 0,
+        allocations: 0,
+      }
+      computeRadialLayout({ visible, measureText: measure, scale: 1, tier, stats })
+      return stats
+    }
+
+    const largeDs = createMandatoryDatasets().large2000
+    const { state: largeTree } = buildTree(largeDs.entries)
+    const largeDeepId = largeDs.entries[Math.floor(largeDs.entries.length / 2)]!.node!.id
+    const largeDeepVisible = computeVisible({
+      tree: largeTree,
+      rootTitle: largeDs.manifest.title,
+      focusId: largeDeepId,
+      zoomTier: 2,
+    })
+    const largeDeepStats = runWithStats(largeDeepVisible, 2)
+    expect(largeDeepStats.allocations).toBe(0)
+    expect(largeDeepStats.overlapChecks).toBeLessThanOrEqual(2_000)
+    expect(largeDeepStats.edgeCrossChecks).toBeLessThanOrEqual(8_000)
+
+    const scalingProfile = [50, 100, 200, 300].map((count) => {
+      const vis = buildWorstCaseVisible(count)
+      const st = runWithStats(vis, 2)
+      return { n: vis.orderedIds.length, ...st }
+    })
+    console.info(
+      `[T3_2C_OPT_SCALING] ${JSON.stringify({ largeDeep: largeDeepStats, scaling: scalingProfile })}`,
+    )
+
+    const worstStats = scalingProfile[scalingProfile.length - 1]!
+    expect(worstStats.n).toBe(300)
+    expect(worstStats.allocations).toBe(0)
+    expect(worstStats.overlapChecks).toBeLessThanOrEqual(500)
+    expect(worstStats.edgeCrossChecks).toBeLessThanOrEqual(50_000)
+  })
 
   it('satisfies radial invariants under fast-check randomized trees', () => {
     const specArb = fc.array(
