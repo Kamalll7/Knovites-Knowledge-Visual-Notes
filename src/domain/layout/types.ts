@@ -167,12 +167,16 @@ export interface RadialLayoutEdge {
 export interface RadialLayoutDiagnostics {
   readonly nodeCount: number
   readonly edgeCount: number
-  readonly overlapCount: number
-  readonly edgeCrossingsCount: number
   readonly truncatedCount: number
   readonly hiddenLabelCount: number
   readonly minEffectiveFontPx: number
   readonly collisionPassesUsed: number
+}
+
+/** Standalone O(n^2) geometric audit metrics computed outside the hot layout path. */
+export interface RadialGeometryDiagnostics {
+  readonly overlapCount: number
+  readonly edgeCrossingsCount: number
 }
 
 export interface RadialLayoutResult {

@@ -1,6 +1,6 @@
-import { boxesOverlapWithGap, occupiedBounds, resolveCollisionsAndCrossings } from './collision'
+import { computeRadialGeometryDiagnostics, resolveCollisionsAndCrossings } from './collision'
 import { MAP_ROOT_ID } from './compute-visible'
-import { clipRayToNodeEdge, segmentIntersectsBox } from './edges'
+import { clipRayToNodeEdge } from './edges'
 import { assignInitialPolarNodes } from './rings'
 import {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
@@ -10,6 +10,7 @@ import {
   type BoxBounds,
   type PlacedMutableNode,
   type RadialFontSpec,
+  type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
   type RadialLayoutDiagnostics,
   type RadialLayoutEdge,
@@ -23,10 +24,12 @@ import { prepareSpecsAndWeights } from './weights'
 
 export {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
+  computeRadialGeometryDiagnostics,
   formatLayoutFont,
   resolveScreenZoomTier,
   type BoxBounds,
   type RadialFontSpec,
+  type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
   type RadialLayoutDiagnostics,
   type RadialLayoutEdge,
@@ -37,14 +40,13 @@ export {
   type TextMeasurerFn,
 }
 
-function finalizeRadialResult(
+export function finalizeRadialResult(
   rootId: string,
   scale: number,
   resolution: ScreenTierResolution,
   placedPreOrder: readonly string[],
   placed: Map<string, PlacedMutableNode>,
   passesUsed: number,
-  config: RadialLayoutConfig,
 ): RadialLayoutResult {
   const outNodes: Record<string, RadialLayoutNode> = {}
   const edges: RadialLayoutEdge[] = []
@@ -121,35 +123,6 @@ function finalizeRadialResult(
     }
   }
 
-  let overlapCount = 0
-  for (let i = 0; i < placedPreOrder.length; i += 1) {
-    const aBox = occupiedBounds(placed.get(placedPreOrder[i]!)!)
-    for (let j = i + 1; j < placedPreOrder.length; j += 1) {
-      const bBox = occupiedBounds(placed.get(placedPreOrder[j]!)!)
-      if (boxesOverlapWithGap(aBox, bBox, config.minGapPx)) {
-        overlapCount += 1
-      }
-    }
-  }
-
-  let edgeCrossingsCount = 0
-  for (const edge of edges) {
-    for (const id of placedPreOrder) {
-      if (id === edge.sourceId || id === edge.targetId) continue
-      if (
-        segmentIntersectsBox(
-          edge.sourceX,
-          edge.sourceY,
-          edge.targetX,
-          edge.targetY,
-          occupiedBounds(placed.get(id)!),
-        )
-      ) {
-        edgeCrossingsCount += 1
-      }
-    }
-  }
-
   return {
     rootId,
     tier: resolution.tier,
@@ -160,8 +133,6 @@ function finalizeRadialResult(
     diagnostics: {
       nodeCount: placedPreOrder.length,
       edgeCount: edges.length,
-      overlapCount,
-      edgeCrossingsCount,
       truncatedCount,
       hiddenLabelCount,
       minEffectiveFontPx: Number.isFinite(minEffectiveFontPx) ? minEffectiveFontPx : 0,
@@ -189,8 +160,6 @@ export function computeRadialLayout(input: RadialLayoutInput): RadialLayoutResul
       diagnostics: {
         nodeCount: 0,
         edgeCount: 0,
-        overlapCount: 0,
-        edgeCrossingsCount: 0,
         truncatedCount: 0,
         hiddenLabelCount: 0,
         minEffectiveFontPx: 0,
@@ -219,5 +188,5 @@ export function computeRadialLayout(input: RadialLayoutInput): RadialLayoutResul
     placed,
     config,
   )
-  return finalizeRadialResult(rootId, scale, resolution, placedPreOrder, placed, passesUsed, config)
+  return finalizeRadialResult(rootId, scale, resolution, placedPreOrder, placed, passesUsed)
 }

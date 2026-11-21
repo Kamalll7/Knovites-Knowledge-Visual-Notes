@@ -1,6 +1,14 @@
 import { clipRayToNodeEdge, segmentIntersectsBox } from './edges'
 import { pushSubtreeOutward } from './rings'
-import type { BoxBounds, PlacedMutableNode, RadialLayoutConfig } from './types'
+import {
+  mergeRadialConfig,
+  type BoxBounds,
+  type PlacedMutableNode,
+  type RadialGeometryDiagnostics,
+  type RadialLayoutConfig,
+  type RadialLayoutNode,
+  type RadialLayoutResult,
+} from './types'
 
 /** Returns the outer axis-aligned bounding box including any visible external tier-0 label. */
 export function occupiedBounds(n: PlacedMutableNode): BoxBounds {
@@ -17,6 +25,58 @@ export function occupiedBounds(n: PlacedMutableNode): BoxBounds {
   const uMinY = Math.min(minY, n.y + lb.y)
   const uMaxY = Math.max(maxY, n.y + lb.y + lb.height)
   return { x: uMinX, y: uMinY, width: uMaxX - uMinX, height: uMaxY - uMinY }
+}
+
+/** Outer AABB for an output `RadialLayoutNode`, including visible external tier-0 label. */
+export function occupiedLayoutNodeBounds(n: RadialLayoutNode): BoxBounds {
+  const minX = n.x - n.width / 2
+  const maxX = n.x + n.width / 2
+  const minY = n.y - n.height / 2
+  const maxY = n.y + n.height / 2
+  const lb = n.labelBox
+  if (!lb) {
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  }
+  const uMinX = Math.min(minX, lb.x)
+  const uMaxX = Math.max(maxX, lb.x + lb.width)
+  const uMinY = Math.min(minY, lb.y)
+  const uMaxY = Math.max(maxY, lb.y + lb.height)
+  return { x: uMinX, y: uMinY, width: uMaxX - uMinX, height: uMaxY - uMinY }
+}
+
+/** Computes O(n^2) node overlap and edge-crossing counts for tests and geometry audits. */
+export function computeRadialGeometryDiagnostics(
+  layout: RadialLayoutResult,
+  configOverride?: Partial<RadialLayoutConfig>,
+): RadialGeometryDiagnostics {
+  const config = mergeRadialConfig(configOverride)
+  const orderedNodes = layout.orderedIds
+    .map((id) => layout.nodes[id])
+    .filter((n): n is RadialLayoutNode => n !== undefined)
+  const boxes = orderedNodes.map((n) => occupiedLayoutNodeBounds(n))
+
+  let overlapCount = 0
+  for (let i = 0; i < boxes.length; i += 1) {
+    const aBox = boxes[i]!
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      if (boxesOverlapWithGap(aBox, boxes[j]!, config.minGapPx)) {
+        overlapCount += 1
+      }
+    }
+  }
+
+  let edgeCrossingsCount = 0
+  for (const edge of layout.edges) {
+    for (let i = 0; i < orderedNodes.length; i += 1) {
+      const node = orderedNodes[i]!
+      if (node.id === edge.sourceId || node.id === edge.targetId) continue
+      if (segmentIntersectsBox(edge.sourceX, edge.sourceY, edge.targetX, edge.targetY, boxes[i]!)) {
+        edgeCrossingsCount += 1
+      }
+    }
+  }
+
+  return { overlapCount, edgeCrossingsCount }
 }
 
 /** Checks whether two bounding boxes violate the minimum gap clearance `minGapPx`. */

@@ -12,11 +12,13 @@ export {
 } from '@/domain/layout/compute-visible'
 export {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
+  computeRadialGeometryDiagnostics,
   computeRadialLayout,
   formatLayoutFont,
   resolveScreenZoomTier,
   type BoxBounds,
   type RadialFontSpec,
+  type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
   type RadialLayoutDiagnostics,
   type RadialLayoutEdge,
