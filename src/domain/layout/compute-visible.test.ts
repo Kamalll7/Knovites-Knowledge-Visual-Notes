@@ -233,10 +233,14 @@ describe('computeVisible [T3.1, FR-MAP-02]', () => {
             }
           }
 
-          // 5. Subtree count conservation: hiddenCount + visibleDescendants === totalDescendants
+          // 5. Subtree count conservation & collapsed indicator:
+          // hiddenCount + visibleDescendants === totalDescendants, and isCollapsedWithChildren === (hiddenCount > 0) (M7, M8)
           for (const n of Object.values(resA.nodes)) {
             if (n.kind !== 'overflow') {
               expect(n.hiddenCount + n.visibleDescendants).toBe(n.totalDescendants)
+              expect(n.isCollapsedWithChildren).toBe(n.hiddenCount > 0)
+            } else {
+              expect(n.isCollapsedWithChildren).toBe(false)
             }
           }
 
@@ -523,5 +527,100 @@ describe('computeVisible [T3.1, FR-MAP-02]', () => {
 
     expect(res.nodes[visiblePinId]!.visibleChildIds).toHaveLength(20)
     expect(res.nodes[unreachablePinId]).toBeUndefined()
+  })
+
+  it('retains complete focus path even when focusPath length itself exceeds maxVisibleNodes', () => {
+    // Explicit exception test: a 10-level chain has 11 focus-path nodes (MAP_ROOT_ID + depth 1..10)
+    // alongside an unexpanded root sibling and extra non-path siblings. When maxVisibleNodes = 5:
+    // - ALL 11 focus-path nodes are pre-admitted and NEVER evicted (FR-MAP-02 #1 guarantees focus path).
+    // - Because budget is already exhausted (11 > 5), remainingBefore <= 0 halts ALL non-path sibling
+    //   and overflow admissions, so orderedIds.length equals focusPathIds.size (11) and root.hiddenCount tracks omitted siblings.
+    const entries: TreeBuildEntry[] = [
+      {
+        path: 'extra-sibling',
+        node: makeMeta(encodeUlid(900), 'Extra Sibling', 'a1'),
+        hasCanvas: false,
+      },
+    ]
+    let curPath = 'd0'
+    for (let d = 0; d < 10; d += 1) {
+      curPath = d === 0 ? 'd0' : `${curPath}/d${d}`
+      entries.push({
+        path: curPath,
+        node: makeMeta(encodeUlid(10 + d), `Depth ${d}`, 'a0'),
+        hasCanvas: false,
+      })
+    }
+
+    const tree = buildTree(entries).state
+    let deepFocusId = tree.rootIds[0]!
+    while (tree.nodes[deepFocusId]!.childrenIds.length > 0) {
+      deepFocusId = tree.nodes[deepFocusId]!.childrenIds[0]!
+    }
+    const extraSiblingId = tree.rootIds[1]!
+
+    const res = computeVisible({
+      tree,
+      rootTitle: 'Deep Focus Exception Vault',
+      focusId: deepFocusId,
+      zoomTier: 2,
+      config: { maxVisibleNodes: 5 },
+    })
+
+    expect(res.focusPathIds.size).toBe(11)
+    expect(res.orderedIds).toHaveLength(11)
+    for (const pid of res.focusPathIds) {
+      expect(res.nodes[pid]).toBeDefined()
+    }
+    expect(res.nodes[extraSiblingId]).toBeUndefined()
+    expect(res.nodes[MAP_ROOT_ID]!.hiddenCount).toBe(1)
+    expect(res.nodes[MAP_ROOT_ID]!.isCollapsedWithChildren).toBe(true)
+  })
+
+  it('measures computeVisible compute time on unbalanced150 and large2000 (informative benchmark)', async () => {
+    const { createMandatoryDatasets } = await import('@/domain/datasets')
+    const datasets = createMandatoryDatasets()
+
+    const benchmarkDataset = (tree: TreeState, rootTitle: string, focusId: string) => {
+      for (let w = 0; w < 5; w += 1) {
+        computeVisible({ tree, rootTitle, focusId, zoomTier: 2 })
+      }
+      const samples: number[] = []
+      for (let r = 0; r < 25; r += 1) {
+        const t0 = performance.now()
+        const out = computeVisible({ tree, rootTitle, focusId, zoomTier: 2 })
+        samples.push(performance.now() - t0)
+        expect(out.orderedIds.length).toBeGreaterThan(0)
+      }
+      samples.sort((a, b) => a - b)
+      return {
+        runs: samples.length,
+        medianMs: Number(samples[Math.floor(samples.length / 2)]!.toFixed(3)),
+        minMs: Number(samples[0]!.toFixed(3)),
+        maxMs: Number(samples[samples.length - 1]!.toFixed(3)),
+      }
+    }
+
+    const u150 = datasets.unbalanced150
+    const uTree = buildTree(u150.entries).state
+    const uFocus =
+      Object.values(uTree.nodes).find((n) => n.parentId && n.childrenIds.length >= 2)?.id ??
+      uTree.rootIds[0]!
+
+    const large = datasets.large2000
+    const largeTree = buildTree(large.entries).state
+    const largeFocus =
+      Object.values(largeTree.nodes).find((n) => n.parentId && n.childrenIds.length >= 2)?.id ??
+      largeTree.rootIds[0]!
+
+    const stats = {
+      unbalanced150_root: benchmarkDataset(uTree, u150.manifest.title, MAP_ROOT_ID),
+      unbalanced150_deep: benchmarkDataset(uTree, u150.manifest.title, uFocus),
+      large2000_root: benchmarkDataset(largeTree, large.manifest.title, MAP_ROOT_ID),
+      large2000_deep: benchmarkDataset(largeTree, large.manifest.title, largeFocus),
+    }
+
+    console.log(`T3_1_COMPUTE_VISIBLE_TIMING=${JSON.stringify(stats)}`)
+    expect(stats.large2000_deep.runs).toBe(25)
   })
 })
