@@ -6,13 +6,26 @@ Dua bagian: pertanyaan untuk pemilik (diisi pemilik), dan catatan temuan agent (
 
 Nama produk sudah ditetapkan: **Knovites (Knowledge Visual Notes)**.
 
-1. **Nama repo.** Nama repo aplikasi (usulan: `knovites`) dan repo knowledge pribadi (usulan: `knovites-knowledge`, privat). Jawaban: nama repo Knovites dan itu public
-2. **Lisensi** repo aplikasi (usulan: MIT). Jawaban: nanti dipikirkan setelah jadi
-3. **Hosting:** GitHub Pages atau Cloudflare Pages. Dibutuhkan sebelum M8. Jawaban: Github pages (i guess?)
-4. **Root virtual:** perlu halaman catatan sendiri (home)? Default: tidak. Jawaban: Mungkin iya, idk. 
+1. **Nama repo.** Nama repo aplikasi (usulan: `knovites`) dan repo knowledge pribadi (usulan: `knovites-knowledge`, privat). Jawaban: repo aplikasi bernama Knovites dan **publik** (dikonfirmasi 2026-11-21). Catatan: di GitHub repo ini kini bernama `Knovites-Knowledge-Visual-Notes` (terlihat dari redirect saat push; remote lokal masih `Knovites`); perlu dikonfirmasi pemilik apakah rename itu disengaja, lalu remote lokal dan README diselaraskan. Repo knowledge pribadi: belum dijawab.
+2. **Lisensi** repo aplikasi (usulan: MIT). Jawaban: nanti dipikirkan setelah jadi. Catatan: selama belum ada berkas LICENSE, repo publik berarti semua hak dicadangkan.
+3. **Hosting:** GitHub Pages atau Cloudflare Pages. Dibutuhkan sebelum M8. Jawaban (2026-11-21): ditunda sampai M8. Kecenderungan awal: GitHub Pages (repo aplikasi publik, jadi tersedia tanpa paket berbayar).
+4. **Root virtual:** perlu halaman catatan sendiri (home)? Default: tidak. Jawaban (2026-11-21): **ya**, root punya halaman home. Tindak lanjut: lihat entri "Bentuk data halaman home root virtual" di bawah.
 5. **Bahasa UI:** default English, setuju? Jawaban: Setuju
-6. **Referensi gaya visual peta:** 2-3 contoh tampilan yang disukai (tautan atau screenshot), untuk menyetel palet dan gaya node. **Dibutuhkan sebelum spike S3.** Jawaban: di Image_reference_1 dan 2 
-7. **Repo uji untuk spike S1:** repo privat sementara dan fine-grained token (hanya Contents read/write untuk repo itu). Token diberikan lewat `.env.local`, tidak pernah di-commit. Jawaban: idk
+6. **Referensi gaya visual peta:** 2-3 contoh tampilan yang disukai (tautan atau screenshot), untuk menyetel palet dan gaya node. **Dibutuhkan sebelum spike S3.** Jawaban: di Image_reference_1 dan 2 (deskripsi per gambar masih diperlukan)
+7. **Repo uji untuk spike S1:** repo privat sementara dan fine-grained token (hanya Contents read/write untuk repo itu). Token diberikan lewat `.env.local`, tidak pernah di-commit. Jawaban (2026-11-21): belum disiapkan; pemilik meminta panduan langkah demi langkah. Status: menunggu repo uji + token.
+
+## Keputusan pemilik (2026-11-21)
+
+Ringkasan keputusan yang diambil pemilik pada 2026-11-21. Detail dan tindak lanjut ada di entri masing-masing di bawah.
+
+- `textAlign`: masuk schema (Opsi 1).
+- Warna teks: token tema semantik (Opsi 1).
+- Frame teks `"none"`: nilai `"none"` pada `style.bg` / `style.border` (Opsi 1), tanpa properti `frame` baru.
+- Blok kode: scroll horizontal (Opsi 2), bukan `pre-wrap`.
+- Edit di zoom `<` ambang LOD: zoom otomatis ke tingkat terbaca (Opsi 1).
+- Peta S3: kapsul berlabel (A), sub-cincin stagger (A), bobot sudut subtree terlihat bottom-up (A).
+- Root virtual punya halaman home.
+- Repo aplikasi publik; hosting ditunda sampai M8.
 
 ## Catatan temuan agent
 
@@ -50,7 +63,7 @@ Format entri:
   5. **Tes:** Tambahkan fixture v1 -> migrasi v2 (bila naik skema), tes unit `sanitizeTipTapDoc` (menerima `'left'|'center'|'right'`, menolak `'justify'`/`123`/atribut asing), dan tes properti round-trip `serialize(parse(serialize(doc))) === serialize(doc)`.
 - Keputusan sementara (opsi paling sederhana): Menjaga `src/domain/schema/` dan `data-format.md` §5.4 **tetap tidak berubah** selama Spike S2 sambil mencatat celah serta proposal ini.
 - Rekomendasi: **Opsi 1** — `textAlign` masuk skema (`enum 'left' | 'center' | 'right'`), default tidak ditulis ke JSON, dan editor dinormalisasi agar tidak menulis `attrs: { textAlign: null }`.
-- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.2/T4.4 dimulai).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — `textAlign` masuk schema. Tindak lanjut pada M4 (T4.2/T4.4) mengikuti proposal dampak di atas (data-format §5.4, Zod/sanitizer, serializer kanonik, dataset, tes). Perlu atau tidaknya menaikkan versi skema ditentukan saat implementasi sesuai `AGENTS.md` #4. Editor tidak boleh menulis `attrs: { textAlign: null }`, dan atribut ekstra `Link` di-strip sebelum disimpan.
 
 ### 2026-11-19 — Proposal warna semantik (token tema) vs hex tetap pada `mark color`/`highlight` dan frame `"none"`
 - Task: Spike S2 (butir 15) / `docs/data-format.md` §5.4, `docs/spec-canvas.md` §6.4 (`FR-CVS-05`), `docs/spec-ui-nfr.md` §7.4 & §8.1
@@ -63,7 +76,7 @@ Format entri:
   2. **Hex tetap `#rrggbb` sesuai `data-format.md` §5.4 & `FR-CVS-05`:** tidak perlu mengubah skema v1; saat memilih di palet UI, swatch memetakan warna sesuai tema aktif saat itu (mis. `--branch-1..8` versi light atau dark ke hex), dan `Auto` (`color: null`) tetap menjadi default yang mewarisi `var(--fg)`. **Konsekuensi:** dokumen yang dibuat dengan swatch hex pada satu tema akan turun kontrasnya bila dibuka di tema sebaliknya—terutama terlihat pada **frame `"none"`** (`style.bg: null`) karena latar ikut berpindah antara `#0b0e14` dan `#f6f8fc`—kecuali renderer menerapkan penyesuaian kontras saat `style.bg === null` atau hanya mempertahankan penyorot bertint transparan/pair teks gelap pada `highlight`.
 - Keputusan sementara (opsi paling sederhana): Jangan ubah `src/domain/schema` pada S2; pasangan latar+teks `Highlight` per tema sudah lulus AA (`9.57–14.63:1`) sementara keputusan **Opsi 1 vs Opsi 2 untuk warna teks (`textStyle.color`)** tetap perlu ditetapkan sebelum implementasi M4 (`FR-CVS-05` / `FR-TXT-01`).
 - Rekomendasi: **Opsi 1** — warna disimpan sebagai token semantik tema, bukan hex tetap, agar kontras WCAG AA terjaga otomatis di tema dark maupun light serta frame `"none"`.
-- Status: **[Keputusan menunggu pemilik]** (sebelum M4).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — warna teks dan highlight disimpan sebagai token semantik tema. Tindak lanjut sebelum/pada M4: tetapkan daftar nama token dan pemetaannya per tema, perluas whitelist `textStyle.color` / `highlight.color` di data-format §5.4 dan skema (naik versi atau tidak ditentukan saat implementasi), dan tentukan perlakuan warna hex hasil paste (usulan, belum diputuskan: dipetakan ke token terdekat atau dibuang ke `Auto`). **Pertanyaan lanjutan yang belum diputuskan:** apakah `style.bg` / `style.border` kartu juga menjadi token tema, atau tetap hex bebas (lihat entri frame teks di bawah). Bila tetap hex bebas, token teks bisa gagal kontras di atas kartu custom.
 
 ### 2026-11-21 — Frame teks (`"none"`) vs `style.bg`/`style.border` di `data-format.md` §5.4
 - Task: Spike S2 / M4 (`FR-CVS-05`, `data-format.md` §5.4)
@@ -72,7 +85,7 @@ Format entri:
   1. Memakai konvensi nilai pada `style.bg` / `style.border` yang sudah ada (mis. `"none"` atau `"transparent"` selain `null | #rrggbb`) setelah dicek di `data-format.md` §5.4, tanpa menambah properti baru `frame`.
   2. Menambah properti terpisah (mis. `style.frame: "auto" | "none"`) dengan kenaikan skema v1 -> v2.
 - Rekomendasi: Cek dan perluas nilai valid `style.bg` / `style.border` (`null | #rrggbb | "none"`) lebih dulu sebelum menambah properti `frame` terpisah.
-- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.6).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — perluas nilai `style.bg` / `style.border` menjadi `null | #rrggbb | "none"`; `null` tetap berarti `Auto` (default tema), `"none"` berarti tanpa latar / tanpa border. Tidak ada properti `frame` baru. Tindak lanjut sebelum/pada M4 T4.6: ubah data-format §5.4, Zod, serializer kanonik, dataset, dan tes; toggle "kotak di belakang teks" di UI mengatur `bg` dan `border` sekaligus. Hubungan dengan token tema untuk `bg` / `border` belum diputuskan (lihat entri warna semantik).
 
 ### 2026-11-21 — Pembungkusan blok kode kanvas: `pre-wrap` vs scroll horizontal
 - Task: Spike S2 / M4 (`FR-TXT-03`, `FR-TXT-08`)
@@ -81,7 +94,7 @@ Format entri:
   1. `white-space: pre-wrap` pada static renderer maupun TipTap (kode panjang terbungkus sesuai lebar kotak, tinggi selalu identik dengan ProseMirror saat resize).
   2. `white-space: pre; overflow-x: auto` pada keduanya (kode tetap satu baris dengan scrollbar horizontal; mewajibkan aturan CSS override pada `.ProseMirror pre` serta isolasi wheel horizontal saat aktif).
 - Rekomendasi: **Opsi 1 (`pre-wrap`)** agar tinggi kotak statis dan editor selalu seragam di setiap lebar kartu tanpa scrollbar bersarang tambahan.
-- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.2/T4.5).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi 2]** — blok kode memakai `white-space: pre; overflow-x: auto` (scroll horizontal) agar baris panjang (payload, dump) tetap utuh; rekomendasi agent (Opsi 1) tidak dipakai. Tindak lanjut M4 T4.2/T4.5: terapkan aturan yang sama di static renderer dan editor aktif (override `.ProseMirror pre`), isolasi wheel horizontal saat editor aktif, dan ulangi tes paritas resize sempit. Catatan: kode spike S2 saat ini masih memakai `pre-wrap` (perbaikan 21 px di S2c-F), jadi perilakunya berbeda dari keputusan ini.
 
 ### 2026-11-21 — Perilaku masuk mode edit pada zoom rendah (`<` ambang LOD)
 - Task: Spike S2 / M4 (`FR-CVS-01`, `FR-CVS-04`)
@@ -90,7 +103,7 @@ Format entri:
   1. **Zoom otomatis ke tingkat terbaca** (mis. menaikkan kamera ke `>= 1.0` sambil memusatkan kotak saat masuk edit dari mode LOD).
   2. **Pertahankan zoom saat itu** dan langsung tampilkan editor penuh di `<ViewportPortal>` + toolbar ukuran layar (perilaku yang diuji pada Tes #14 Spike S2c).
 - Rekomendasi: **Opsi 1** — zoom otomatis ke tingkat terbaca saat masuk edit dari mode zoom `<` ambang LOD.
-- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.4).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — saat masuk edit dari zoom `<` ambang LOD, kamera otomatis zoom ke tingkat terbaca. Tindak lanjut M4 T4.4: implementasikan transisi kamera dan perbarui tes (Tes #14 Spike S2c menguji perilaku Opsi 2, yaitu zoom dipertahankan).
 
 ### 2026-11-21 — Desain visual peta M3: kapsul vs lingkaran, sub-cincin stagger, & bobot sudut (Spike S3)
 - Task: Spike S3 / M3 (`FR-MAP-03`, `FR-MAP-09`, `tanpa FR` untuk pilihan bentuk kapsul)
@@ -98,7 +111,14 @@ Format entri:
   1. **Gaya node (`tanpa FR`, terkait `FR-MAP-09`):** *(Opsi A — **rekomendasi**)* kapsul berlabel adaptif (`118–268 px` pada Tier 1/2, lingkaran berlabel eksternal di Tier 0) vs *(Opsi B)* lingkaran kecil seragam dengan teks di luar lingkaran.
   2. **Sub-cincin stagger untuk fan lebar (`FR-MAP-03`):** *(Opsi A — **rekomendasi**)* 2–3 sub-cincin radial deterministik (`>= 12` sibling → 2, `>= 34` → 3) + busur terarah `<= 255°` untuk fan non-root vs *(Opsi B)* satu cincin radius `r(d)` ketat (memaksa radius `> 1.500 px` pada `wide60Children`).
   3. **Formula bobot sudut (`FR-MAP-03`):** *(Opsi A — **rekomendasi**)* akumulasi subtree yang **sedang terlihat** (*bottom-up*) + boost kecil jalur fokus & koefisien tersembunyi `0.35 * log2(1 + hidden)` vs *(Opsi B)* formula PRD awal `1 + 0.5 * log2(1 + hidden + visible)`.
-- Status: **[Keputusan menunggu pemilik]** (sebelum/pada checkpoint M3 T3.2/T3.4).
+- Status: **[Diputuskan pemilik 2026-11-21: Opsi A untuk ketiganya]** — (1) kapsul berlabel adaptif, (2) sub-cincin stagger, (3) bobot sudut dari subtree yang sedang terlihat (bottom-up). Berlaku sebagai dasar M3 T3.2/T3.4; syarat M3 lain di `plan.md` dan `docs/spikes/s3-radial.md` tetap berlaku.
+
+### 2026-11-21 — Bentuk data halaman home root virtual (dari keputusan pemilik)
+- Task: M3 / `data-format.md` §5.1 (belum dicek terhadap isi berkas)
+- Masalah atau ambiguitas: Pemilik memutuskan bahwa root virtual punya halaman catatan sendiri (home). Root saat ini virtual, yaitu bukan node berfolder, sehingga belum jelas di mana kanvas dan isi halaman home disimpan, bagaimana id dan path-nya, dan bagaimana ia memengaruhi peta, pencarian, serta undo/hapus.
+- Opsi yang dipertimbangkan: belum ada; agent diminta menyusun opsi (mis. folder khusus di repo knowledge, atau node nyata di bawah root) beserta dampaknya ke §5.1, skema, `buildTree`, dan M2 (Dexie).
+- Keputusan sementara (opsi paling sederhana): belum ditetapkan.
+- Perlu keputusan pemilik: ya (setelah agent menyusun opsi, sebelum M3 dikunci).
 
 ### 2026-11-18 — Detail aturan skema & sanitizer TipTap (`T1.1`)
 - Task: T1.1 / `data-format.md` §5.3–§5.4
@@ -128,9 +148,27 @@ Format entri:
   3. `generateOrderBetween` membungkus `fractional-indexing` dalam `try/catch`, memvalidasi batas ketat `a < key < b`, dan memakai fallback leksikografis deterministik bila key input tidak valid. Jika target posisi di `reorderNode` diapit dua sibling ber-`order` identik (`prevOrder >= nextOrder`, mis. akibat node `corrupt` ber-order fallback `'a0'`), `reorderNode` menolak dengan `reason: 'order_collision'` alih-alih memberi `order` yang sama atau mengubah `node.json` tetangga.
 - Perlu keputusan pemilik: tidak
 
+### 2026-11-21 — Pemilihan klien GitHub M6: Thin `fetch` vs `octokit` & strategi tulis tree (Spike S1)
+- Task: Spike S1, M6 (`T6.2`–`T6.5`) / `docs/decisions/0004-github-client.md`, `docs/spikes/s1-github.md`
+- Masalah atau ambiguitas:
+  1. `octokit@5.0.5` (MIT) mempermudah pengetikan OpenAPI (`octokit.rest.git.*`), tetapi menambah **+44.26 KB gzip** (`47.38 KB` vs `3.12 KB` untuk klien `fetch` tipis) dan mengaktifkan retry/throttling otomatis secara default (`@octokit/plugin-throttling`, `@octokit/plugin-retry`) yang harus dimatikan agar sesuai dengan pengendalian quota Knovites.
+  2. Untuk N file teks UTF-8 (`node.json`, `canvas.json`), memanggil `POST /git/blobs` satu per satu (`N = 30`: `65.61 s`, `33` writes) jauh lebih lambat dan berisiko menyentuh secondary rate limit dibanding inline `content` pada satu `POST /git/trees` (`N = 30`: `5.97 s`, `3` writes).
+- Opsi yang dipertimbangkan:
+  1. Pakai klien `fetch` tipis buatan sendiri di `src/sync/` (rekomendasi ADR `0004`, hemat `44.26 KB` gzip) dan kirim file teks UTF-8 via inline `content` di `createTree` (sedangkan biner/PNG lewat `createBlob` base64).
+  2. Pakai `octokit` penuh di `src/sync/` dengan `throttle: { enabled: false }` & `retry: { enabled: false }`.
+- Keputusan sementara (opsi paling sederhana): `[Rekomendasi]` memakai klien `fetch` tipis di M6; untuk S1 `octokit@5.0.5` hanya dipasang di `devDependencies` dan `src/` tidak diubah.
+- Perlu keputusan pemilik: ya (konfirmasi apakah M6 memakai klien `fetch` tipis sesuai ADR `0004`, dan apakah teks `node.json`/`canvas.json` boleh dikirim inline lewat `createTree`).
+
 ### Perbedaan PRD dan dokumentasi resmi
 
 Catat di sini setiap kali dokumentasi resmi berbeda dari PRD (nama API, parameter, batas, perilaku). Format: apa kata PRD, apa kata dokumentasi (dengan tautan dan versi), dan apa yang dilakukan.
+
+- **2026-11-21 (Spike S1) — Perilaku nyata GitHub REST API (`api.github.com`, `2022-11-28`) & `octokit@5.0.5` vs `spec-storage-sync.md` §6.1, §6.11 (`FR-SYNC-03`, `FR-SYNC-08`):**
+  1. **Non-fast-forward `PATCH /git/refs`:** Spec §6.11 langkah 7 menyebut penolakan `422 atau 409`. Pengujian langsung (`B4`) memastikan GitHub mengembalikan **`HTTP 422`** dengan pesan `"Update is not a fast forward"` (tautan dokumentasi di body respons: `https://docs.github.com/rest/git/refs#update-a-reference`), sedangkan **`409 Conflict`** muncul pada repo kosong / konflik Contents API.
+  2. **Menghapus path yang absen lewat `POST /git/trees` (`sha: null`):** Dokumentasi resmi (`https://docs.github.com/rest/git/trees#create-a-tree`, serta JSDoc `@octokit/plugin-rest-endpoint-methods@17.0.0`) menyatakan *"Returns an error if you try to delete a file that does not exist."* Pengujian langsung (`B3`) mengonfirmasi GitHub menolak seluruh request tree dengan **`HTTP 422`** (`"message": "GitRPC::BadObjectState"`). Planner M6 wajib memfilter `deletes` terhadap snapshot tree remote (`Prasyarat M6 #2`).
+  3. **`If-None-Match` (`304`) & cache browser (`FR-SYNC-08`):** Karena GitHub mengirim `cache-control: private, max-age=60, s-maxage=60`, pemanggilan polling di browser wajib memakai `{ cache: 'no-store' }` agar request dengan `If-None-Match` tetap memvalidasi ke server, menerima `304`, dan **tidak** mengurangi `x-ratelimit-remaining`.
+  4. **Unduh blob biner `Accept: application/vnd.github.raw+json` (`https://docs.github.com/rest/git/blobs#get-a-blob`):** Terbukti didukung lewat CORS browser (`200`, `content-type: application/octet-stream`), mendukung blob hingga 100 MB menurut docs (teruji hingga 10 MB di S1), serta lebih cepat dan bebas overhead dekode base64 dibanding default JSON.
+  5. **`octokit@5.0.5` default plugins (`node_modules/octokit/README.md`):** Berlisensi `MIT`, namun secara bawaan mengaktifkan `@octokit/plugin-throttling@11.0.3` dan `@octokit/plugin-retry@8.0.3` yang melakukan retry otomatis pada rate limit/error. Jika dipakai di browser, wajib disetel `{ throttle: { enabled: false }, retry: { enabled: false } }`. **Tindakan:** Didokumentasikan di [`docs/spikes/s1-github.md`](file:///home/k/project/Knovites/docs/spikes/s1-github.md) dan ADR [`0004-github-client.md`](file:///home/k/project/Knovites/docs/decisions/0004-github-client.md); `spec-storage-sync.md` belum diubah menunggu persetujuan pemilik.
 
 - **2026-11-19 (T2.1) — `dexie@4.4.7` & `fake-indexeddb@6.2.8` indeks IndexedDB dan skema §5.9:** Di `data-format.md` §5.9, `nodes` awalnya hanya mencantumkan `id, path, parentId, meta, baseBlobSha, dirty, corrupt`. Spesifikasi W3C IndexedDB (serta `fake-indexeddb@6.2.8`) tidak mengizinkan tipe `boolean` atau `null` sebagai key indeks, sehingga kolom `dirty`, `corrupt`, dan `deletedAt` (nullable) di `nodes`/`canvases`/`assets` tidak dijadikan indeks Dexie (difilter aman di layer repository). Selain itu, §5.9 diperbarui untuk menyimpan `extraFiles`, `hasCanvas`, `rawNodeJson`/`rawJson`, `corruptErrors`, `newerSchemaVersion`, dan `deletedAt` agar file tak dikenal/corrupt tidak pernah ditimpa dan soft-delete Undo 10 detik tahan reload/crash. **Tindakan:** Memperbarui `docs/data-format.md` §5.9 dan mencatat ADR [0001-fake-indexeddb.md](file:///home/k/project/Knovites/docs/decisions/0001-fake-indexeddb.md).
 - **2026-11-19 (T2.2) — `zustand@5.1.0`, `immer@11.2.10`, & `ulid@3.0.2`:** Di Zustand v5 + TypeScript strict, middleware `immer` mensyaratkan bentuk curried `createStore<T>()(immer(...))`, `castDraft(...)` dari `immer@11` dipakai untuk mengassign `TreeState`, dan hook React memakai `useStore(store, selector)` dari `zustand`. Pada `ulid@3.0.2`, `monotonicFactory()` menjamin ULID terurut monoton walau dipanggil berkali-kali dalam milidetik yang sama. **Tindakan:** Mengenkapsulasi clock & `monotonicFactory` di `src/app/clock-id.ts` dan store di `src/app/store.ts`.
