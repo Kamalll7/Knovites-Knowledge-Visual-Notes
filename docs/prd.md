@@ -1,6 +1,6 @@
 # Knovites — PRD Phase 1: Ringkasan, Keputusan, Arsitektur
 
-*Knovites (Knowledge Visual Notes) · Knowledge Core · v0.1 · 16 November 2026. Bagian dari PRD yang dipecah; lihat `README.md`. Penomoran § sama di semua file.*
+*Knovites (Knowledge Visual Notes) · Knowledge Core · v0.1 · 19 November 2026. Bagian dari PRD yang dipecah; lihat `README.md`. Penomoran § sama di semua file.*
 
 ## 0. Cara memakai dokumen ini
 

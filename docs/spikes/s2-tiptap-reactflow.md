@@ -204,4 +204,35 @@ Detail `s300_zoom_out_all_visible_1editor` (`cullOn`, LOD enter `< 0.32` / title
 1. **Komposisi IME (CJK / aksara non-ASCII).**
 2. **Interaksi sentuh / mobile (pinch zoom, long-press drag, keyboard virtual).**
 3. **Aksesibilitas lanjutan & warna teks hex tema light:** screen reader ARIA, fokus `Tab` ke toolbar, serta pemilihan **warna semantik vs hex tetap** pada `textStyle.color` di mode light (seluruh 4 pasangan `Highlight` dark & light sudah lulus WCAG AA pada Task S2c).
-4. **Uji Firefox & WebKit/Safari sungguhan serta verifikasi FPS `> 50` pada browser desktop ber-GPU** (ketahanan unmount editor aktif saat `cullOn` sudah tervalidasi lewat `<ViewportPortal>`).
+4. **Uji Firefox & WebKit/Safari sungguhan serta verifikasi FPS `>= 50` pada browser desktop ber-GPU** (`FR-CVS-08`) memakai foto asli dan thumbnail yang dibuat saat impor (`FR-IMG-03`, bukan hanya PNG sintetis kecil di spike).
+5. **Caret/seleksi pada elemen ter-transform (mode scale) mendalam & resize vertikal gambar** (`FR-CVS-03`, `FR-IMG-03`), selain eksekusi gerbang benchmark spike di CI (saat ini hanya dijalankan lokal).
+
+---
+
+## 8. Ringkasan Status, Rekomendasi, & Keputusan Menunggu untuk M4
+
+### `[Fakta terukur]` (seluruh angka bersumber dari §§2–6 di atas)
+
+- **Culling (`onlyRenderVisibleElements`):** Pada dataset 300 node kaya + 50 gambar di S2 awal, menonaktifkan culling tanpa isolasi render turun ke `14.0–21.0 fps` (`DOM 300`), sedangkan dengan culling (`DOM 9–74`) + isolasi render mencapai **`51.8–60.2 fps`**.
+- **Unmount editor & mitigasi `<ViewportPortal>`:** Tanpa mitigasi, pan off-screen meng-unmount editor (`unmountedOffscreen: true`, seleksi & undo hilang); `<ViewportPortal>` menjaga mount (`remainedMountedOffscreen: true`, `activeEditorMinDuringRun: 1`), teks, seleksi, fokus, undo, drag gagang, serta resize horizontal `160–720 px` tanpa lompatan (`<= 1.5 px`).
+- **Isolasi `useViewport()` & LOD ber-histeresis:** Memindahkan `useViewport()` ke komponen daun + menerapkan LOD (`enter < 0.32` / `exit >= 0.40`, judul `< 0.19` disembunyikan, `>= 0.23` minimal `11 px` layar) menaikkan `zoom-out-all` dari `13.1 fps` ke **`59.9 fps`** (`p95Ms 16.7 ms`, `maxMs 16.8–33.4 ms`, 0 kedip saat osilasi di `[0.33..0.39]`).
+- **Toolbar & TipTap v3 (`3.34.0`):** Toolbar berada di luar transform kanvas (`374×38 px` di zoom `0.25–2.5`); `StarterKit` sudah memuat `Link`/`Underline`/`UndoRedo` dan memakai `trailingNode: false`; `@tiptap/extension-text-align` menulis `attrs: { textAlign: null }` pada paragraf polos (dibuang oleh `parseCanvasJson` dengan `disallowed_tiptap_attr`).
+- **Sanitasi & paritas (`FR-TXT-06`, `FR-TXT-08`):** Allowlist `href` (`http`, `https`, `mailto`, `knovites:`), `rel="noopener noreferrer"` pada render statis, validasi JSON mentah lewat `parseCanvasJson`, serta `diffPixels: 0` pada area kotak isi `richtext-body` (`310×255`, bukan seluruh node/toolbar) setelah `.knovites-richtext pre { white-space: pre-wrap; }`.
+- **Kontras (`FR-CVS-05`, `spec-ui-nfr.md` §7.4):** 5 swatch hex gagal AA di tema light (**`1.57–2.77:1`**); secara matematis satu hex tetap tidak dapat mencapai `>= 4.5:1` pada kedua tema; pasangan latar+teks `Highlight` per tema lulus AA (`9.57–11.89:1` dark, `12.66–14.63:1` light).
+
+### `[Belum terbukti]`
+
+- `FR-CVS-08` (`>= 50 fps` pada 300 elemen) di browser desktop non-headless ber-GPU dengan foto asli + thumbnail hasil impor (`FR-IMG-03`).
+- IME (CJK/non-ASCII), sentuh/pinch/keyboard virtual, a11y penuh, Firefox/WebKit, caret/seleksi pada elemen ter-transform (mode scale), dan resize vertikal.
+- Gerbang benchmark spike (`meanFps >= 30`, `p95Ms <= 50 ms`, `maxMs <= 100/200 ms`) hanya berjalan lokal (tidak di CI).
+
+### `[Rekomendasi]` (belum menjadi keputusan)
+
+- `textAlign` dimasukkan ke skema (`enum 'left' | 'center' | 'right'`, default `'left'`/kosong tidak ditulis; normalisasi editor agar tidak menulis `null`).
+- Warna teks (`textStyle.color`) disimpan sebagai token semantik tema, bukan hex tetap.
+- Edit di zoom rendah (`<` ambang LOD): rekomendasikan zoom otomatis ke tingkat terbaca.
+- Adopsi bersyarat kombinasi culling + LOD + `<ViewportPortal>` hasil S2 di M4.
+
+### `[Keputusan menunggu pemilik]`
+
+Tercatat dengan opsi dan rekomendasi di [`docs/open-questions.md`](../open-questions.md): (1) `textAlign` di schema (`data-format.md` §5.4); (2) warna semantik vs hex (`FR-CVS-05`); (3) frame teks `"none"` vs pemakaian `style.bg`/`style.border` yang ada di `data-format.md` §5.4; (4) blok kode `pre-wrap` vs scroll horizontal (`FR-TXT-03`, `FR-TXT-08`); (5) perilaku edit di zoom rendah (`FR-CVS-01`, `FR-CVS-04`).

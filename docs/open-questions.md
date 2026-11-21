@@ -49,7 +49,8 @@ Format entri:
   4. **Dataset (`src/domain/datasets/`):** Tambahkan contoh paragraf/heading dengan `textAlign: 'center'` dan `'right'` di dataset/fixture validasi bila skema diperbarui; `generate-tree` tetap terpisah dari isi kanvas.
   5. **Tes:** Tambahkan fixture v1 -> migrasi v2 (bila naik skema), tes unit `sanitizeTipTapDoc` (menerima `'left'|'center'|'right'`, menolak `'justify'`/`123`/atribut asing), dan tes properti round-trip `serialize(parse(serialize(doc))) === serialize(doc)`.
 - Keputusan sementara (opsi paling sederhana): Menjaga `src/domain/schema/` dan `data-format.md` §5.4 **tetap tidak berubah** selama Spike S2 sambil mencatat celah serta proposal ini.
-- Perlu keputusan pemilik: **ya** (sebelum M4 T4.2/T4.4 dimulai).
+- Rekomendasi: **Opsi 1** — `textAlign` masuk skema (`enum 'left' | 'center' | 'right'`), default tidak ditulis ke JSON, dan editor dinormalisasi agar tidak menulis `attrs: { textAlign: null }`.
+- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.2/T4.4 dimulai).
 
 ### 2026-11-19 — Proposal warna semantik (token tema) vs hex tetap pada `mark color`/`highlight` dan frame `"none"`
 - Task: Spike S2 (butir 15) / `docs/data-format.md` §5.4, `docs/spec-canvas.md` §6.4 (`FR-CVS-05`), `docs/spec-ui-nfr.md` §7.4 & §8.1
@@ -61,7 +62,43 @@ Format entri:
   1. **Warna semantik berbasis token tema (mis. `token:accent`, `token:warning`, `token:success`, `token:danger`, `token:violet`):** otomatis menyelesaikan ke palet dark/light dengan kontras AA pada kotak standar (`--card`) maupun kotak ber-**frame `"none"` (`style.bg: null`, `border: null`)** yang teksnya langsung duduk di atas kanvas `--bg`. **Dampak ke `data-format.md` §5.4 & skema:** membutuhkan perluasan whitelist `textStyle.color` dan `highlight.color` (yang saat ini hanya menerima `#rrggbb`) untuk menerima token bernama (atau kenaikan `schema` v1 -> v2 + migrasi), serta penanganan khusus bila pengguna memakai `style.bg` hex custom tetap (mis. kartu kuning terang pada mode dark sehingga token teks terang gagal kontras di atas kartu custom tersebut).
   2. **Hex tetap `#rrggbb` sesuai `data-format.md` §5.4 & `FR-CVS-05`:** tidak perlu mengubah skema v1; saat memilih di palet UI, swatch memetakan warna sesuai tema aktif saat itu (mis. `--branch-1..8` versi light atau dark ke hex), dan `Auto` (`color: null`) tetap menjadi default yang mewarisi `var(--fg)`. **Konsekuensi:** dokumen yang dibuat dengan swatch hex pada satu tema akan turun kontrasnya bila dibuka di tema sebaliknya—terutama terlihat pada **frame `"none"`** (`style.bg: null`) karena latar ikut berpindah antara `#0b0e14` dan `#f6f8fc`—kecuali renderer menerapkan penyesuaian kontras saat `style.bg === null` atau hanya mempertahankan penyorot bertint transparan/pair teks gelap pada `highlight`.
 - Keputusan sementara (opsi paling sederhana): Jangan ubah `src/domain/schema` pada S2; pasangan latar+teks `Highlight` per tema sudah lulus AA (`9.57–14.63:1`) sementara keputusan **Opsi 1 vs Opsi 2 untuk warna teks (`textStyle.color`)** tetap perlu ditetapkan sebelum implementasi M4 (`FR-CVS-05` / `FR-TXT-01`).
-- Perlu keputusan pemilik: **ya** (sebelum M4).
+- Rekomendasi: **Opsi 1** — warna disimpan sebagai token semantik tema, bukan hex tetap, agar kontras WCAG AA terjaga otomatis di tema dark maupun light serta frame `"none"`.
+- Status: **[Keputusan menunggu pemilik]** (sebelum M4).
+
+### 2026-11-21 — Frame teks (`"none"`) vs `style.bg`/`style.border` di `data-format.md` §5.4
+- Task: Spike S2 / M4 (`FR-CVS-05`, `data-format.md` §5.4)
+- Masalah atau ambiguitas: `spec-canvas.md` §6.4 (`FR-CVS-05`) mendukung frame/gaya `Auto/None`, sedangkan `data-format.md` §5.4 saat ini hanya mendefinisikan `style: { bg, border }` dengan tipe `null | #rrggbb` (dan contoh `"style": { "bg": null, "border": null }`). Karena `null` berarti default tema (`Auto` — latar `--card` dan border `--border`), `style.bg`/`style.border` saat ini belum membedakan `Auto` (`null`) dari `None` (transparan tanpa latar & tanpa border) secara eksplisit.
+- Opsi yang dipertimbangkan:
+  1. Memakai konvensi nilai pada `style.bg` / `style.border` yang sudah ada (mis. `"none"` atau `"transparent"` selain `null | #rrggbb`) setelah dicek di `data-format.md` §5.4, tanpa menambah properti baru `frame`.
+  2. Menambah properti terpisah (mis. `style.frame: "auto" | "none"`) dengan kenaikan skema v1 -> v2.
+- Rekomendasi: Cek dan perluas nilai valid `style.bg` / `style.border` (`null | #rrggbb | "none"`) lebih dulu sebelum menambah properti `frame` terpisah.
+- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.6).
+
+### 2026-11-21 — Pembungkusan blok kode kanvas: `pre-wrap` vs scroll horizontal
+- Task: Spike S2 / M4 (`FR-TXT-03`, `FR-TXT-08`)
+- Masalah atau ambiguitas: Pada TipTap/ProseMirror bawaan, `.ProseMirror pre` memakai `white-space: pre-wrap`, sedangkan stylesheet bawaan `<pre>` statis memakai `white-space: pre` + `overflow-x: auto`. Saat lebar kotak dikecilkan (`200 px`), perbedaan ini menimbulkan selisih tinggi `21.0625 px` antara tampilan statis dan editor aktif di `<ViewportPortal>`.
+- Opsi yang dipertimbangkan:
+  1. `white-space: pre-wrap` pada static renderer maupun TipTap (kode panjang terbungkus sesuai lebar kotak, tinggi selalu identik dengan ProseMirror saat resize).
+  2. `white-space: pre; overflow-x: auto` pada keduanya (kode tetap satu baris dengan scrollbar horizontal; mewajibkan aturan CSS override pada `.ProseMirror pre` serta isolasi wheel horizontal saat aktif).
+- Rekomendasi: **Opsi 1 (`pre-wrap`)** agar tinggi kotak statis dan editor selalu seragam di setiap lebar kartu tanpa scrollbar bersarang tambahan.
+- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.2/T4.5).
+
+### 2026-11-21 — Perilaku masuk mode edit pada zoom rendah (`<` ambang LOD)
+- Task: Spike S2 / M4 (`FR-CVS-01`, `FR-CVS-04`)
+- Masalah atau ambiguitas: Saat viewport berada pada zoom rendah di bawah ambang LOD (`< 0.32`, mis. `0.25`), mengklik ganda node dapat langsung membuka editor di zoom kecil atau memfokuskan kamera agar teks nyaman dibaca.
+- Opsi yang dipertimbangkan:
+  1. **Zoom otomatis ke tingkat terbaca** (mis. menaikkan kamera ke `>= 1.0` sambil memusatkan kotak saat masuk edit dari mode LOD).
+  2. **Pertahankan zoom saat itu** dan langsung tampilkan editor penuh di `<ViewportPortal>` + toolbar ukuran layar (perilaku yang diuji pada Tes #14 Spike S2c).
+- Rekomendasi: **Opsi 1** — zoom otomatis ke tingkat terbaca saat masuk edit dari mode zoom `<` ambang LOD.
+- Status: **[Keputusan menunggu pemilik]** (sebelum M4 T4.4).
+
+### 2026-11-21 — Desain visual peta M3: kapsul vs lingkaran, sub-cincin stagger, & bobot sudut (Spike S3)
+- Task: Spike S3 / M3 (`FR-MAP-03`, `FR-MAP-09`, `tanpa FR` untuk pilihan bentuk kapsul)
+- Masalah atau ambiguitas: Prototipe Spike S3 (`docs/spikes/s3-radial.md`) menguji tiga penyesuaian atas `spec-map.md` §6.2 yang menunggu persetujuan pemilik sebelum M3 dikunci:
+  1. **Gaya node (`tanpa FR`, terkait `FR-MAP-09`):** *(Opsi A — **rekomendasi**)* kapsul berlabel adaptif (`118–268 px` pada Tier 1/2, lingkaran berlabel eksternal di Tier 0) vs *(Opsi B)* lingkaran kecil seragam dengan teks di luar lingkaran.
+  2. **Sub-cincin stagger untuk fan lebar (`FR-MAP-03`):** *(Opsi A — **rekomendasi**)* 2–3 sub-cincin radial deterministik (`>= 12` sibling → 2, `>= 34` → 3) + busur terarah `<= 255°` untuk fan non-root vs *(Opsi B)* satu cincin radius `r(d)` ketat (memaksa radius `> 1.500 px` pada `wide60Children`).
+  3. **Formula bobot sudut (`FR-MAP-03`):** *(Opsi A — **rekomendasi**)* akumulasi subtree yang **sedang terlihat** (*bottom-up*) + boost kecil jalur fokus & koefisien tersembunyi `0.35 * log2(1 + hidden)` vs *(Opsi B)* formula PRD awal `1 + 0.5 * log2(1 + hidden + visible)`.
+- Status: **[Keputusan menunggu pemilik]** (sebelum/pada checkpoint M3 T3.2/T3.4).
 
 ### 2026-11-18 — Detail aturan skema & sanitizer TipTap (`T1.1`)
 - Task: T1.1 / `data-format.md` §5.3–§5.4

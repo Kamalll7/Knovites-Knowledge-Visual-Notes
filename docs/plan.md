@@ -64,15 +64,16 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
 - **T3.7** Keyboard, breadcrumb, toolbar node, dialog Create, Rename, Move to, Delete, ubah tipe, status, warna (FR-MAP-07, FR-MAP-10, FR-MAP-11, `spec-nodes-search.md` §6.7).
 - **T3.8** Performa: ukur dataset 150 dan 2.000 node, perbaiki, screenshot semua dataset, laporan `docs/perf.md` (FR-MAP-17).
 - **T3.9 (P1)** Minimap, outline view, drag-and-drop pindah node, busur cross-link.
-- **Syarat dari tinjauan screenshot Spike S3 (wajib terpenuhi di M3):**
-  - Lebar kapsul dihitung dari pengukuran teks nyata (tidak boleh ada judul terpotong di awal; truncation hanya di akhir dengan ellipsis `…`).
-  - Tier semantic zoom ditentukan oleh **ukuran font di layar** (minimal `11 px` di layar untuk Tier 1 dan Tier 2), bukan hanya skala `k`; screenshot Tier 2 wajib diambil pada skala yang memenuhinya.
-  - Aturan kamera: fokus node daun menampilkan parent dan sibling-nya; fokus node ber-children menampilkan fokus + children-nya; tidak ada node penting yang terpotong keluar viewport.
-  - Edge dimulai dari tepi kapsul node (bukan menembus tengah teks) dan memudar dekat induk untuk fan lebar.
-  - Uji tema light: pastikan kontras teks pada tint warna cabang memenuhi WCAG AA serta perbedaan antar-hue cabang tetap jelas terbaca.
-  - HUD (chip zoom, kontrol, breadcrumb/metrics) tidak boleh menimpa node (beri padding viewport saat auto-fit / recenter).
-  - Tes otomatis tambahan (selain cek overlap antar-node): cek edge yang melintas di atas node, label yang terpotong di luar batas kapsul, dan ukuran font minimum di layar.
-  - Ukur FPS di browser **non-headless dengan GPU** (dilakukan pemilik) sebelum kriteria sukses S1 dinyatakan tercapai.
+- **Syarat M3 (tinjauan screenshot Spike S3, wajib terpenuhi di M3):**
+  - Lebar kapsul dihitung dari pengukuran teks nyata (tidak boleh ada judul terpotong di awal; truncation hanya di akhir dengan ellipsis `…`) (`tanpa FR`, terkait `FR-MAP-09`).
+  - Tier semantic zoom ditentukan oleh **ukuran font di layar** (minimal `11 px` di layar untuk Tier 1 dan Tier 2), bukan hanya skala `k` (`FR-MAP-08`, batas `11 px` `tanpa FR`); screenshot Tier 2 wajib diambil pada skala yang memenuhinya.
+  - Aturan kamera: fokus node daun menampilkan parent dan sibling-nya; fokus node ber-children menampilkan fokus + children-nya; tidak ada node penting yang terpotong keluar viewport (`FR-MAP-05`, `FR-MAP-02`).
+  - Edge dimulai dari tepi kapsul node (bukan menembus tengah teks) dan memudar dekat induk untuk fan lebar (`FR-MAP-09`).
+  - Uji tema light: pastikan kontras teks pada tint warna cabang memenuhi WCAG AA serta perbedaan antar-hue cabang tetap jelas terbaca (`FR-MAP-09`, `spec-ui-nfr.md` §7.4).
+  - HUD (chip zoom, kontrol, breadcrumb/metrics) tidak boleh menimpa node (beri padding viewport saat auto-fit / recenter; `tanpa FR`, terkait `spec-ui-nfr.md` §8.2).
+  - Tes otomatis tambahan (selain cek overlap antar-node): cek edge yang melintas di atas node, label yang terpotong di luar batas kapsul, dan ukuran font minimum di layar (`FR-MAP-03`, `tanpa FR` untuk metrik tambahan).
+  - **[Belum terbukti]** Ukur FPS pada `unbalanced150` dan `large2000` oleh pemilik di browser **non-headless dengan GPU** sebelum kriteria sukses S1 / `FR-MAP-17` (`>= 55 fps`) dinyatakan tercapai (angka `~60 fps` Spike S3 berasal dari Chromium headless).
+  - **[Keputusan menunggu pemilik]** (tercatat di `docs/open-questions.md` & `docs/spikes/s3-radial.md`): (i) gaya node peta: kapsul berlabel vs lingkaran (`tanpa FR`, terkait `FR-MAP-09`); (ii) sub-cincin stagger untuk fan sibling lebar `>= 12` (`FR-MAP-03`); (iii) formula bobot sudut: subtree terlihat *bottom-up* + boost jalur fokus & koefisien tersembunyi lebih kecil (`FR-MAP-03`).
 - **Done when:** S1 (kriteria sukses) tercapai, semua FR-MAP P0 dan FR-NODE P0 lulus, e2e E1 dan E2 hijau.
 
 ### M4 — Halaman node dan kanvas
@@ -86,6 +87,21 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
 - **T4.7** Undo dan redo kanvas (FR-CVS-06).
 - **T4.8** Pipeline gambar: paste, drop, picker, aset di IndexedDB, render dan placeholder (FR-IMG).
 - **T4.9** Performa kanvas 300 elemen, e2e E3 dan E4 (FR-CVS-08). **Checkpoint pemilik.**
+- **Syarat M4 (hasil Spike S2 — `docs/spikes/s2-tiptap-reactflow.md`):**
+  - **[Fakta terukur]** Culling (`onlyRenderVisibleElements`) wajib (`FR-CVS-08`): pada dataset 300 node kaya + 50 gambar di S2 awal, tanpa culling jatuh ke `14.0–21.0 fps` (`DOM 300`); dengan culling + isolasi render mencapai `51.8–60.2 fps` (`DOM 9–74`).
+  - **[Fakta terukur]** Editor aktif ter-unmount oleh culling saat node keluar viewport (seleksi & riwayat undo hilang); mitigasi `<ViewportPortal>` memulihkannya (`remainedMountedOffscreen: true`, `activeEditorMinDuringRun: 1`, `FR-CVS-04`, `FR-CVS-08`).
+  - **[Fakta terukur]** `useViewport()` di komponen berat memicu re-render per frame; batasi hanya pada komponen daun (`tanpa FR`).
+  - **[Fakta terukur]** LOD ber-histeresis (masuk `0.32` / keluar `0.40`; judul disembunyikan `< 0.19` / tampil `>= 0.23` minimal `11 px` layar) menaikkan `zoom-out-all` 300 node dari `13.1 fps` menjadi `59.9 fps` (`p95Ms 16.7 ms`, `tanpa FR`).
+  - **[Fakta terukur]** Toolbar melayang harus berada di luar transform kanvas dengan ukuran layar tetap (`374×38 px` pada zoom `0.25–2.5`, `FR-TXT-01`).
+  - **[Fakta terukur]** TipTap v3 (`3.34.0`): `trailingNode: false`, `@tiptap/starter-kit` sudah memuat `Link`/`Underline`/`UndoRedo`, dan `@tiptap/extension-text-align` menulis `attrs: { textAlign: null }` pada paragraf polos (dibuang `parseCanvasJson` dengan `disallowed_tiptap_attr`).
+  - **[Fakta terukur]** Sanitasi (`FR-TXT-06`, `data-format.md` §5.4): allowlist `href` (`http`, `https`, `mailto`, `knovites:`), anchor statis wajib `rel="noopener noreferrer"`, dan validasi tetap dijalankan saat memuat JSON dari repo (`parseCanvasJson`).
+  - **[Fakta terukur]** Kontras (`FR-CVS-05`, `spec-ui-nfr.md` §7.4): 5 swatch hex gagal AA di tema light (`1.57–2.77:1`); satu hex tidak mungkin lolos `4.5:1` di kedua tema; pasangan latar+teks `Highlight` per tema lulus AA (`9.57–11.89:1` dark, `12.66–14.63:1` light).
+  - **[Fakta terukur]** Resize horizontal (`160–720 px`, `FR-CVS-03`) + drag gagang (`FR-CVS-04`) di `<ViewportPortal>` terbukti tanpa lompatan (`<= 1.5 px` deviasi ukuran kotak vs editor setelah `pre { white-space: pre-wrap }`); paritas statis vs edit `diffPixels: 0` (khusus area kotak isi `richtext-body`, `FR-TXT-08`).
+  - **[Belum terbukti]** `FR-CVS-08` (`>= 50 fps` pada 300 elemen): seluruh angka berasal dari Chromium headless tanpa GPU dengan gambar sintetis kecil; wajib diukur di browser non-headless ber-GPU dengan foto asli dan thumbnail yang dibuat saat impor (`FR-IMG-03`).
+  - **[Belum terbukti]** IME, touch/pinch, keyboard virtual, aksesibilitas (ARIA/Tab), Firefox/WebKit, caret/seleksi pada elemen ter-transform (mode scale), dan resize vertikal (gambar, `FR-CVS-03`).
+  - **[Belum terbukti]** Gerbang benchmark spike (`meanFps >= 30`, `p95Ms <= 50 ms`, `maxMs <= 100/200 ms`) hanya berjalan lokal (tidak di CI).
+  - **[Rekomendasi]** (belum dikunci): `textAlign` masuk skema (`enum`, default tidak ditulis; normalisasi editor agar tidak menulis `null`); warna sebagai token semantik tema; edit di zoom rendah otomatis zoom ke tingkat terbaca; adopsi bersyarat culling + LOD + `<ViewportPortal>` hasil S2.
+  - **[Keputusan menunggu pemilik]** (lihat `docs/open-questions.md`): (1) `textAlign` (`FR-TXT-01`, `data-format.md` §5.4); (2) warna semantik vs hex (`FR-CVS-05`); (3) frame teks (`style.bg`/`border` di `data-format.md` §5.4 saat ini memakai `null | #rrggbb` sehingga `"style": { "bg": null, "border": null }` bentrok makna antara `Auto` dan `None` — cek konvensi nilai `style.bg`/`border` sebelum menambah properti `frame` baru, `FR-CVS-05`); (4) blok kode `pre-wrap` vs scroll horizontal (`FR-TXT-03`, `FR-TXT-08`); (5) perilaku edit di zoom rendah (`FR-CVS-01`, `FR-CVS-04`).
 - **Done when:** semua FR-PAGE, FR-CVS, FR-TXT, FR-IMG P0 lulus.
 
 ### M5 — Pencarian dan link

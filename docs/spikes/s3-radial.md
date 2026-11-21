@@ -103,3 +103,28 @@ Sesuai aturan spike (`docs/plan.md`), perbedaan berikut dicatat untuk ditinjau p
    - *Pilihan:* Menggambar path halo lebar (`strokeWidth + 7`, `opacity 0.22`) di bawah path utama jalur aktif (`opacity 0.96`), dan outline stroke halo di sekeliling kapsul fokus.
    - *Alasan:* Tetap tampak jelas di tema gelap maupun terang tanpa bug clipping `objectBoundingBox` pada garis vertikal dan tanpa penalti FPS blur di animasi RAF.
    - *Alternatif:* CSS `drop-shadow` atau SVG `feGaussianBlur` (rawan *culling* sumbu lurus dan lambat saat 20+ node dianimasikan bersamaan).
+
+---
+
+## 7. Temuan Review (Syarat M3)
+
+1. **[Fakta terukur]** Pada prototipe S3 (`Chromium headless`), semua 11 skenario di 5 dataset menghasilkan **0** tumpang tindih (`gap = 12px`), waktu komputasi `large2000` `1.80–2.30 ms` (< 30 ms `FR-MAP-17`), serta transisi fokus `~60 fps` (`p50 16.7 ms`, `p95 16.7–33.4 ms`, `max 50.0–50.1 ms`).
+2. **Temuan visual screenshot yang menjadi Syarat M3 (`docs/plan.md`):**
+   - Lebar kapsul wajib berasal dari pengukuran teks nyata; judul tidak boleh dipotong di awal (ellipsis hanya di akhir) (`tanpa FR`, terkait `FR-MAP-09`).
+   - Tier semantic zoom ditentukan oleh ukuran font di layar (minimal `11 px` untuk Tier 1 & Tier 2), bukan hanya skala `k`; screenshot Tier 2 wajib diambil pada skala yang memenuhinya (`FR-MAP-08`, batas `11 px` `tanpa FR`).
+   - Kamera fokus ke node daun wajib tetap menampilkan parent dan sibling; fokus node ber-children menampilkan fokus + children (`FR-MAP-05`, `FR-MAP-02`).
+   - Edge dimulai dari tepi kapsul dan memudar dekat induk untuk fan lebar (`FR-MAP-09`).
+   - Tema light: wajib menguji kontras teks pada tint cabang (WCAG AA) dan keterpisahan antar-hue (`FR-MAP-09`, `spec-ui-nfr.md` §7.4).
+   - HUD (chip zoom, kontrol) tidak boleh menimpa node (beri padding viewport saat fit/recenter, `tanpa FR`, terkait `spec-ui-nfr.md` §8.2).
+   - Tes otomatis tambahan di M3: uji edge melintas di atas node, label terpotong di luar kapsul, dan font minimum di layar (`FR-MAP-03`, `tanpa FR` untuk metrik tambahan).
+3. **[Belum terbukti]** Angka `~60 fps` Spike S3 diukur pada **Chromium headless tanpa GPU**; pemilik wajib mengukur FPS di browser **non-headless dengan GPU** pada M3 sebelum `FR-MAP-17` / kriteria sukses S1 dinyatakan tercapai.
+
+---
+
+## 8. Keputusan Menunggu Pemilik
+
+Status berikut **[Keputusan menunggu pemilik]** (tercatat pula dengan opsi & rekomendasi di [`docs/open-questions.md`](../open-questions.md)):
+
+1. **(i) Kapsul berlabel vs lingkaran (`tanpa FR`, terkait `FR-MAP-09`):** kapsul membulat berlabel adaptif (`118–268 px` Tier 1/2) vs lingkaran seragam berlabel eksternal. **[Rekomendasi]:** kapsul berlabel (`118–268 px`, Tier 0 beralih ke lingkaran berlabel eksternal) agar terbaca dan mudah diklik sesuai tinjauan referensi visual.
+2. **(ii) Sub-cincin stagger untuk fan sibling lebar (`>= 12`, `FR-MAP-03`):** 2–3 sub-cincin radial deterministik (busur terarah `<= 255°` untuk fan non-root) vs satu cincin radius `r(d)` ketat. **[Rekomendasi]:** sub-cincin stagger agar radius cincin tetap kompak muat layar tanpa tumpang tindih.
+3. **(iii) Formula bobot sudut (`FR-MAP-03`):** akumulasi subtree yang **sedang terlihat** (*bottom-up*) + boost kecil jalur fokus & koefisien turunan tersembunyi lebih kecil (`0.35 * log2(1 + hidden)`) vs formula PRD awal `1 + 0.5 * log2(1 + hidden + visible)`. **[Rekomendasi]:** formula *bottom-up* agar cabang aktif tidak terimpit oleh sepupu tertutup yang besar.
