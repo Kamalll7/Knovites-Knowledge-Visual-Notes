@@ -29,6 +29,21 @@ export {
   type ScreenTierResolution,
   type TextMeasurerFn,
 } from '@/domain/layout/radial-layout'
+export {
+  computeHorizontalGeometryDiagnostics,
+  computeHorizontalLayout,
+  type HorizontalGeometryDiagnostics,
+} from '@/domain/layout/horizontal-layout'
+export {
+  DEFAULT_HORIZONTAL_LAYOUT_CONFIG,
+  type HorizontalLayoutConfig,
+  type HorizontalLayoutDiagnostics,
+  type HorizontalLayoutEdge,
+  type HorizontalLayoutInput,
+  type HorizontalLayoutNode,
+  type HorizontalLayoutResult,
+  type HorizontalLayoutStats,
+} from '@/domain/layout/horizontal-types'
 export type {
   MapLayoutDiagnostics,
   MapLayoutEdge,
