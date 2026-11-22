@@ -29,3 +29,10 @@ export {
   type ScreenTierResolution,
   type TextMeasurerFn,
 } from '@/domain/layout/radial-layout'
+export type {
+  MapLayoutDiagnostics,
+  MapLayoutEdge,
+  MapLayoutNode,
+  MapLayoutResult,
+  NodeBoxConfig,
+} from '@/domain/layout/types'

@@ -18,6 +18,7 @@ import {
   mergeRadialConfig,
   type BoxBounds,
   type CollisionStats,
+  type MapLayoutNode,
   type PlacedMutableNode,
   type RadialGeometryDiagnostics,
   type RadialLayoutConfig,
@@ -40,8 +41,10 @@ export function occupiedBounds(n: PlacedMutableNode): BoxBounds {
   return { x: uMinX, y: uMinY, width: uMaxX - uMinX, height: uMaxY - uMinY }
 }
 
-/** Outer AABB for an output `RadialLayoutNode`, including visible external tier-0 label. */
-export function occupiedLayoutNodeBounds(n: RadialLayoutNode): BoxBounds {
+/** Outer AABB for any output `MapLayoutNode`, including visible external tier-0 label. */
+export function occupiedLayoutNodeBounds(
+  n: Pick<MapLayoutNode, 'x' | 'y' | 'width' | 'height' | 'labelBox'>,
+): BoxBounds {
   const minX = n.x - n.width / 2
   const maxX = n.x + n.width / 2
   const minY = n.y - n.height / 2

@@ -136,7 +136,7 @@ export interface BoxBounds {
   readonly height: number
 }
 
-export interface RadialLayoutNode {
+export interface MapLayoutNode {
   readonly id: string
   readonly parentId: string | null
   readonly depth: number
@@ -154,16 +154,19 @@ export interface RadialLayoutNode {
   readonly height: number
   readonly radius: number | null
   readonly labelBox: BoxBounds | null
+  readonly subtreeWeight: number
+}
+
+export interface RadialLayoutNode extends MapLayoutNode {
   readonly r: number
   readonly theta: number
   readonly wedgeStart: number
   readonly wedgeEnd: number
   readonly staggerRingCount: 1 | 2 | 3
   readonly staggerIndex: number
-  readonly subtreeWeight: number
 }
 
-export interface RadialLayoutEdge {
+export interface MapLayoutEdge {
   readonly id: string
   readonly sourceId: string
   readonly targetId: string
@@ -173,12 +176,17 @@ export interface RadialLayoutEdge {
   readonly targetY: number
 }
 
-export interface RadialLayoutDiagnostics {
+export type RadialLayoutEdge = MapLayoutEdge
+
+export interface MapLayoutDiagnostics {
   readonly nodeCount: number
   readonly edgeCount: number
   readonly truncatedCount: number
   readonly hiddenLabelCount: number
   readonly minEffectiveFontPx: number
+}
+
+export interface RadialLayoutDiagnostics extends MapLayoutDiagnostics {
   readonly collisionPassesUsed: number
 }
 
@@ -188,15 +196,40 @@ export interface RadialGeometryDiagnostics {
   readonly edgeCrossingsCount: number
 }
 
-export interface RadialLayoutResult {
+export interface MapLayoutResult<
+  TNode extends MapLayoutNode = MapLayoutNode,
+  TDiagnostics extends MapLayoutDiagnostics = MapLayoutDiagnostics,
+  TEdge extends MapLayoutEdge = MapLayoutEdge,
+> {
   readonly rootId: string
   readonly tier: ZoomTier
   readonly scale: number
-  readonly nodes: Readonly<Record<string, RadialLayoutNode>>
+  readonly nodes: Readonly<Record<string, TNode>>
   readonly orderedIds: readonly string[]
-  readonly edges: readonly RadialLayoutEdge[]
-  readonly diagnostics: RadialLayoutDiagnostics
+  readonly edges: readonly TEdge[]
+  readonly diagnostics: TDiagnostics
 }
+
+export type RadialLayoutResult = MapLayoutResult<RadialLayoutNode, RadialLayoutDiagnostics>
+
+/** Shared box-sizing and zoom-tier configuration used across map layouts. */
+export type NodeBoxConfig = Pick<
+  RadialLayoutConfig,
+  | 'capsuleMinWidthPx'
+  | 'capsuleMaxWidthPx'
+  | 'capsuleTier1HeightPx'
+  | 'capsuleTier2HeightPx'
+  | 'capsulePaddingXPx'
+  | 'capsuleMetaWidthPx'
+  | 'rootRadiusPx'
+  | 'tier0CircleMinRadiusPx'
+  | 'tier0CircleMaxRadiusPx'
+  | 'tier0LabelOffsetPx'
+  | 'minScreenFontPx'
+  | 'tier0ScaleThreshold'
+  | 'tier2ScaleThreshold'
+  | 'fonts'
+>
 
 export interface SizedNodeSpec {
   readonly shape: 'circle' | 'capsule'
@@ -246,7 +279,10 @@ export function formatLayoutFont(px: number, fonts: RadialFontSpec): string {
 export function resolveScreenZoomTier(
   scale: number,
   requestedTier: ZoomTier | undefined,
-  config: RadialLayoutConfig = DEFAULT_RADIAL_LAYOUT_CONFIG,
+  config: Pick<
+    NodeBoxConfig,
+    'minScreenFontPx' | 'tier0ScaleThreshold' | 'tier2ScaleThreshold' | 'fonts'
+  > = DEFAULT_RADIAL_LAYOUT_CONFIG,
 ): ScreenTierResolution {
   const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1
   const initialTier: ZoomTier =
@@ -280,13 +316,18 @@ export function resolveScreenZoomTier(
   }
 }
 
-export function mergeRadialConfig(partial?: Partial<RadialLayoutConfig>): RadialLayoutConfig {
-  if (!partial) return DEFAULT_RADIAL_LAYOUT_CONFIG
+export function mergeLayoutConfig<T extends { readonly fonts: RadialFontSpec }>(
+  defaults: T,
+  partial?: Partial<T>,
+): T {
+  if (!partial) return defaults
   return {
-    ...DEFAULT_RADIAL_LAYOUT_CONFIG,
+    ...defaults,
     ...partial,
-    fonts: partial.fonts
-      ? { ...DEFAULT_RADIAL_LAYOUT_CONFIG.fonts, ...partial.fonts }
-      : DEFAULT_RADIAL_LAYOUT_CONFIG.fonts,
+    fonts: partial.fonts ? { ...defaults.fonts, ...partial.fonts } : defaults.fonts,
   }
+}
+
+export function mergeRadialConfig(partial?: Partial<RadialLayoutConfig>): RadialLayoutConfig {
+  return mergeLayoutConfig(DEFAULT_RADIAL_LAYOUT_CONFIG, partial)
 }

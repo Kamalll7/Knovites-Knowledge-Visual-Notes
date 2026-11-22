@@ -4,6 +4,7 @@ import type { ComputeVisibleResult, VisibleMapNode } from './compute-visible'
 import {
   formatLayoutFont,
   type LayoutPrepared,
+  type NodeBoxConfig,
   type RadialLayoutConfig,
   type ScreenTierResolution,
   type SizedNodeSpec,
@@ -49,11 +50,11 @@ function truncateEndToWidth(
   return { text: best, measuredWidth: bestW, truncated: true }
 }
 
-function computeNodeBoxSpec(
+export function computeNodeBoxSpec(
   node: VisibleMapNode,
   resolution: ScreenTierResolution,
   measureText: TextMeasurerFn,
-  config: RadialLayoutConfig,
+  config: NodeBoxConfig,
 ): SizedNodeSpec {
   const font = formatLayoutFont(resolution.modelFontPx, config.fonts)
 
@@ -125,7 +126,7 @@ function computeNodeBoxSpec(
   }
 }
 
-function buildSortedChildrenMap(visible: ComputeVisibleResult): Map<string, string[]> {
+export function buildSortedChildrenMap(visible: ComputeVisibleResult): Map<string, string[]> {
   const grouped = new Map<string, VisibleMapNode[]>()
   for (const node of Object.values(visible.nodes)) {
     if (!node.parentId || !(node.parentId in visible.nodes)) continue
@@ -147,7 +148,7 @@ function buildSortedChildrenMap(visible: ComputeVisibleResult): Map<string, stri
   return sorted
 }
 
-function computePostOrderIds(rootId: string, childrenMap: Map<string, string[]>): string[] {
+export function computePostOrderIds(rootId: string, childrenMap: Map<string, string[]>): string[] {
   const postOrder: string[] = []
   const stack: Array<{ readonly id: string; expanded: boolean }> = [{ id: rootId, expanded: false }]
   while (stack.length > 0) {
