@@ -245,7 +245,12 @@ export function assignMapNodeColors(
       branchRootId !== null
         ? (branchIdxByTopId.get(branchRootId) ?? hashBranchIndex(branchRootId, branchCount))
         : 0
-    const baseHex = isHexColor(vNode.color) ? vNode.color : palette.branches[branchIdx]!
+    const branchRootNode = branchRootId !== null ? visible.nodes[branchRootId] : undefined
+    const inheritedBranchHex =
+      branchRootNode && isHexColor(branchRootNode.color)
+        ? branchRootNode.color
+        : palette.branches[branchIdx]!
+    const baseHex = isHexColor(vNode.color) ? vNode.color : inheritedBranchHex
     const accentHex = isHexColor(vNode.color)
       ? baseHex
       : accentForDepth(baseHex, vNode.depth, theme)

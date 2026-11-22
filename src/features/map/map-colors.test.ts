@@ -172,6 +172,18 @@ describe('map-colors [T3.4a, FR-MAP-09]', () => {
     expect(darkColors.get('custom_c')!.accentHex).toBe('#e11d48')
     expect(darkColors.get('custom_c')!.branchIndex).toBeNull()
 
+    // Descendant inherits branch-root custom node.color (lightened by depth) when its own color is null
+    const coloredBranchVisible: ComputeVisibleResult = {
+      ...visible,
+      nodes: {
+        ...visible.nodes,
+        [idA]: { ...visible.nodes[idA]!, color: '#047857' },
+      },
+    }
+    const inheritedColors = assignMapNodeColors(coloredBranchVisible, 'light')
+    expect(inheritedColors.get(idA)!.accentHex).toBe('#047857')
+    expect(inheritedColors.get('child_a')!.accentHex).toBe(accentForDepth('#047857', 2, 'light'))
+
     const hexByte = fc.integer({ min: 0, max: 255 }).map((v) => v.toString(16).padStart(2, '0'))
     const hexArb = fc.tuple(hexByte, hexByte, hexByte).map(([r, g, b]) => `#${r}${g}${b}`)
     fc.assert(
