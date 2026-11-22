@@ -36,6 +36,7 @@ export {
 } from '@/domain/layout/horizontal-layout'
 export {
   DEFAULT_HORIZONTAL_LAYOUT_CONFIG,
+  HORIZONTAL_WIDE_FAN_FADE_THRESHOLD,
   type HorizontalLayoutConfig,
   type HorizontalLayoutDiagnostics,
   type HorizontalLayoutEdge,
