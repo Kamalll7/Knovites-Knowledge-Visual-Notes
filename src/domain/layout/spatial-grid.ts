@@ -110,4 +110,3 @@ export function rectsHit(
     if (minX <= r[i + 2]! && maxX >= r[i]! && minY <= r[i + 3]! && maxY >= r[i + 1]!) return true
   return false
 }
-
