@@ -12,6 +12,7 @@ import {
   type ComputeVisibleResult,
 } from '@/domain/layout'
 import { buildTree, type TreeBuildEntry } from '@/domain/tree'
+import { computeMapBoundingBox } from '@/features/map/map-bounds'
 import { MapSvgView } from '@/features/map/MapSvgView'
 
 const measure75 = (text: string) => text.length * 7.5
@@ -215,5 +216,81 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
     expect(Number(diag.dataset.maxRadiusPx)).toBeGreaterThan(0)
     expect(diag.textContent).toContain('nodes:21')
     expect(diag.textContent).toContain('overlaps:0')
+  })
+
+  it('includes external labelBox in computeMapBoundingBox and renders collapsed · N badge suffix', () => {
+    const entries: TreeBuildEntry[] = [
+      {
+        node: {
+          schema: 1,
+          id: 'branch_a',
+          title: 'Branch A',
+          type: 'concept',
+          status: 'none',
+          tags: [],
+          order: 'a0',
+          color: null,
+          links: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        path: 'branch_a',
+      },
+      ...Array.from({ length: 3 }, (_, idx) => ({
+        node: {
+          schema: 1 as const,
+          id: `leaf_${idx}`,
+          title: `Leaf ${idx}`,
+          type: 'concept' as const,
+          status: 'none' as const,
+          tags: [],
+          order: `b${idx}`,
+          color: null,
+          links: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        path: `branch_a/leaf_${idx}`,
+      })),
+    ]
+    const { state: tree } = buildTree(entries)
+    // Focus root at Tier 1 so branch_a is collapsed with hiddenCount === 3
+    const visible = computeVisible({
+      tree,
+      rootTitle: 'Very Wide External Root Title Extending Beyond Circle Diameter',
+      focusId: MAP_ROOT_ID,
+      zoomTier: 1,
+    })
+    const layout = computeRadialLayout({ visible, measureText: measure75, scale: 1, tier: 1 })
+    const rootNode = layout.nodes[MAP_ROOT_ID]!
+    expect(rootNode.labelBox).not.toBeNull()
+
+    // computeMapBoundingBox must include rootNode.labelBox on all four sides
+    const bbox = computeMapBoundingBox({
+      ...layout,
+      orderedIds: [MAP_ROOT_ID],
+      nodes: { [MAP_ROOT_ID]: rootNode },
+    })
+    expect(bbox.minX).toBeLessThanOrEqual(rootNode.labelBox!.x)
+    expect(bbox.maxX).toBeGreaterThanOrEqual(rootNode.labelBox!.x + rootNode.labelBox!.width)
+    expect(bbox.minY).toBeLessThanOrEqual(rootNode.labelBox!.y)
+    expect(bbox.maxY).toBeGreaterThanOrEqual(rootNode.labelBox!.y + rootNode.labelBox!.height)
+
+    // Collapsed branch_a must display `· 3` suffix in its rendered label
+    const { container } = render(
+      <MemoryRouter>
+        <MapSvgView
+          layout={layout}
+          visible={visible}
+          orientation="radial"
+          theme="dark"
+          measureText={measure75}
+        />
+      </MemoryRouter>,
+    )
+    const branchLabel = container.querySelector(
+      '[data-node-id="branch_a"] [data-testid="map-node-label"]',
+    )
+    expect(branchLabel?.textContent).toContain('· 3')
   })
 })
