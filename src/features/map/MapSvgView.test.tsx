@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
+import DevMapRoute from '@/app/DevMapRoute'
+import { ThemeProvider } from '@/app/ThemeProvider'
 import {
   MAP_ROOT_ID,
   computeHorizontalLayout,
@@ -190,5 +192,28 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
     expect(horContainer.querySelector('[data-orientation="horizontal"]')).not.toBeNull()
     expect(horContainer.querySelectorAll('[data-testid="map-node"]').length).toBe(5)
     expect(horContainer.querySelectorAll('filter')).toHaveLength(0)
+  })
+
+  it('renders DevMapRoute diagnostic chip with passesUsed, overlapCount, edgeCrossings, maxRadiusPx, and nodeCount', async () => {
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/__dev/map?dataset=root20Children&tier=1&mode=radial']}>
+          <DevMapRoute />
+        </MemoryRouter>
+      </ThemeProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dev-map-route')).toHaveAttribute('data-ready', 'true')
+    })
+
+    const diag = screen.getByTestId('dev-map-diagnostics')
+    expect(Number(diag.dataset.nodeCount)).toBe(21)
+    expect(Number(diag.dataset.passesUsed)).toBeGreaterThan(0)
+    expect(Number(diag.dataset.overlapCount)).toBe(0)
+    expect(Number(diag.dataset.edgeCrossings)).toBe(0)
+    expect(Number(diag.dataset.maxRadiusPx)).toBeGreaterThan(0)
+    expect(diag.textContent).toContain('nodes:21')
+    expect(diag.textContent).toContain('overlaps:0')
   })
 })

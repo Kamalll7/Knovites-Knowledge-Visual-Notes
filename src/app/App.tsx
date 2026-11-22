@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { HashRouter, Link, Route, Routes, useLocation } from 'react-router'
 import { AppShell } from '@/app/AppShell'
 import { ErrorBoundary } from '@/app/ErrorBoundary'
@@ -11,7 +11,7 @@ import {
   type WorkspaceStoreApi,
 } from '@/app/store'
 import { WorkspaceStoreContext } from '@/app/workspace-context'
-import { MapPlaceholder } from '@/features/map/MapPlaceholder'
+import { MapRoute } from '@/features/map/MapRoute'
 import { NodePagePlaceholder } from '@/features/page/NodePagePlaceholder'
 import { SettingsPlaceholder } from '@/features/settings/SettingsPlaceholder'
 import { en } from '@/i18n/en'
@@ -22,6 +22,8 @@ import {
   type TabLockCoordinator,
 } from '@/storage'
 import { Button } from '@/ui/components/button'
+
+const DevMapRoute = import.meta.env.DEV ? lazy(() => import('@/app/DevMapRoute')) : null
 
 function NotFoundPlaceholder() {
   return (
@@ -44,10 +46,24 @@ function AppRoutes() {
         path="/"
         element={
           <ErrorBoundary resetKey={location.pathname}>
-            <MapPlaceholder />
+            <MapRoute />
           </ErrorBoundary>
         }
       />
+      {DevMapRoute ? (
+        <Route
+          path="/__dev/map"
+          element={
+            <ErrorBoundary resetKey={location.pathname}>
+              <Suspense
+                fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}
+              >
+                <DevMapRoute />
+              </Suspense>
+            </ErrorBoundary>
+          }
+        />
+      ) : null}
       <Route
         path="/n/:nodeId"
         element={
