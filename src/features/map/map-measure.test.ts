@@ -109,4 +109,3 @@ describe('map-measure [T3.4a, FR-MAP-09]', () => {
     )
   })
 })
-
