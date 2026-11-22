@@ -715,6 +715,199 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     expect(Array.from(actualPlaced.entries())).toEqual(Array.from(refPlaced.entries()))
   })
 
+  it('invalidates clean edges on both prevRects and currRects across passes (Mutation e)', () => {
+    const capsule = {
+      shape: 'capsule' as const,
+      displayTitle: 'Node',
+      isTruncated: false,
+      labelVisible: true,
+      width: 120,
+      height: 40,
+      radius: null,
+      localLabelBox: null,
+    }
+    const polarNode = (
+      id: string,
+      parentId: string | null,
+      depth: number,
+      x: number,
+      y: number,
+      width = 120,
+    ): [string, PlacedMutableNode] => [
+      id,
+      {
+        id,
+        parentId,
+        depth,
+        kind: parentId === null ? 'root' : 'node',
+        spec: { ...capsule, width },
+        staggerRingCount: 1,
+        staggerIndex: 0,
+        subtreeWeight: 1,
+        r: Math.hypot(x, y),
+        theta: Math.atan2(x, -y),
+        x,
+        y,
+        wedgeStart: 0,
+        wedgeEnd: Math.PI,
+      },
+    ]
+
+    // Pass 0 marks c0 (y=500) clean, then p1->c1 (y=415) pushes mover (0,415)->(0,513) into prevRects.
+    // Pass 1 must invalidate c0 via dirty rects and push mover past y=500; `isDirty => false` misses it.
+    const makePlaced = (): Map<string, PlacedMutableNode> =>
+      new Map([
+        polarNode(MAP_ROOT_ID, null, 0, 0, 0, 104),
+        polarNode('p0', MAP_ROOT_ID, 1, -300, 500),
+        polarNode('c0', 'p0', 2, 300, 500),
+        polarNode('p1', MAP_ROOT_ID, 1, -190, 415, 60),
+        polarNode('c1', 'p1', 2, 190, 415, 60),
+        polarNode('mover', MAP_ROOT_ID, 3, 0, 415, 60),
+      ])
+    const order = [MAP_ROOT_ID, 'p0', 'c0', 'p1', 'c1', 'mover']
+    const children = new Map<string, string[]>([
+      [MAP_ROOT_ID, ['p0', 'p1', 'mover']],
+      ['p0', ['c0']],
+      ['c0', []],
+      ['p1', ['c1']],
+      ['c1', []],
+      ['mover', []],
+    ])
+    const actual = makePlaced()
+    const ref = makePlaced()
+    resolveCollisionsAndCrossings(
+      MAP_ROOT_ID,
+      order,
+      children,
+      actual,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    resolveCollisionsAndCrossingsReference(
+      MAP_ROOT_ID,
+      order,
+      children,
+      ref,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    expect(Array.from(actual.entries())).toEqual(Array.from(ref.entries()))
+  })
+
+  it('matches frozen reference under extreme multi-cell outward subtree push triggering rebuildGrid', () => {
+    const capsule = {
+      shape: 'capsule' as const,
+      displayTitle: 'Wide',
+      isTruncated: false,
+      labelVisible: true,
+      width: 220,
+      height: 44,
+      radius: null,
+      localLabelBox: null,
+    }
+    const makeExtreme = (): Map<string, PlacedMutableNode> =>
+      new Map([
+        [
+          MAP_ROOT_ID,
+          {
+            id: MAP_ROOT_ID,
+            parentId: null,
+            depth: 0,
+            kind: 'root',
+            spec: { ...capsule, shape: 'circle', width: 104, height: 104, radius: 52 },
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 3,
+            r: 0,
+            theta: 0,
+            x: 0,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI * 2,
+          },
+        ],
+        [
+          'p',
+          {
+            id: 'p',
+            parentId: MAP_ROOT_ID,
+            depth: 1,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 120,
+            theta: Math.PI / 2,
+            x: 120,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI,
+          },
+        ],
+        [
+          'cFar',
+          {
+            id: 'cFar',
+            parentId: 'p',
+            depth: 2,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 4800,
+            theta: Math.PI / 2,
+            x: 4800,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI,
+          },
+        ],
+        [
+          'blocker',
+          {
+            id: 'blocker',
+            parentId: MAP_ROOT_ID,
+            depth: 3,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: 180,
+            theta: Math.PI / 2,
+            x: 180,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI,
+          },
+        ],
+      ])
+    const order = [MAP_ROOT_ID, 'p', 'cFar', 'blocker']
+    const children = new Map<string, string[]>([
+      [MAP_ROOT_ID, ['p', 'blocker']],
+      ['p', ['cFar']],
+      ['cFar', []],
+      ['blocker', []],
+    ])
+    const actual = makeExtreme()
+    const ref = makeExtreme()
+    resolveCollisionsAndCrossings(
+      MAP_ROOT_ID,
+      order,
+      children,
+      actual,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    resolveCollisionsAndCrossingsReference(
+      MAP_ROOT_ID,
+      order,
+      children,
+      ref,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    expect(Array.from(actual.entries())).toEqual(Array.from(ref.entries()))
+  })
+
   it('matches frozen reference implementation byte-for-byte on all mandatory datasets and >= 200 random trees', async () => {
     const { createMandatoryDatasets } = await import('@/domain/datasets')
     const datasetMap = createMandatoryDatasets()
@@ -1339,9 +1532,12 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     expect(pWorst.total.medianMs).toBeGreaterThan(0)
   }, 60_000)
 
-  it('enforces deterministic spatial-grid pair-check and zero-allocation bounds in CI (no wall-clock)', async () => {
+  it('enforces deterministic spatial-grid pair-check bounds in CI without wall-clock (reports pass exhaustion and geometry)', async () => {
     const { createMandatoryDatasets } = await import('@/domain/datasets')
     const measure = fixedWidthMeasure(7.5)
+    // Note: `stats.allocations` is an unincremented counter stub (`0`), NOT a V8 heap allocation measurement.
+    // `resolveCollisionsAndCrossings` allocates typed arrays and grid buckets at setup / `rebuildGrid`,
+    // while keeping per-edge ray clipping and segment-box checks free of temporary `{}` objects.
     const runWithStats = (visible: ComputeVisibleResult, tier: 0 | 1 | 2) => {
       const stats: CollisionStats = {
         passesUsed: 0,
@@ -1349,8 +1545,8 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
         edgeCrossChecks: 0,
         allocations: 0,
       }
-      computeRadialLayout({ visible, measureText: measure, scale: 1, tier, stats })
-      return stats
+      const layout = computeRadialLayout({ visible, measureText: measure, scale: 1, tier, stats })
+      return { stats, layout }
     }
 
     const largeDs = createMandatoryDatasets().large2000
@@ -1362,14 +1558,13 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
       focusId: largeDeepId,
       zoomTier: 2,
     })
-    const largeDeepStats = runWithStats(largeDeepVisible, 2)
-    expect(largeDeepStats.allocations).toBe(0)
+    const { stats: largeDeepStats } = runWithStats(largeDeepVisible, 2)
     expect(largeDeepStats.overlapChecks).toBeLessThanOrEqual(2_000)
     expect(largeDeepStats.edgeCrossChecks).toBeLessThanOrEqual(8_000)
 
     const scalingProfile = [50, 100, 200, 300].map((count) => {
       const vis = buildWorstCaseVisible(count)
-      const st = runWithStats(vis, 2)
+      const { stats: st } = runWithStats(vis, 2)
       return { n: vis.orderedIds.length, ...st }
     })
     console.info(
@@ -1378,9 +1573,93 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
 
     const worstStats = scalingProfile[scalingProfile.length - 1]!
     expect(worstStats.n).toBe(300)
-    expect(worstStats.allocations).toBe(0)
     expect(worstStats.overlapChecks).toBeLessThanOrEqual(500)
     expect(worstStats.edgeCrossChecks).toBeLessThanOrEqual(50_000)
+
+    const passReport: {
+      dataset: string
+      focus: string
+      tier: number
+      passesUsed: number
+      hitMaxPasses: boolean
+      overlapCount: number
+      edgeCrossingsCount: number
+    }[] = []
+    for (const ds of Object.values(createMandatoryDatasets())) {
+      const { state: tree } = buildTree(ds.entries)
+      const middleId = ds.entries[Math.floor(ds.entries.length / 2)]?.node?.id ?? MAP_ROOT_ID
+      let leafId = ds.entries[ds.entries.length - 1]?.node?.id ?? MAP_ROOT_ID
+      for (const e of ds.entries) {
+        const id = e.node?.id
+        if (id && (tree.nodes[id]?.childrenIds.length ?? 0) === 0) {
+          leafId = id
+          break
+        }
+      }
+      let withChildrenId = MAP_ROOT_ID
+      let maxCh = 0
+      for (const n of Object.values(tree.nodes)) {
+        if (n.childrenIds.length > maxCh) {
+          maxCh = n.childrenIds.length
+          withChildrenId = n.id
+        }
+      }
+      const focuses = {
+        root: MAP_ROOT_ID,
+        middle: middleId,
+        leaf: leafId,
+        withChildren: withChildrenId,
+      }
+      for (const [focusKind, focusId] of Object.entries(focuses)) {
+        for (const [scale, tier] of [[1, 1] as const, [1, 2] as const, [0.85, 0] as const]) {
+          const vis = computeVisible({
+            tree,
+            rootTitle: ds.manifest.title,
+            focusId,
+            zoomTier: tier,
+          })
+          const { stats: st, layout } = (() => {
+            const s: CollisionStats = {
+              passesUsed: 0,
+              overlapChecks: 0,
+              edgeCrossChecks: 0,
+              allocations: 0,
+            }
+            const l = computeRadialLayout({
+              visible: vis,
+              measureText: measure,
+              scale,
+              tier,
+              stats: s,
+            })
+            return { stats: s, layout: l }
+          })()
+          const geom = computeRadialGeometryDiagnostics(layout)
+          passReport.push({
+            dataset: ds.id,
+            focus: focusKind,
+            tier,
+            passesUsed: st.passesUsed,
+            hitMaxPasses: st.passesUsed >= DEFAULT_RADIAL_LAYOUT_CONFIG.maxCollisionPasses,
+            overlapCount: geom.overlapCount,
+            edgeCrossingsCount: geom.edgeCrossingsCount,
+          })
+        }
+      }
+    }
+    const worstDiag = computeRadialGeometryDiagnostics(
+      runWithStats(buildWorstCaseVisible(300), 2).layout,
+    )
+    passReport.push({
+      dataset: 'worstCase300',
+      focus: 'root',
+      tier: 2,
+      passesUsed: worstStats.passesUsed,
+      hitMaxPasses: worstStats.passesUsed >= DEFAULT_RADIAL_LAYOUT_CONFIG.maxCollisionPasses,
+      overlapCount: worstDiag.overlapCount,
+      edgeCrossingsCount: worstDiag.edgeCrossingsCount,
+    })
+    console.info(`[T3_2D_PASS_REPORT] ${JSON.stringify(passReport)}`)
   })
 
   it('satisfies radial invariants under fast-check randomized trees', () => {
