@@ -1,0 +1,194 @@
+import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { describe, expect, it, vi } from 'vitest'
+
+import {
+  MAP_ROOT_ID,
+  computeHorizontalLayout,
+  computeRadialLayout,
+  computeVisible,
+  type ComputeVisibleResult,
+} from '@/domain/layout'
+import { buildTree, type TreeBuildEntry } from '@/domain/tree'
+import { MapSvgView } from '@/features/map/MapSvgView'
+
+const measure75 = (text: string) => text.length * 7.5
+
+function buildSampleVisible(options?: {
+  childCount?: number
+  zoomTier?: 0 | 1 | 2
+  focusId?: string
+}): ComputeVisibleResult {
+  const count = options?.childCount ?? 3
+  const entries: TreeBuildEntry[] = []
+  for (let i = 0; i < count; i += 1) {
+    const id = `n_${i}`
+    const status = i === 0 ? 'learning' : i === 1 ? 'practiced' : i === 2 ? 'mastered' : 'none'
+    const title =
+      i === 0
+        ? 'Very Long Concept Title Exceeding Maximum Capsule Width Budget Easily'
+        : `Topic ${i + 1}`
+    entries.push({
+      node: {
+        schema: 1,
+        id,
+        title,
+        type: 'concept',
+        status,
+        tags: [],
+        order: `k${String(i).padStart(4, '0')}`,
+        color: i === 2 ? '#047857' : null,
+        links: [],
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      path: id,
+    })
+  }
+  const { state: tree } = buildTree(entries)
+  return computeVisible({
+    tree,
+    rootTitle: 'Sample Knowledge',
+    focusId: options?.focusId ?? MAP_ROOT_ID,
+    zoomTier: options?.zoomTier ?? 1,
+  })
+}
+
+describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () => {
+  it('renders empty state with Create first node button when only root exists', () => {
+    const { state: emptyTree } = buildTree([])
+    const visible = computeVisible({
+      tree: emptyTree,
+      rootTitle: 'Empty',
+      focusId: MAP_ROOT_ID,
+      zoomTier: 1,
+    })
+    const layout = computeRadialLayout({ visible, measureText: measure75, scale: 1, tier: 1 })
+    const onCreate = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <MapSvgView
+          layout={layout}
+          visible={visible}
+          orientation="radial"
+          theme="dark"
+          onCreateFirstNode={onCreate}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByTestId('map-empty-state')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Knowledge Map' })).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('create-first-node'))
+    expect(onCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders radial capsules, end-only truncation, status dots+icons, focus halo without <filter>, +N overflow, and wide-fan gradients', () => {
+    const visible = buildSampleVisible({ childCount: 28, zoomTier: 1, focusId: MAP_ROOT_ID })
+    const layout = computeRadialLayout({ visible, measureText: measure75, scale: 1, tier: 1 })
+    const onSelect = vi.fn()
+    const onOpen = vi.fn()
+
+    const { container } = render(
+      <MemoryRouter>
+        <MapSvgView
+          layout={layout}
+          visible={visible}
+          orientation="radial"
+          theme="light"
+          measureText={measure75}
+          onSelectNode={onSelect}
+          onOpenNode={onOpen}
+        />
+      </MemoryRouter>,
+    )
+
+    // Strictly ZERO <filter> elements anywhere in the SVG (Syarat M3 / FR-MAP-09)
+    expect(container.querySelectorAll('filter')).toHaveLength(0)
+
+    // Wide-fan (>= 12 children) creates linearGradient defs and marks edges with data-fade-base="true"
+    const gradients = container.querySelectorAll('defs linearGradient')
+    expect(gradients.length).toBeGreaterThanOrEqual(24)
+    expect(container.querySelectorAll('[data-fade-base="true"]').length).toBeGreaterThanOrEqual(24)
+
+    // Status indicators include BOTH dot and distinct icon glyph per status (learning, practiced, mastered)
+    const iconPaths = new Set<string>()
+    for (const status of ['learning', 'practiced', 'mastered'] as const) {
+      const badge = screen.getByTestId(`node-status-${status}`)
+      expect(badge.querySelector('[data-testid="status-dot"]')).not.toBeNull()
+      const iconEl = badge.querySelector('[data-testid="status-icon"]')
+      expect(iconEl).not.toBeNull()
+      const d = iconEl?.getAttribute('d') ?? ''
+      expect(d.length).toBeGreaterThan(0)
+      iconPaths.add(d)
+    }
+    expect(iconPaths.size).toBe(3)
+
+    // Long title truncated strictly at end (never leading ellipsis)
+    const longNode = container.querySelector('[data-node-id="n_0"] [data-testid="map-node-label"]')
+    expect(longNode?.textContent?.startsWith('Very Long')).toBe(true)
+    expect(longNode?.textContent?.endsWith('…')).toBe(true)
+
+    // Overflow +N bubble rendered for 28 children (> 24 maxChildrenShown -> +4)
+    const overflowNode = container.querySelector('[data-node-kind="overflow"]')
+    expect(overflowNode).not.toBeNull()
+    expect(overflowNode?.textContent).toContain('+4')
+
+    // Focus halo uses stroke element (no filter)
+    expect(
+      container.querySelectorAll('[data-testid="map-node-focus-halo"]').length,
+    ).toBeGreaterThanOrEqual(1)
+
+    // Click and double-click callbacks fire with node ID
+    const node1 = container.querySelector('[data-node-id="n_1"]')!
+    fireEvent.click(node1)
+    fireEvent.doubleClick(node1)
+    expect(onSelect).toHaveBeenCalledWith('n_1')
+    expect(onOpen).toHaveBeenCalledWith('n_1')
+  })
+
+  it('renders Tier 0 external-label circles and works seamlessly with horizontal MapLayoutResult', () => {
+    const visible = buildSampleVisible({ childCount: 4, zoomTier: 0, focusId: 'n_0' })
+    const radialTier0 = computeRadialLayout({
+      visible,
+      measureText: measure75,
+      scale: 0.85,
+      tier: 0,
+    })
+    const { container: radialContainer } = render(
+      <MemoryRouter>
+        <MapSvgView
+          layout={radialTier0}
+          visible={visible}
+          orientation="radial"
+          theme="dark"
+          measureText={measure75}
+        />
+      </MemoryRouter>,
+    )
+    expect(radialContainer.querySelectorAll('[data-node-shape="circle"]').length).toBe(5)
+    expect(radialContainer.querySelectorAll('[data-testid="map-edge-focus-halo"]').length).toBe(1)
+
+    const horLayout = computeHorizontalLayout({
+      visible,
+      measureText: measure75,
+      scale: 1,
+      tier: 1,
+    })
+    const { container: horContainer } = render(
+      <MemoryRouter>
+        <MapSvgView
+          layout={horLayout}
+          visible={visible}
+          orientation="horizontal"
+          theme="light"
+          measureText={measure75}
+        />
+      </MemoryRouter>,
+    )
+    expect(horContainer.querySelector('[data-orientation="horizontal"]')).not.toBeNull()
+    expect(horContainer.querySelectorAll('[data-testid="map-node"]').length).toBe(5)
+    expect(horContainer.querySelectorAll('filter')).toHaveLength(0)
+  })
+})
