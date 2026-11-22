@@ -11,6 +11,14 @@ import {
 } from '@/domain/layout/types'
 
 /**
+ * S3 (`docs/spikes/s3-radial.md` §4 & §7, terkait `FR-MAP-09`; `spec-map.md`):
+ * ambang jumlah sibling terlihat (>= 12) untuk menandai fade pangkal edge pada
+ * fan lebar, meniru ambang fan padat stagger 2-cincin dari temuan S3 sebagai
+ * konstanta horizontal yang berdiri sendiri.
+ */
+export const HORIZONTAL_WIDE_FAN_FADE_THRESHOLD = 12
+
+/**
  * Single centralized configuration for T3.3a horizontal left-to-right layout.
  * Directional spacing constants cite `spec-map.md`, `plan.md`, and `S3`.
  */
@@ -39,7 +47,7 @@ export const DEFAULT_HORIZONTAL_LAYOUT_CONFIG: HorizontalLayoutConfig = {
   minGapPx: DEFAULT_RADIAL_LAYOUT_CONFIG.minGapPx,
   columnGapPx: 64,
   descendantSpacingPx: 12,
-  wideFanFadeThreshold: DEFAULT_RADIAL_LAYOUT_CONFIG.staggerThreshold2,
+  wideFanFadeThreshold: HORIZONTAL_WIDE_FAN_FADE_THRESHOLD,
   minScreenFontPx: DEFAULT_RADIAL_LAYOUT_CONFIG.minScreenFontPx,
   tier0ScaleThreshold: DEFAULT_RADIAL_LAYOUT_CONFIG.tier0ScaleThreshold,
   tier2ScaleThreshold: DEFAULT_RADIAL_LAYOUT_CONFIG.tier2ScaleThreshold,
