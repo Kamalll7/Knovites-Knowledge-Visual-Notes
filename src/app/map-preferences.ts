@@ -96,4 +96,3 @@ export function useMapOrientationPreference(): UseMapOrientationPreferenceResult
 
   return { orientation, setOrientation, toggleOrientation }
 }
-

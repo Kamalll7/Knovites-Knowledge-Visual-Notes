@@ -85,4 +85,3 @@ describe('map orientation per-device preference [T3.3b, FR-MAP-04]', () => {
     expect(window.localStorage.key(0)).toBe(MAP_ORIENTATION_STORAGE_KEY)
   })
 })
-
