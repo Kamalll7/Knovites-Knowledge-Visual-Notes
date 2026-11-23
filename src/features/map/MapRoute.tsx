@@ -10,7 +10,7 @@ import {
   type ZoomTier,
 } from '@/domain/layout'
 import { MapSvgView } from '@/features/map/MapSvgView'
-import { createCanvasTextMeasurer } from '@/features/map/map-measure'
+import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 
 const DEFAULT_MAP_TIER: ZoomTier = 1
 const DEFAULT_MAP_SCALE = 1
@@ -60,6 +60,7 @@ export function MapRoute() {
       measureText: measurer.measure,
       scale: DEFAULT_MAP_SCALE,
       tier: DEFAULT_MAP_TIER,
+      config: MAP_CAPSULE_BOX_CONFIG,
     })
   }, [visible, measurer, fontVersion])
 

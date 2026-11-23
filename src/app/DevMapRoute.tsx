@@ -19,7 +19,7 @@ import {
 import { buildTree, type TreeBuildEntry } from '@/domain/tree'
 import { MapSvgView } from '@/features/map/MapSvgView'
 import { MAP_HUD_TOP_RESERVE_PX, computeMapBoundingBox } from '@/features/map/map-bounds'
-import { createCanvasTextMeasurer } from '@/features/map/map-measure'
+import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 
 const DEV_DATASET_IDS = [
   'demo',
@@ -163,6 +163,7 @@ export default function DevMapRoute() {
         measureText: measurer.measure,
         scale,
         tier,
+        config: MAP_CAPSULE_BOX_CONFIG,
       })
       const geom = computeHorizontalGeometryDiagnostics(layout)
       const bbox = computeMapBoundingBox(layout)
@@ -188,6 +189,7 @@ export default function DevMapRoute() {
       measureText: measurer.measure,
       scale,
       tier,
+      config: MAP_CAPSULE_BOX_CONFIG,
       stats,
     })
     const geom = computeRadialGeometryDiagnostics(layout)

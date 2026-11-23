@@ -1,5 +1,4 @@
 import {
-  formatLayoutFont,
   DEFAULT_RADIAL_LAYOUT_CONFIG,
   type MapLayoutNode,
   type TextMeasurerFn,
@@ -11,18 +10,16 @@ import {
   type MapThemeMode,
   type NodeColorStyles,
 } from '@/features/map/map-colors'
-import { truncateLabelEnd } from '@/features/map/map-measure'
 
-/** Capsule visual geometry constants aligned with `tokens.css` & Spike S3 (`FR-MAP-09`). */
+/** Capsule visual geometry constants aligned with `MAP_CAPSULE_BOX_CONFIG` & Spike S3 (`FR-MAP-09`). */
 const CAPSULE_CORNER_RADIUS_PX = 14
 const FOCUS_HALO_STROKE_EXPAND_PX = 4
 const FOCUS_HALO_STROKE_WIDTH_PX = 5
 const FOCUS_HALO_OPACITY = 0.28
 const STATUS_DOT_RADIUS_PX = 3.5
 const STATUS_GLYPH_SIZE_PX = 10
-const CAPSULE_INNER_PAD_X_PX = 12
+const CAPSULE_LEFT_PAD_PX = 8
 const STATUS_INDICATOR_OFFSET_X_PX = 18
-const CIRCLE_INNER_LABEL_PAD_X_PX = 16
 
 export interface MapNodePillProps {
   readonly layoutNode: MapLayoutNode
@@ -96,7 +93,6 @@ export function MapNodePill({
   visibleNode,
   colors,
   theme,
-  measureText,
   onSelect,
   onOpen,
 }: MapNodePillProps) {
@@ -109,33 +105,7 @@ export function MapNodePill({
   const hasStatus = statusColor !== null
   const badgeSuffix =
     !isOverflow && !isRoot && visibleNode.hiddenCount > 0 ? ` · ${visibleNode.hiddenCount}` : ''
-  const fontCss = formatLayoutFont(layoutNode.modelFontPx, DEFAULT_RADIAL_LAYOUT_CONFIG.fonts)
-
-  const fitLabelText = (rawTitle: string, suffix: string, maxWidthPx: number): string => {
-    if (!measureText || maxWidthPx <= 0) return `${rawTitle}${suffix}`
-    const suffixW = suffix.length > 0 ? measureText(suffix, fontCss) : 0
-    const titleBudget = Math.max(8, maxWidthPx - suffixW)
-    const truncated = truncateLabelEnd(rawTitle, titleBudget, fontCss, measureText)
-    return `${truncated.displayTitle}${suffix}`
-  }
-
-  const labelText = isOverflow
-    ? visibleNode.title
-    : isCircle
-      ? layoutNode.labelBox
-        ? `${layoutNode.displayTitle}${badgeSuffix}`
-        : fitLabelText(
-            layoutNode.displayTitle,
-            badgeSuffix,
-            layoutNode.width - CIRCLE_INNER_LABEL_PAD_X_PX,
-          )
-      : fitLabelText(
-          layoutNode.displayTitle,
-          badgeSuffix,
-          layoutNode.width -
-            CAPSULE_INNER_PAD_X_PX * 2 -
-            (hasStatus ? STATUS_INDICATOR_OFFSET_X_PX : 0),
-        )
+  const titleText = isOverflow ? visibleNode.title : layoutNode.displayTitle
 
   const handleClick = () => {
     onSelect?.(layoutNode.id)
@@ -146,7 +116,9 @@ export function MapNodePill({
   }
 
   const strokeWidth = visibleNode.isFocus ? 2.2 : visibleNode.isOnFocusPath ? 1.6 : 1.15
-  const fontWeight = visibleNode.isFocus || isRoot ? 600 : 500
+  const fontWeight = DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.weight
+  const badgeFontPx = DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.badgePx
+  const fontFamily = DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family
 
   if (isCircle) {
     const r = layoutNode.radius ?? layoutNode.width / 2
@@ -157,6 +129,7 @@ export function MapNodePill({
         data-node-id={layoutNode.id}
         data-node-kind={layoutNode.kind}
         data-node-shape="circle"
+        data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
         transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
@@ -200,14 +173,19 @@ export function MapNodePill({
             fill={colors.textHex}
             fontSize={layoutNode.modelFontPx}
             fontWeight={fontWeight}
-            fontFamily="Inter, system-ui, sans-serif"
+            fontFamily={fontFamily}
             paintOrder={lb ? 'stroke' : undefined}
             stroke={lb ? palette.bg : undefined}
             strokeWidth={lb ? 4 : undefined}
             strokeLinejoin={lb ? 'round' : undefined}
             data-testid="map-node-label"
           >
-            {labelText}
+            {titleText}
+            {badgeSuffix ? (
+              <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
+                {badgeSuffix}
+              </tspan>
+            ) : null}
           </text>
         ) : null}
       </g>
@@ -216,7 +194,7 @@ export function MapNodePill({
 
   const halfW = layoutNode.width / 2
   const halfH = layoutNode.height / 2
-  const textX = hasStatus ? -halfW + CAPSULE_INNER_PAD_X_PX + STATUS_INDICATOR_OFFSET_X_PX : 0
+  const textX = hasStatus ? -halfW + CAPSULE_LEFT_PAD_PX + STATUS_INDICATOR_OFFSET_X_PX : 0
 
   return (
     <g
@@ -224,6 +202,7 @@ export function MapNodePill({
       data-node-id={layoutNode.id}
       data-node-kind={layoutNode.kind}
       data-node-shape="capsule"
+      data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
       transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
@@ -259,7 +238,7 @@ export function MapNodePill({
         <StatusGlyph
           status={status as Exclude<NodeStatus, 'none'>}
           color={statusColor}
-          cx={-halfW + CAPSULE_INNER_PAD_X_PX + 7}
+          cx={-halfW + CAPSULE_LEFT_PAD_PX + 8.5}
           cy={0}
         />
       ) : null}
@@ -272,10 +251,15 @@ export function MapNodePill({
           fill={isOverflow ? palette.fgMuted : colors.textHex}
           fontSize={layoutNode.modelFontPx}
           fontWeight={fontWeight}
-          fontFamily="Inter, system-ui, sans-serif"
+          fontFamily={fontFamily}
           data-testid="map-node-label"
         >
-          {labelText}
+          {titleText}
+          {badgeSuffix ? (
+            <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
+              {badgeSuffix}
+            </tspan>
+          ) : null}
         </text>
       ) : null}
     </g>

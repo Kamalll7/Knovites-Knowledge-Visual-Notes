@@ -1,4 +1,19 @@
-import type { TextMeasurerFn } from '@/domain/layout'
+import { DEFAULT_RADIAL_LAYOUT_CONFIG, type TextMeasurerFn } from '@/domain/layout'
+
+/**
+ * Shared capsule box-sizing contract passed by map renderers into `computeRadialLayout`
+ * and `computeHorizontalLayout` (`T3.4c`, `FR-MAP-09`).
+ * - `capsulePaddingXPx = 36`: left pad (8) + status dot/icon + gap (18) + right pad (10).
+ * - `capsuleMetaWidthPx = 36`: reserves width for ` · N` badge at `fonts.badgePx` (11 px).
+ * - `capsuleMaxWidthPx` (268 px) and `fonts` stay locked to `DEFAULT_RADIAL_LAYOUT_CONFIG`.
+ */
+export const MAP_CAPSULE_BOX_CONFIG = Object.freeze({
+  capsuleMinWidthPx: DEFAULT_RADIAL_LAYOUT_CONFIG.capsuleMinWidthPx,
+  capsuleMaxWidthPx: DEFAULT_RADIAL_LAYOUT_CONFIG.capsuleMaxWidthPx,
+  capsulePaddingXPx: 36,
+  capsuleMetaWidthPx: 36,
+  fonts: DEFAULT_RADIAL_LAYOUT_CONFIG.fonts,
+} as const)
 
 /**
  * Fallback average proportional Latin glyph advance ratio relative to font size (px)

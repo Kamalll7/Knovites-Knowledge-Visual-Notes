@@ -4,15 +4,19 @@ import { describe, expect, it, vi } from 'vitest'
 
 import DevMapRoute from '@/app/DevMapRoute'
 import { ThemeProvider } from '@/app/ThemeProvider'
+import { createDemoDataset, createMandatoryDatasets } from '@/domain/datasets'
 import {
+  DEFAULT_RADIAL_LAYOUT_CONFIG,
   MAP_ROOT_ID,
   computeHorizontalLayout,
   computeRadialLayout,
   computeVisible,
+  formatLayoutFont,
   type ComputeVisibleResult,
 } from '@/domain/layout'
 import { buildTree, type TreeBuildEntry } from '@/domain/tree'
 import { computeMapBoundingBox } from '@/features/map/map-bounds'
+import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 import { MapSvgView } from '@/features/map/MapSvgView'
 
 const measure75 = (text: string) => text.length * 7.5
@@ -292,5 +296,116 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
       '[data-node-id="branch_a"] [data-testid="map-node-label"]',
     )
     expect(branchLabel?.textContent).toContain('· 3')
+  })
+
+  it('never falsely truncates capsules below max width and keeps rendered font/chrome within capsule bounds across 6 datasets × 3 tiers × 2 modes [T3.4c-a]', () => {
+    const demo = createDemoDataset()
+    const mandatory = createMandatoryDatasets()
+    const datasets = [
+      { id: 'demo', title: demo.manifest.title, entries: demo.entries },
+      ...Object.entries(mandatory).map(([id, ds]) => ({
+        id,
+        title: ds.manifest.title,
+        entries: ds.entries,
+      })),
+    ]
+    const measurer = createCanvasTextMeasurer({ context: null })
+    const badgeFont = formatLayoutFont(
+      MAP_CAPSULE_BOX_CONFIG.fonts.badgePx,
+      MAP_CAPSULE_BOX_CONFIG.fonts,
+    )
+
+    let checkedCapsules = 0
+    for (const ds of datasets) {
+      const { state: tree } = buildTree([...ds.entries])
+      for (const tier of [0, 1, 2] as const) {
+        const scale = tier === 0 ? 0.85 : 1
+        const visible = computeVisible({
+          tree,
+          rootTitle: ds.title,
+          focusId: MAP_ROOT_ID,
+          zoomTier: tier,
+        })
+        for (const orientation of ['radial', 'horizontal'] as const) {
+          const layout =
+            orientation === 'radial'
+              ? computeRadialLayout({
+                  visible,
+                  measureText: measurer.measure,
+                  scale,
+                  tier,
+                  config: MAP_CAPSULE_BOX_CONFIG,
+                })
+              : computeHorizontalLayout({
+                  visible,
+                  measureText: measurer.measure,
+                  scale,
+                  tier,
+                  config: MAP_CAPSULE_BOX_CONFIG,
+                })
+
+          const { container, unmount } = render(
+            <MemoryRouter>
+              <MapSvgView
+                layout={layout}
+                visible={visible}
+                orientation={orientation}
+                theme="light"
+                measureText={measurer.measure}
+              />
+            </MemoryRouter>,
+          )
+
+          for (const id of layout.orderedIds) {
+            const ln = layout.nodes[id]!
+            const vn = visible.nodes[id]!
+            if (ln.shape !== 'capsule' || ln.kind === 'overflow') continue
+            checkedCapsules += 1
+
+            const nodeEl = container.querySelector(`[data-node-id="${id}"]`)!
+            const labelEl = nodeEl.querySelector('[data-testid="map-node-label"]')!
+            const renderedFontPx = Number(labelEl.getAttribute('font-size'))
+            const renderedFontWeight = Number(labelEl.getAttribute('font-weight'))
+            expect(renderedFontPx).toBe(ln.modelFontPx)
+            expect(renderedFontWeight).toBe(DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.weight)
+
+            const renderFontCss = `${renderedFontWeight} ${renderedFontPx}px ${MAP_CAPSULE_BOX_CONFIG.fonts.family}`
+            const badgeReserve = vn.hiddenCount > 0 ? MAP_CAPSULE_BOX_CONFIG.capsuleMetaWidthPx : 0
+            const untruncatedW = Math.ceil(
+              measurer.measure(vn.title.trim(), renderFontCss) +
+                MAP_CAPSULE_BOX_CONFIG.capsulePaddingXPx +
+                badgeReserve,
+            )
+
+            const badgeSuffix = vn.hiddenCount > 0 ? ` · ${vn.hiddenCount}` : ''
+            const expectedText = `${ln.displayTitle}${badgeSuffix}`
+            expect(labelEl.textContent).toBe(expectedText)
+
+            if (ln.isTruncated) {
+              // Truncation is legal ONLY when the untruncated capsule exceeds the 268 px cap
+              expect(
+                untruncatedW,
+                `${ds.id}/${orientation}/t${tier}/${id} truncated despite fitting (${untruncatedW} <= ${MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx})`,
+              ).toBeGreaterThan(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx)
+            } else {
+              // Untruncated layout node MUST render full title without any secondary ellipsis
+              expect(ln.displayTitle).toBe(vn.title.trim())
+              expect(untruncatedW).toBeLessThanOrEqual(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx)
+            }
+
+            // Rendered text + badge + chrome (status & padding) must fit strictly inside capsule width
+            const titleW = measurer.measure(ln.displayTitle, renderFontCss)
+            const badgeW = badgeSuffix ? measurer.measure(badgeSuffix, badgeFont) : 0
+            const horizontalChrome = vn.status !== 'none' ? 36 : 20
+            expect(
+              titleW + badgeW + horizontalChrome,
+              `${ds.id}/${orientation}/t${tier}/${id} text+chrome exceeds width ${ln.width}`,
+            ).toBeLessThanOrEqual(ln.width + 0.5)
+          }
+          unmount()
+        }
+      }
+    }
+    expect(checkedCapsules).toBeGreaterThan(100)
   })
 })
