@@ -120,15 +120,35 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
     expect(container.querySelectorAll('[data-fade-base="true"]').length).toBeGreaterThanOrEqual(24)
 
     // Status indicators include BOTH dot and distinct icon glyph per status (learning, practiced, mastered)
+    // and every status dot bbox sits strictly inside [left + 4, right - 4] of its capsule [T3.5-fix]
     const iconPaths = new Set<string>()
     for (const status of ['learning', 'practiced', 'mastered'] as const) {
       const badge = screen.getByTestId(`node-status-${status}`)
-      expect(badge.querySelector('[data-testid="status-dot"]')).not.toBeNull()
+      const dot = badge.querySelector('[data-testid="status-dot"]')
+      expect(dot).not.toBeNull()
       const iconEl = badge.querySelector('[data-testid="status-icon"]')
       expect(iconEl).not.toBeNull()
       const d = iconEl?.getAttribute('d') ?? ''
       expect(d.length).toBeGreaterThan(0)
       iconPaths.add(d)
+
+      const nodeGroup = badge.closest('[data-testid="map-node"]')!
+      const shapeRect = nodeGroup.querySelector('[data-testid="map-node-shape"]')!
+      const rectX = Number.parseFloat(shapeRect.getAttribute('x') ?? '0')
+      const rectW = Number.parseFloat(shapeRect.getAttribute('width') ?? '0')
+      const tfMatch = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(
+        badge.getAttribute('transform') ?? '',
+      )
+      expect(tfMatch).not.toBeNull()
+      const gx = Number.parseFloat(tfMatch![1]!)
+      const dotCx = Number.parseFloat(dot!.getAttribute('cx') ?? '0')
+      const dotR = Number.parseFloat(dot!.getAttribute('r') ?? '0')
+      const dotMinX = gx + dotCx - dotR
+      const dotMaxX = gx + dotCx + dotR
+      expect(dotMinX, `${status} dotMinX must be >= left + 4`).toBeGreaterThanOrEqual(rectX + 4)
+      expect(dotMaxX, `${status} dotMaxX must be <= right - 4`).toBeLessThanOrEqual(
+        rectX + rectW - 4,
+      )
     }
     expect(iconPaths.size).toBe(3)
 

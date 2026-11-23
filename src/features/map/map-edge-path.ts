@@ -18,13 +18,16 @@ export const WIDE_FAN_FADE_THRESHOLD = HORIZONTAL_WIDE_FAN_FADE_THRESHOLD
 /** Horizontal cubic Bezier control-point tension (`0.5` matches `d3.linkHorizontal`). */
 export const HORIZONTAL_BEZIER_TENSION = 0.5
 
-/** Edge opacity tokens aligned with Spike S3 (`RadialMapSpike.tsx` & `FR-MAP-09`). */
+/** Edge opacity tokens (`FR-MAP-09`, `T3.5-fix`: normal raised to 0.48 for legibility). */
 export const EDGE_OPACITY = Object.freeze({
   focus: 0.96,
-  normal: 0.34,
+  normal: 0.48,
   halo: 0.22,
   wideFanBaseStart: 0.08,
 } as const)
+
+/** Breathing clearance (px) kept around root's external labelBox when clipping radial 6-o'clock edges. */
+const ROOT_LABEL_CLEARANCE_PX = 4
 
 /** Gradient stop offset where wide-fan base fade reaches full edge opacity (`FR-MAP-09`). */
 export const WIDE_FAN_FADE_STOP_OFFSET = 0.28
@@ -136,6 +139,59 @@ function clipLiveNodeBoundary(
 }
 
 /**
+ * Advances a radial root edge start point past the root's external `labelBox` (expanded by
+ * `padPx`) whenever the outgoing ray toward `(tx, ty)` would pierce the root label text
+ * (e.g. 6-o'clock focus edge in radial mode, `T3.5-fix`).
+ */
+export function clipRadialSourcePastLabelBox(
+  srcNode: MapLayoutNode | undefined,
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  padPx: number = ROOT_LABEL_CLEARANCE_PX,
+): { readonly x: number; readonly y: number } {
+  if (!srcNode || srcNode.kind !== 'root' || !srcNode.labelBox) {
+    return { x: sx, y: sy }
+  }
+  const lb = srcNode.labelBox
+  const minX = lb.x - padPx
+  const maxX = lb.x + lb.width + padPx
+  const minY = lb.y - padPx
+  const maxY = lb.y + lb.height + padPx
+  const dx = tx - sx
+  const dy = ty - sy
+
+  let tEnter = 0
+  let tExit = 1
+  for (let axis = 0; axis < 2; axis += 1) {
+    const d = axis === 0 ? dx : dy
+    const p0 = axis === 0 ? sx : sy
+    const lo = axis === 0 ? minX : minY
+    const hi = axis === 0 ? maxX : maxY
+    if (Math.abs(d) < 1e-9) {
+      if (p0 < lo || p0 > hi) return { x: sx, y: sy }
+    } else {
+      let r0 = (lo - p0) / d
+      let r1 = (hi - p0) / d
+      if (r0 > r1) {
+        const tmp = r0
+        r0 = r1
+        r1 = tmp
+      }
+      tEnter = Math.max(tEnter, r0)
+      tExit = Math.min(tExit, r1)
+      if (tEnter > tExit) return { x: sx, y: sy }
+    }
+  }
+
+  if (tExit > 0 && tExit < 0.85) {
+    return { x: sx + dx * tExit, y: sy + dy * tExit }
+  }
+  return { x: sx, y: sy }
+}
+
+/**
  * Computes a live interpolated SVG edge path (`d` + control points) following moving node
  * endpoints during RAF focus/orientation transitions (`T3.5-fix`, `T3.6`, `FR-MAP-05`).
  */
@@ -161,8 +217,25 @@ export function computeLiveEdgePath(
     const dy = dstPos.y - srcPos.y
     const sPt = clipLiveNodeBoundary(srcPos, srcNode, dx, dy)
     const tPt = clipLiveNodeBoundary(dstPos, dstNode, -dx, -dy)
-    sx = sPt.x
-    sy = sPt.y
+    const clippedSrc = clipRadialSourcePastLabelBox(
+      srcNode.labelBox
+        ? {
+            ...srcNode,
+            labelBox: {
+              x: srcPos.x + (srcNode.labelBox.x - srcNode.x),
+              y: srcPos.y + (srcNode.labelBox.y - srcNode.y),
+              width: srcNode.labelBox.width,
+              height: srcNode.labelBox.height,
+            },
+          }
+        : srcNode,
+      sPt.x,
+      sPt.y,
+      tPt.x,
+      tPt.y,
+    )
+    sx = clippedSrc.x
+    sy = clippedSrc.y
     tx = tPt.x
     ty = tPt.y
   }
@@ -224,6 +297,71 @@ export function sampleCubicBezierPoints(
   return points
 }
 
+/** Samples points along an actual SVG `M ... [L ...] C ... [L ...]` path `d` string. */
+export function sampleEdgePathPoints(
+  d: string,
+  stepsPerSegment = 12,
+): ReadonlyArray<{ readonly x: number; readonly y: number }> {
+  const safeSteps = Math.max(2, Math.floor(stepsPerSegment))
+  const tokenRe = /([MLC])|(-?\d+(?:\.\d+)?)/g
+  const tokens: string[] = []
+  for (const m of d.matchAll(tokenRe)) {
+    tokens.push(m[0])
+  }
+
+  const points: Array<{ readonly x: number; readonly y: number }> = []
+  let i = 0
+  let curX = 0
+  let curY = 0
+  let cmd = ''
+
+  while (i < tokens.length) {
+    const tok = tokens[i]!
+    if (tok === 'M' || tok === 'L' || tok === 'C') {
+      cmd = tok
+      i += 1
+      continue
+    }
+    if (cmd === 'M') {
+      curX = Number.parseFloat(tokens[i]!)
+      curY = Number.parseFloat(tokens[i + 1]!)
+      points.push({ x: curX, y: curY })
+      i += 2
+      cmd = 'L'
+    } else if (cmd === 'L') {
+      const nx = Number.parseFloat(tokens[i]!)
+      const ny = Number.parseFloat(tokens[i + 1]!)
+      for (let s = 1; s <= safeSteps; s += 1) {
+        const t = s / safeSteps
+        points.push({ x: curX + (nx - curX) * t, y: curY + (ny - curY) * t })
+      }
+      curX = nx
+      curY = ny
+      i += 2
+    } else if (cmd === 'C') {
+      const cx1 = Number.parseFloat(tokens[i]!)
+      const cy1 = Number.parseFloat(tokens[i + 1]!)
+      const cx2 = Number.parseFloat(tokens[i + 2]!)
+      const cy2 = Number.parseFloat(tokens[i + 3]!)
+      const tx = Number.parseFloat(tokens[i + 4]!)
+      const ty = Number.parseFloat(tokens[i + 5]!)
+      const bez = sampleCubicBezierPoints(
+        { sx: curX, sy: curY, cx1, cy1, cx2, cy2, tx, ty },
+        safeSteps,
+      )
+      for (let s = 1; s < bez.length; s += 1) {
+        points.push(bez[s]!)
+      }
+      curX = tx
+      curY = ty
+      i += 6
+    } else {
+      i += 1
+    }
+  }
+  return points
+}
+
 /**
  * Builds renderable SVG edge descriptors for any `MapLayoutResult` (radial or horizontal).
  * Uses `fadeSourceBase`/`sourceFanCount` directly when provided by horizontal layout, and
@@ -253,7 +391,23 @@ export function buildRenderedMapEdges(
   }
 
   return layout.edges.map((edge, idx) => {
-    const cp = computeEdgeControlPoints(edge, orientation)
+    const srcNode = layout.nodes[edge.sourceId]
+    const effectiveEdge =
+      orientation === 'radial'
+        ? (() => {
+            const clipped = clipRadialSourcePastLabelBox(
+              srcNode,
+              edge.sourceX,
+              edge.sourceY,
+              edge.targetX,
+              edge.targetY,
+            )
+            return clipped.x === edge.sourceX && clipped.y === edge.sourceY
+              ? edge
+              : { ...edge, sourceX: clipped.x, sourceY: clipped.y }
+          })()
+        : edge
+    const cp = computeEdgeControlPoints(effectiveEdge, orientation)
     const srcVisible = visible.nodes[edge.sourceId]
     const dstVisible = visible.nodes[edge.targetId]
     const isOnFocusPath = Boolean(srcVisible?.isOnFocusPath && dstVisible?.isOnFocusPath)

@@ -34,8 +34,11 @@ async function auditInteractiveMap(page: Page) {
 
     let hudOverlaps = 0
     let labelOverflows = 0
+    let statusDotPaddingViolations = 0
+    let rootLabelEdgeCrossings = 0
     let minScreenFontPx = Infinity
     let visibleLabelCount = 0
+    let rootLabelBoxWorld: { minX: number; minY: number; maxX: number; maxY: number } | null = null
 
     const nodeBoxesWorld: Array<{
       id: string
@@ -92,6 +95,31 @@ async function auditInteractiveMap(page: Page) {
           if (lb.x < sb.x + 1 || lb.x + lb.width > sb.x + sb.width - 1) {
             labelOverflows += 1
           }
+        } else if (g.dataset.nodeKind === 'root') {
+          const lb = label.getBBox()
+          rootLabelBoxWorld = {
+            minX: nx + lb.x,
+            minY: ny + lb.y,
+            maxX: nx + lb.x + lb.width,
+            maxY: ny + lb.y + lb.height,
+          }
+        }
+      }
+
+      if (g.dataset.nodeShape === 'capsule') {
+        const dot = g.querySelector<SVGCircleElement>('[data-testid="status-dot"]')
+        const badgeGroup = dot?.parentElement
+        if (dot && badgeGroup) {
+          const btf = badgeGroup.getAttribute('transform') ?? ''
+          const bm = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(btf)
+          const gx = bm ? Number.parseFloat(bm[1]!) : 0
+          const dotCx = Number.parseFloat(dot.getAttribute('cx') ?? '0')
+          const dotR = Number.parseFloat(dot.getAttribute('r') ?? '0')
+          const dotMinX = gx + dotCx - dotR
+          const dotMaxX = gx + dotCx + dotR
+          if (dotMinX < sb.x + 4 || dotMaxX > sb.x + sb.width - 4) {
+            statusDotPaddingViolations += 1
+          }
         }
       }
     }
@@ -105,9 +133,19 @@ async function auditInteractiveMap(page: Page) {
       if (!path) continue
       const totalLen = path.getTotalLength()
       if (totalLen <= 0) continue
-      const samples = 10
-      for (let s = 1; s < samples; s += 1) {
+      const samples = 20
+      for (let s = 0; s <= samples; s += 1) {
         const pt = path.getPointAtLength((totalLen * s) / samples)
+        if (
+          rootLabelBoxWorld &&
+          pt.x >= rootLabelBoxWorld.minX &&
+          pt.x <= rootLabelBoxWorld.maxX &&
+          pt.y >= rootLabelBoxWorld.minY &&
+          pt.y <= rootLabelBoxWorld.maxY
+        ) {
+          rootLabelEdgeCrossings += 1
+        }
+        if (s === 0 || s === samples) continue
         for (const box of nodeBoxesWorld) {
           if (box.id === srcId || box.id === dstId) continue
           if (pt.x >= box.minX && pt.x <= box.maxX && pt.y >= box.minY && pt.y <= box.maxY) {
@@ -122,6 +160,8 @@ async function auditInteractiveMap(page: Page) {
       filterCount,
       hudOverlaps,
       labelOverflows,
+      statusDotPaddingViolations,
+      rootLabelEdgeCrossings,
       sampledEdgeNodeCrossings,
       nodeCount: nodeEls.length,
       scale: Number(scale.toFixed(3)),
@@ -157,6 +197,8 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(initialAudit.hudOverlaps).toBe(0)
     expect(initialAudit.sampledEdgeNodeCrossings).toBe(0)
     expect(initialAudit.labelOverflows).toBe(0)
+    expect(initialAudit.statusDotPaddingViolations).toBe(0)
+    expect(initialAudit.rootLabelEdgeCrossings).toBe(0)
     expect(initialAudit.passesMinFont).toBe(true)
 
     await page.getByTestId('map-zoom-in').click()
@@ -195,6 +237,8 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(afterFocusAudit.hudOverlaps).toBe(0)
     expect(afterFocusAudit.sampledEdgeNodeCrossings).toBe(0)
     expect(afterFocusAudit.labelOverflows).toBe(0)
+    expect(afterFocusAudit.statusDotPaddingViolations).toBe(0)
+    expect(afterFocusAudit.rootLabelEdgeCrossings).toBe(0)
     expect(afterFocusAudit.passesMinFont).toBe(true)
 
     await page.screenshot({
@@ -220,6 +264,7 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(afterReloadAudit.hudOverlaps).toBe(0)
     expect(afterReloadAudit.sampledEdgeNodeCrossings).toBe(0)
     expect(afterReloadAudit.labelOverflows).toBe(0)
+    expect(afterReloadAudit.statusDotPaddingViolations).toBe(0)
 
     await page.screenshot({
       path: `${SCREENS_DIR}/t3.5-demo-horizontal-reload-dark.png`,

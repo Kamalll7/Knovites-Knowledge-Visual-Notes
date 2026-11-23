@@ -29,6 +29,10 @@ export const CAPSULE_TINT_ALPHA = Object.freeze({
 export const DEPTH_LIGHTEN_STEP = 0.09
 export const DEPTH_LIGHTEN_MAX = 0.36
 
+/** Gentler light-theme depth lighten factor so all 8 branches x d=1..4 keep >= 3.0:1 edge contrast. */
+export const LIGHT_DEPTH_LIGHTEN_STEP = 0.06
+export const LIGHT_DEPTH_LIGHTEN_MAX = 0.2
+
 export interface MapThemePalette {
   readonly bg: string
   readonly surface: string
@@ -189,7 +193,9 @@ function hashBranchIndex(id: string, paletteLength: number): number {
 export function accentForDepth(baseAccentHex: string, depth: number, theme: MapThemeMode): string {
   const steps = Math.max(0, depth - 1)
   if (steps === 0) return baseAccentHex
-  const factor = Math.min(DEPTH_LIGHTEN_MAX, steps * DEPTH_LIGHTEN_STEP)
+  const step = theme === 'light' ? LIGHT_DEPTH_LIGHTEN_STEP : DEPTH_LIGHTEN_STEP
+  const maxFactor = theme === 'light' ? LIGHT_DEPTH_LIGHTEN_MAX : DEPTH_LIGHTEN_MAX
+  const factor = Math.min(maxFactor, steps * step)
   const lightenTarget =
     theme === 'dark' ? MAP_THEME_PALETTES.dark.fg : MAP_THEME_PALETTES.light.surface
   return mixHex(lightenTarget, baseAccentHex, factor)

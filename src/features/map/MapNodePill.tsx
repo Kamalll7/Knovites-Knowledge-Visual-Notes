@@ -20,6 +20,8 @@ const STATUS_DOT_RADIUS_PX = 3.5
 const STATUS_GLYPH_SIZE_PX = 10
 const CAPSULE_LEFT_PAD_PX = 8
 const STATUS_INDICATOR_OFFSET_X_PX = 18
+const CAPSULE_STATUS_GLYPH_OFFSET_X_PX = 10.5
+const STATUS_DOT_LOCAL_CX_PX = -4
 
 export interface MapNodePillProps {
   readonly layoutNode: MapLayoutNode
@@ -56,7 +58,13 @@ function StatusGlyph({
       aria-label={status}
       transform={`translate(${x0}, ${y0})`}
     >
-      <circle cx={-5} cy={half} r={STATUS_DOT_RADIUS_PX} fill={color} data-testid="status-dot" />
+      <circle
+        cx={STATUS_DOT_LOCAL_CX_PX}
+        cy={half}
+        r={STATUS_DOT_RADIUS_PX}
+        fill={color}
+        data-testid="status-dot"
+      />
       {status === 'mastered' ? (
         <path
           d="M 1.5 5.3 L 4.1 7.8 L 8.6 2.4"
@@ -173,33 +181,47 @@ export function MapNodePill({
             <StatusGlyph
               status={status as Exclude<NodeStatus, 'none'>}
               color={statusColor}
-              cx={3}
+              cx={4}
               cy={0}
             />
           ) : null}
           {layoutNode.labelVisible ? (
-            <text
-              x={lb ? lb.x - layoutNode.x + lb.width / 2 : 0}
-              y={lb ? lb.y - layoutNode.y + lb.height * 0.72 : 0}
-              textAnchor="middle"
-              dominantBaseline={lb ? 'auto' : 'central'}
-              fill={colors.textHex}
-              fontSize={layoutNode.modelFontPx}
-              fontWeight={fontWeight}
-              fontFamily={fontFamily}
-              paintOrder={lb ? 'stroke' : undefined}
-              stroke={lb ? palette.bg : undefined}
-              strokeWidth={lb ? 4 : undefined}
-              strokeLinejoin={lb ? 'round' : undefined}
-              data-testid="map-node-label"
-            >
-              {titleText}
-              {badgeSuffix ? (
-                <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
-                  {badgeSuffix}
-                </tspan>
+            <>
+              {lb ? (
+                <rect
+                  x={lb.x - layoutNode.x - 4}
+                  y={lb.y - layoutNode.y - 1}
+                  width={lb.width + 8}
+                  height={lb.height + 2}
+                  rx={6}
+                  fill={palette.bg}
+                  opacity={0.94}
+                  data-testid="map-node-label-bg"
+                />
               ) : null}
-            </text>
+              <text
+                x={lb ? lb.x - layoutNode.x + lb.width / 2 : 0}
+                y={lb ? lb.y - layoutNode.y + lb.height * 0.72 : 0}
+                textAnchor="middle"
+                dominantBaseline={lb ? 'auto' : 'central'}
+                fill={colors.textHex}
+                fontSize={layoutNode.modelFontPx}
+                fontWeight={fontWeight}
+                fontFamily={fontFamily}
+                paintOrder={lb ? 'stroke' : undefined}
+                stroke={lb ? palette.bg : undefined}
+                strokeWidth={lb ? 4 : undefined}
+                strokeLinejoin={lb ? 'round' : undefined}
+                data-testid="map-node-label"
+              >
+                {titleText}
+                {badgeSuffix ? (
+                  <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
+                    {badgeSuffix}
+                  </tspan>
+                ) : null}
+              </text>
+            </>
           ) : null}
         </g>
       </g>
@@ -257,7 +279,7 @@ export function MapNodePill({
           <StatusGlyph
             status={status as Exclude<NodeStatus, 'none'>}
             color={statusColor}
-            cx={-halfW + CAPSULE_LEFT_PAD_PX + 8.5}
+            cx={-halfW + CAPSULE_LEFT_PAD_PX + CAPSULE_STATUS_GLYPH_OFFSET_X_PX}
             cy={0}
           />
         ) : null}

@@ -13,7 +13,7 @@ import {
   EDGE_OPACITY,
   WIDE_FAN_FADE_THRESHOLD,
   buildRenderedMapEdges,
-  sampleCubicBezierPoints,
+  sampleEdgePathPoints,
 } from '@/features/map/map-edge-path'
 
 const measure75 = (text: string) => text.length * 7.5
@@ -122,7 +122,9 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
       renHor12.every((e) => e.sourceFanCount === 12 && e.fadeSourceBase && e.gradientId !== null),
     ).toBe(true)
 
-    // Focus path edge is highlighted with higher strokeWidth & opacity
+    // Focus path edge is highlighted with higher strokeWidth & opacity (normal raised to 0.48)
+    expect(EDGE_OPACITY.normal).toBe(0.48)
+    expect(EDGE_OPACITY.focus).toBe(0.96)
     const focusEdge = renRad12.find((e) => e.targetId === 'c_0')!
     const otherEdge = renRad12.find((e) => e.targetId === 'c_1')!
     expect(focusEdge.isOnFocusPath).toBe(true)
@@ -193,10 +195,14 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
           for (let i = 0; i < rendered.length; i += 1) {
             const rEdge = rendered[i]!
             const rawEdge = layout.edges[i]!
+            const startX = rEdge.controlPoints.sx
+            const startY = rEdge.controlPoints.sy
+            if (orientation === 'horizontal' || rawEdge.sourceId !== MAP_ROOT_ID) {
+              expect(startX).toBeCloseTo(rawEdge.sourceX, 6)
+              expect(startY).toBeCloseTo(rawEdge.sourceY, 6)
+            }
             expect(
-              rEdge.d.startsWith(
-                `M ${Number(rawEdge.sourceX.toFixed(2))} ${Number(rawEdge.sourceY.toFixed(2))} `,
-              ),
+              rEdge.d.startsWith(`M ${Number(startX.toFixed(2))} ${Number(startY.toFixed(2))} `),
             ).toBe(true)
             expect(
               rEdge.d.endsWith(
@@ -205,6 +211,14 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
             ).toBe(true)
             expect(rEdge.d.includes(' C ')).toBe(true)
             expect(rEdge.d.includes('NaN')).toBe(false)
+
+            // Sample points along the ACTUAL rendered SVG path `d` (including horizontal gutter stubs!)
+            const pts = sampleEdgePathPoints(rEdge.d, 10)
+            expect(pts[0]!.x).toBeCloseTo(startX, 1)
+            expect(pts[0]!.y).toBeCloseTo(startY, 1)
+            expect(pts[pts.length - 1]!.x).toBeCloseTo(rawEdge.targetX, 1)
+            expect(pts[pts.length - 1]!.y).toBeCloseTo(rawEdge.targetY, 1)
+
             if (orientation === 'horizontal') {
               const cMatch = / C ([-\d.]+) [-\d.]+, ([-\d.]+) [-\d.]+, ([-\d.]+) [-\d.]+/.exec(
                 rEdge.d,
@@ -217,12 +231,40 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
               expect(cx1).toBeLessThanOrEqual(gRight + 0.5)
               expect(cx2).toBeGreaterThanOrEqual(rawEdge.sourceX - 0.5)
               expect(cx2).toBeLessThanOrEqual(gRight + 0.5)
+
+              // Actual gutter path `d` must NEVER cross any unrelated sibling capsule in horizontal mode
+              for (let p = 1; p < pts.length - 1; p += 1) {
+                const pt = pts[p]!
+                for (const nid of layout.orderedIds) {
+                  if (nid === rEdge.sourceId || nid === rEdge.targetId) continue
+                  const node = layout.nodes[nid]!
+                  const inside =
+                    pt.x > node.x - node.width / 2 + 0.5 &&
+                    pt.x < node.x + node.width / 2 - 0.5 &&
+                    pt.y > node.y - node.height / 2 + 0.5 &&
+                    pt.y < node.y + node.height / 2 - 0.5
+                  expect(
+                    inside,
+                    `horizontal gutter path ${rEdge.id} crossed node ${nid} at (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)})`,
+                  ).toBe(false)
+                }
+              }
+            } else if (rawEdge.sourceId === MAP_ROOT_ID) {
+              const rootLb = layout.nodes[MAP_ROOT_ID]?.labelBox
+              if (rootLb) {
+                for (const pt of pts) {
+                  const insideLabel =
+                    pt.x > rootLb.x + 0.5 &&
+                    pt.x < rootLb.x + rootLb.width - 0.5 &&
+                    pt.y > rootLb.y + 0.5 &&
+                    pt.y < rootLb.y + rootLb.height - 0.5
+                  expect(
+                    insideLabel,
+                    `radial root edge ${rEdge.id} pierced root labelBox at (${pt.x.toFixed(1)}, ${pt.y.toFixed(1)})`,
+                  ).toBe(false)
+                }
+              }
             }
-            const pts = sampleCubicBezierPoints(rEdge.controlPoints, 8)
-            expect(pts[0]!.x).toBeCloseTo(rawEdge.sourceX, 6)
-            expect(pts[0]!.y).toBeCloseTo(rawEdge.sourceY, 6)
-            expect(pts[pts.length - 1]!.x).toBeCloseTo(rawEdge.targetX, 6)
-            expect(pts[pts.length - 1]!.y).toBeCloseTo(rawEdge.targetY, 6)
           }
         },
       ),

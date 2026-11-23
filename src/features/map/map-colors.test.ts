@@ -200,7 +200,7 @@ describe('map-colors [T3.4a, FR-MAP-09]', () => {
     )
   })
 
-  it('measures non-fade edge stroke contrast ratios vs background per theme and branch (report-only for < 3:1) [T3.4c-b]', () => {
+  it('enforces >= 3.0:1 solid and focus (0.96) edge contrast across all 8 branches x d=1..4 in both themes and logs normal ratios [T3.5-fix]', () => {
     const summary: Record<
       MapThemeMode,
       {
@@ -246,8 +246,14 @@ describe('map-colors [T3.4a, FR-MAP-09]', () => {
           const normal = Number(
             contrastRatio(mixHex(hex, pal.bg, EDGE_OPACITY.normal), pal.bg).toFixed(2),
           )
-          expect(solid).toBeGreaterThan(1)
-          expect(focus).toBeGreaterThan(1)
+          expect(
+            solid,
+            `${theme} branch=${i} (${baseHex}) d=${depth} solid contrast >= 3.0:1`,
+          ).toBeGreaterThanOrEqual(3.0)
+          expect(
+            focus,
+            `${theme} branch=${i} (${baseHex}) d=${depth} focus(0.96) contrast >= 3.0:1`,
+          ).toBeGreaterThanOrEqual(3.0)
           expect(normal).toBeGreaterThan(1)
           summary[theme].minSolid = Math.min(summary[theme].minSolid, solid)
           summary[theme].minFocus = Math.min(summary[theme].minFocus, focus)
@@ -267,10 +273,10 @@ describe('map-colors [T3.4a, FR-MAP-09]', () => {
       }
     }
 
-    // Verify exact reported minimums stay deterministic (tokens intentionally untouched per T3.4c-b)
-    expect(summary.dark.minSolid).toBeGreaterThanOrEqual(7)
-    expect(summary.dark.minFocus).toBeGreaterThanOrEqual(6.5)
-    expect(summary.light.branches.every((b) => b.solidD1 >= 4.5)).toBe(true)
+    expect(summary.dark.minSolid).toBeGreaterThanOrEqual(3.0)
+    expect(summary.dark.minFocus).toBeGreaterThanOrEqual(3.0)
+    expect(summary.light.minSolid).toBeGreaterThanOrEqual(3.0)
+    expect(summary.light.minFocus).toBeGreaterThanOrEqual(3.0)
     console.info(`[T3_4C_EDGE_CONTRAST] ${JSON.stringify(summary)}`)
   })
 })
