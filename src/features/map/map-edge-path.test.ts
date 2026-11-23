@@ -205,6 +205,19 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
             ).toBe(true)
             expect(rEdge.d.includes(' C ')).toBe(true)
             expect(rEdge.d.includes('NaN')).toBe(false)
+            if (orientation === 'horizontal') {
+              const cMatch = / C ([-\d.]+) [-\d.]+, ([-\d.]+) [-\d.]+, ([-\d.]+) [-\d.]+/.exec(
+                rEdge.d,
+              )
+              expect(cMatch).not.toBeNull()
+              const cx1 = Number.parseFloat(cMatch![1]!)
+              const cx2 = Number.parseFloat(cMatch![2]!)
+              const gRight = Number.parseFloat(cMatch![3]!)
+              expect(cx1).toBeGreaterThanOrEqual(rawEdge.sourceX - 0.5)
+              expect(cx1).toBeLessThanOrEqual(gRight + 0.5)
+              expect(cx2).toBeGreaterThanOrEqual(rawEdge.sourceX - 0.5)
+              expect(cx2).toBeLessThanOrEqual(gRight + 0.5)
+            }
             const pts = sampleCubicBezierPoints(rEdge.controlPoints, 8)
             expect(pts[0]!.x).toBeCloseTo(rawEdge.sourceX, 6)
             expect(pts[0]!.y).toBeCloseTo(rawEdge.sourceY, 6)

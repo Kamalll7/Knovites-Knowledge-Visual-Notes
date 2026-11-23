@@ -299,6 +299,10 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
   })
 
   it('never falsely truncates capsules below max width and keeps rendered font/chrome within capsule bounds across 6 datasets × 3 tiers × 2 modes [T3.4c-a]', () => {
+    expect(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx).toBe(
+      DEFAULT_RADIAL_LAYOUT_CONFIG.capsuleMaxWidthPx,
+    )
+    expect(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx).toBe(268)
     const demo = createDemoDataset()
     const mandatory = createMandatoryDatasets()
     const datasets = [

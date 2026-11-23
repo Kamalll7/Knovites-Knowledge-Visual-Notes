@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_MAP_ORIENTATION,
   MAP_ORIENTATION_STORAGE_KEY,
+  isMapOrientationPreference,
   readStoredMapOrientation,
   useMapOrientationPreference,
   writeStoredMapOrientation,
@@ -15,6 +16,9 @@ describe('map orientation per-device preference [T3.3b, FR-MAP-04]', () => {
   })
 
   it('defaults to radial when unset or when storage throws', () => {
+    expect(isMapOrientationPreference('radial')).toBe(true)
+    expect(isMapOrientationPreference('horizontal')).toBe(true)
+    expect(isMapOrientationPreference('invalid')).toBe(false)
     expect(DEFAULT_MAP_ORIENTATION).toBe('radial')
     expect(readStoredMapOrientation()).toBe('radial')
 

@@ -126,6 +126,11 @@ describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
     expect(bbox.maxX * fitCam.k + fitCam.x).toBeLessThanOrEqual(1280)
     expect(bbox.minY * fitCam.k + fitCam.y).toBeGreaterThanOrEqual(hudInsets.top)
     expect(bbox.maxY * fitCam.k + fitCam.y).toBeLessThanOrEqual(720)
+
+    // Tiny viewport exercises the non-root readable minK = 0.54 floor (S3 / FR-MAP-05)
+    expect(MAP_FOCUS_NON_ROOT_MIN_K).toBe(0.54)
+    const tightCam = computeCameraForFocus(branchLay, branchVis, firstBranchId, 260, 200, 'focus')
+    expect(tightCam.k).toBeCloseTo(0.54, 4)
   })
 
   it('clamps pan and zoom strictly within [0.2, 3] and keeps map reachable', () => {
