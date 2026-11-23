@@ -287,4 +287,3 @@ export function useMapViewportController({
 
   return { zoomIn, zoomOut, fitAll, recenterFocus, getTransform }
 }
-
