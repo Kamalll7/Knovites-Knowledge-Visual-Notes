@@ -21,13 +21,14 @@ const VIEWPORT = { width: 1280, height: 800 }
 const SVG_FIXED_W = 1280
 const SVG_FIXED_H = 700
 const MIN_SCREEN_FONT_PX = 11
+const SCREENS_DIR = process.env.KNOVITES_SCREENS_DIR || 'test-results/map-screens'
 
 test.describe('Map static SVG visual baseline [T3.4b, FR-MAP-09]', () => {
   test('renders demo + 5 mandatory datasets across dark/light and tiers 0/1/2 cleanly', async ({
     page,
   }) => {
     test.setTimeout(90_000)
-    mkdirSync('laporan-part1/screens', { recursive: true })
+    mkdirSync(SCREENS_DIR, { recursive: true })
 
     const consoleErrors: string[] = []
     page.on('pageerror', (err) => consoleErrors.push(err.message))
@@ -205,7 +206,7 @@ test.describe('Map static SVG visual baseline [T3.4b, FR-MAP-09]', () => {
           }
 
           await page.screenshot({
-            path: `laporan-part1/screens/${dataset}-${theme}-t${tier}.png`,
+            path: `${SCREENS_DIR}/${dataset}-${theme}-t${tier}.png`,
             animations: 'disabled',
           })
         }
