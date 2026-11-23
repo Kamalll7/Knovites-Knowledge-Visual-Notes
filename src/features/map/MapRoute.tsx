@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { useMapOrientationPreference } from '@/app/map-preferences'
 import { useTheme } from '@/app/theme-context'
 import { useWorkspaceStore } from '@/app/workspace-context'
 import {
   MAP_ROOT_ID,
   OVERFLOW_NODE_PREFIX,
+  computeHorizontalLayout,
   computeRadialLayout,
   computeVisible,
+  type MapLayoutResult,
   type ZoomTier,
 } from '@/domain/layout'
 import { MapSvgView } from '@/features/map/MapSvgView'
@@ -23,6 +26,7 @@ export function MapRoute() {
   const tree = useWorkspaceStore((s) => s.tree)
   const createNode = useWorkspaceStore((s) => s.createNode)
   const { resolvedTheme } = useTheme()
+  const { orientation } = useMapOrientationPreference()
   const navigate = useNavigate()
 
   const [focusId, setFocusId] = useState<string>(MAP_ROOT_ID)
@@ -53,8 +57,17 @@ export function MapRoute() {
     [tree, effectiveFocusId, expandedOverflowParentIds],
   )
 
-  const layout = useMemo(() => {
+  const layout = useMemo<MapLayoutResult>(() => {
     void fontVersion
+    if (orientation === 'horizontal') {
+      return computeHorizontalLayout({
+        visible,
+        measureText: measurer.measure,
+        scale: DEFAULT_MAP_SCALE,
+        tier: DEFAULT_MAP_TIER,
+        config: MAP_CAPSULE_BOX_CONFIG,
+      })
+    }
     return computeRadialLayout({
       visible,
       measureText: measurer.measure,
@@ -62,7 +75,7 @@ export function MapRoute() {
       tier: DEFAULT_MAP_TIER,
       config: MAP_CAPSULE_BOX_CONFIG,
     })
-  }, [visible, measurer, fontVersion])
+  }, [visible, measurer, fontVersion, orientation])
 
   const handleSelectNode = useCallback((nodeId: string) => {
     if (nodeId.startsWith(OVERFLOW_NODE_PREFIX)) {
@@ -94,7 +107,7 @@ export function MapRoute() {
       <MapSvgView
         layout={layout}
         visible={visible}
-        orientation="radial"
+        orientation={orientation}
         theme={resolvedTheme}
         measureText={measurer.measure}
         onSelectNode={handleSelectNode}
