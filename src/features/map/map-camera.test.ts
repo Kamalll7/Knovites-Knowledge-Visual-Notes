@@ -11,7 +11,7 @@ import {
 import { buildTree } from '@/domain/tree'
 import { computeMapBoundingBox } from '@/features/map/map-bounds'
 import {
-  MAP_FOCUS_NON_ROOT_MIN_K,
+  MAP_FOCUS_TRANSITION_MS,
   MAP_ZOOM_MAX,
   MAP_ZOOM_MIN,
   buildTransitionStartPositions,
@@ -22,9 +22,10 @@ import {
   resolveViewportZoomTier,
   stepZoomCamera,
 } from '@/features/map/map-camera'
+import { computeLiveEdgePath } from '@/features/map/map-edge-path'
 import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 
-describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
+describe('map-camera [T3.5-fix, T3.6, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
   const demo = createDemoDataset()
   const { state: demoTree } = buildTree([...demo.entries])
   const measurer = createCanvasTextMeasurer({ context: null })
@@ -42,12 +43,12 @@ describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
     }
   })
 
-  it('frames leaf focus with parent + siblings and branch focus with focus + children inside HUD-safe bounds', () => {
+  it('centers focused node strictly at safe viewport center while preserving current zoom k (zero zoom change), and keeps fit-all framing entire graph', () => {
+    expect(MAP_FOCUS_TRANSITION_MS).toBe(550)
     const firstBranchId = demoTree.rootIds[0]!
     const leafId = demoTree.nodes[firstBranchId]!.childrenIds[0]!
     const deepLeafId = demoTree.nodes[leafId]!.childrenIds[0] ?? leafId
 
-    // Branch focus (has children)
     const branchVis = computeVisible({
       tree: demoTree,
       rootTitle: demo.manifest.title,
@@ -61,24 +62,43 @@ describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
       tier: 1,
       config: MAP_CAPSULE_BOX_CONFIG,
     })
-    const hudInsets = { top: 64, right: 0, bottom: 0, left: 0 }
-    const branchCam = computeCameraForFocus(
+    const hudInsets = { top: 64, right: 20, bottom: 16, left: 12 }
+    const expectedCenterX = hudInsets.left + (1280 - hudInsets.left - hudInsets.right) / 2
+    const expectedCenterY = hudInsets.top + (720 - hudInsets.top - hudInsets.bottom) / 2
+
+    // Branch focus preserves currentK across low, normal, and high zoom levels
+    for (const currentK of [0.32, 0.75, 1.0, 1.85, 2.6]) {
+      const cam = computeCameraForFocus(
+        branchLay,
+        firstBranchId,
+        1280,
+        720,
+        'focus',
+        hudInsets,
+        currentK,
+      )
+      expect(cam.k).toBeCloseTo(currentK, 6)
+      const focusNode = branchLay.nodes[firstBranchId]!
+      expect(focusNode.x * cam.k + cam.x).toBeCloseTo(expectedCenterX, 4)
+      expect(focusNode.y * cam.k + cam.y).toBeCloseTo(expectedCenterY, 4)
+    }
+
+    // Root focus also centers root strictly at safe center while preserving currentK
+    const rootCam = computeCameraForFocus(
       branchLay,
-      branchVis,
-      firstBranchId,
+      MAP_ROOT_ID,
       1280,
       720,
       'focus',
       hudInsets,
+      0.62,
     )
-    expect(branchCam.k).toBeGreaterThanOrEqual(MAP_FOCUS_NON_ROOT_MIN_K)
-    expect(branchCam.k).toBeLessThanOrEqual(MAP_ZOOM_MAX)
-    const focusNode = branchLay.nodes[firstBranchId]!
-    const focusScreenY = focusNode.y * branchCam.k + branchCam.y
-    expect(focusScreenY).toBeGreaterThan(hudInsets.top)
-    expect(focusScreenY).toBeLessThan(720)
+    expect(rootCam.k).toBeCloseTo(0.62, 6)
+    const rootNode = branchLay.nodes[MAP_ROOT_ID]!
+    expect(rootNode.x * rootCam.k + rootCam.x).toBeCloseTo(expectedCenterX, 4)
+    expect(rootNode.y * rootCam.k + rootCam.y).toBeCloseTo(expectedCenterY, 4)
 
-    // Leaf focus (must frame parent + siblings)
+    // Leaf focus preserves currentK and centers leaf strictly at safe center
     const leafVis = computeVisible({
       tree: demoTree,
       rootTitle: demo.manifest.title,
@@ -92,45 +112,28 @@ describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
       tier: 1,
       config: MAP_CAPSULE_BOX_CONFIG,
     })
-    const leafCam = computeCameraForFocus(
-      leafLay,
-      leafVis,
-      deepLeafId,
-      1280,
-      720,
-      'focus',
-      hudInsets,
-    )
-    expect(leafCam.k).toBeGreaterThanOrEqual(MAP_FOCUS_NON_ROOT_MIN_K)
-    const parentId = leafVis.nodes[deepLeafId]!.parentId!
-    const parentNode = leafLay.nodes[parentId]!
-    const parentScreenX = parentNode.x * leafCam.k + leafCam.x
-    const parentScreenY = parentNode.y * leafCam.k + leafCam.y
-    expect(parentScreenX).toBeGreaterThan(0)
-    expect(parentScreenX).toBeLessThan(1280)
-    expect(parentScreenY).toBeGreaterThan(hudInsets.top)
-    expect(parentScreenY).toBeLessThan(720)
+    const leafCam = computeCameraForFocus(leafLay, deepLeafId, 1280, 720, 'focus', hudInsets, 1.37)
+    expect(leafCam.k).toBeCloseTo(1.37, 6)
+    const leafNode = leafLay.nodes[deepLeafId]!
+    expect(leafNode.x * leafCam.k + leafCam.x).toBeCloseTo(expectedCenterX, 4)
+    expect(leafNode.y * leafCam.k + leafCam.y).toBeCloseTo(expectedCenterY, 4)
 
     // Fit-all frames entire map bounding box inside safe viewport
     const fitCam = computeCameraForFocus(
       branchLay,
-      branchVis,
       firstBranchId,
       1280,
       720,
       'fit-all',
       hudInsets,
+      2.5,
     )
     const bbox = computeMapBoundingBox(branchLay)
-    expect(bbox.minX * fitCam.k + fitCam.x).toBeGreaterThanOrEqual(0)
-    expect(bbox.maxX * fitCam.k + fitCam.x).toBeLessThanOrEqual(1280)
+    expect(fitCam.k).toBeLessThanOrEqual(1.2)
+    expect(bbox.minX * fitCam.k + fitCam.x).toBeGreaterThanOrEqual(hudInsets.left)
+    expect(bbox.maxX * fitCam.k + fitCam.x).toBeLessThanOrEqual(1280 - hudInsets.right)
     expect(bbox.minY * fitCam.k + fitCam.y).toBeGreaterThanOrEqual(hudInsets.top)
-    expect(bbox.maxY * fitCam.k + fitCam.y).toBeLessThanOrEqual(720)
-
-    // Tiny viewport exercises the non-root readable minK = 0.54 floor (S3 / FR-MAP-05)
-    expect(MAP_FOCUS_NON_ROOT_MIN_K).toBe(0.54)
-    const tightCam = computeCameraForFocus(branchLay, branchVis, firstBranchId, 260, 200, 'focus')
-    expect(tightCam.k).toBeCloseTo(0.54, 4)
+    expect(bbox.maxY * fitCam.k + fitCam.y).toBeLessThanOrEqual(720 - hudInsets.bottom)
   })
 
   it('clamps pan and zoom strictly within [0.2, 3] and keeps map reachable', () => {
@@ -213,5 +216,41 @@ describe('map-camera [T3.5, FR-MAP-05, FR-MAP-06, FR-MAP-08]', () => {
     const camMid = interpolateCamera({ x: 0, y: 0, k: 1 }, { x: 200, y: -100, k: 1.5 }, 0.5, false)
     expect(camMid.x).toBeGreaterThan(100)
     expect(camMid.x).toBeLessThan(200)
+
+    // Live edge path tracks moving node endpoints smoothly between start and target
+    const parentNode = layB.nodes[firstBranchId]!
+    const childNode = layB.nodes[newChildId]!
+    const startEdge = computeLiveEdgePath(
+      parentNode,
+      childNode,
+      starts.get(firstBranchId)!,
+      starts.get(newChildId)!,
+      'radial',
+    )
+    const midEdge = computeLiveEdgePath(
+      parentNode,
+      childNode,
+      mid.get(firstBranchId)!,
+      mid.get(newChildId)!,
+      'radial',
+    )
+    const endEdge = computeLiveEdgePath(
+      parentNode,
+      childNode,
+      { x: parentNode.x, y: parentNode.y, scale: 1 },
+      { x: childNode.x, y: childNode.y, scale: 1 },
+      'radial',
+    )
+    const midDist = Math.hypot(
+      midEdge.controlPoints.tx - startEdge.controlPoints.tx,
+      midEdge.controlPoints.ty - startEdge.controlPoints.ty,
+    )
+    const totalDist = Math.hypot(
+      endEdge.controlPoints.tx - startEdge.controlPoints.tx,
+      endEdge.controlPoints.ty - startEdge.controlPoints.ty,
+    )
+    expect(totalDist).toBeGreaterThan(20)
+    expect(midDist).toBeGreaterThan(totalDist * 0.1)
+    expect(midDist).toBeLessThan(totalDist * 0.98)
   })
 })

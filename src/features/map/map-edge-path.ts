@@ -2,6 +2,7 @@ import {
   HORIZONTAL_WIDE_FAN_FADE_THRESHOLD,
   type ComputeVisibleResult,
   type MapLayoutEdge,
+  type MapLayoutNode,
   type MapLayoutResult,
 } from '@/domain/layout'
 
@@ -105,6 +106,80 @@ export function computeEdgeControlPoints(
 export function formatEdgePathD(cp: EdgeControlPoints): string {
   const f = (n: number) => Number(n.toFixed(2))
   return `M ${f(cp.sx)} ${f(cp.sy)} C ${f(cp.cx1)} ${f(cp.cy1)}, ${f(cp.cx2)} ${f(cp.cy2)}, ${f(cp.tx)} ${f(cp.ty)}`
+}
+
+export interface LiveNodeEndpointState {
+  readonly x: number
+  readonly y: number
+  readonly scale: number
+}
+
+function clipLiveNodeBoundary(
+  pos: LiveNodeEndpointState,
+  node: MapLayoutNode,
+  dx: number,
+  dy: number,
+): { readonly x: number; readonly y: number } {
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-3) return { x: pos.x, y: pos.y }
+  if (node.shape === 'circle') {
+    const r = (node.radius ?? node.width / 2) * pos.scale
+    return { x: pos.x + (dx / len) * r, y: pos.y + (dy / len) * r }
+  }
+  const halfW = (node.width * pos.scale) / 2
+  const halfH = (node.height * pos.scale) / 2
+  const t = Math.min(
+    dx !== 0 ? halfW / Math.abs(dx) : Infinity,
+    dy !== 0 ? halfH / Math.abs(dy) : Infinity,
+  )
+  return { x: pos.x + dx * t, y: pos.y + dy * t }
+}
+
+/**
+ * Computes a live interpolated SVG edge path (`d` + control points) following moving node
+ * endpoints during RAF focus/orientation transitions (`T3.5-fix`, `T3.6`, `FR-MAP-05`).
+ */
+export function computeLiveEdgePath(
+  srcNode: MapLayoutNode,
+  dstNode: MapLayoutNode,
+  srcPos: LiveNodeEndpointState,
+  dstPos: LiveNodeEndpointState,
+  orientation: MapEdgeOrientation,
+): { readonly d: string; readonly controlPoints: EdgeControlPoints } {
+  let sx: number
+  let sy: number
+  let tx: number
+  let ty: number
+
+  if (orientation === 'horizontal') {
+    sx = srcPos.x + (srcNode.width * srcPos.scale) / 2
+    sy = srcPos.y
+    tx = dstPos.x - (dstNode.width * dstPos.scale) / 2
+    ty = dstPos.y
+  } else {
+    const dx = dstPos.x - srcPos.x
+    const dy = dstPos.y - srcPos.y
+    const sPt = clipLiveNodeBoundary(srcPos, srcNode, dx, dy)
+    const tPt = clipLiveNodeBoundary(dstPos, dstNode, -dx, -dy)
+    sx = sPt.x
+    sy = sPt.y
+    tx = tPt.x
+    ty = tPt.y
+  }
+
+  const cp = computeEdgeControlPoints(
+    {
+      id: `${srcNode.id}->${dstNode.id}`,
+      sourceId: srcNode.id,
+      targetId: dstNode.id,
+      sourceX: sx,
+      sourceY: sy,
+      targetX: tx,
+      targetY: ty,
+    },
+    orientation,
+  )
+  return { d: formatEdgePathD(cp), controlPoints: cp }
 }
 
 /**

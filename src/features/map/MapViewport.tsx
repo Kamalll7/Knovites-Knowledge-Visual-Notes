@@ -6,11 +6,11 @@ import {
   type TextMeasurerFn,
   type ZoomTier,
 } from '@/domain/layout'
-import { MapEdges } from '@/features/map/MapEdges'
+import { MapEdges, type EdgeDomRefs } from '@/features/map/MapEdges'
 import { MapNodePill } from '@/features/map/MapNodePill'
 import { MapSvgView } from '@/features/map/MapSvgView'
 import { computeMapBoundingBox } from '@/features/map/map-bounds'
-import type { CameraTransform } from '@/features/map/map-camera'
+import type { CameraHudInsets, CameraTransform } from '@/features/map/map-camera'
 import {
   MAP_THEME_PALETTES,
   assignMapNodeColors,
@@ -35,6 +35,7 @@ export interface MapViewportProps {
   readonly orientation: MapEdgeOrientation
   readonly theme: MapThemeMode
   readonly measureText?: TextMeasurerFn
+  readonly hudInsets?: CameraHudInsets
   readonly onSelectNode?: (nodeId: string) => void
   readonly onOpenNode?: (nodeId: string) => void
   readonly onCreateFirstNode?: () => void
@@ -54,6 +55,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     orientation,
     theme,
     measureText,
+    hudInsets,
     onSelectNode,
     onOpenNode,
     onCreateFirstNode,
@@ -69,6 +71,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   const svgRef = useRef<SVGSVGElement | null>(null)
   const cameraGroupRef = useRef<SVGGElement | null>(null)
   const nodeGroupRefs = useRef<Map<string, SVGGElement>>(new Map())
+  const edgeRefs = useRef<Map<string, EdgeDomRefs>>(new Map())
 
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
 
@@ -84,12 +87,15 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     svgRef,
     cameraGroupRef,
     nodeGroupRefs,
+    edgeRefs,
     layout,
     visible,
+    renderedEdges,
     bbox,
     focusId,
     orientation,
     nonRootCount,
+    hudInsets,
     onScaleTierChange,
     onFrameSample,
   })
@@ -146,7 +152,12 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
         style={{ backgroundColor: palette.bg, touchAction: 'none' }}
       >
         <g ref={cameraGroupRef} data-testid="map-camera-group">
-          <MapEdges edges={renderedEdges} nodeColors={nodeColors} fallbackStroke={palette.accent} />
+          <MapEdges
+            edges={renderedEdges}
+            nodeColors={nodeColors}
+            fallbackStroke={palette.accent}
+            edgeRefs={edgeRefs}
+          />
           <g data-testid="map-nodes">
             {layout.orderedIds.map((id) => {
               const layoutNode = layout.nodes[id]

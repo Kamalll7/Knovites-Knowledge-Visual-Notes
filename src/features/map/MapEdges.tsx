@@ -1,3 +1,4 @@
+import type { RefObject } from 'react'
 import {
   EDGE_OPACITY,
   EDGE_STROKE,
@@ -6,10 +7,43 @@ import {
 } from '@/features/map/map-edge-path'
 import type { NodeColorStyles } from '@/features/map/map-colors'
 
+export interface EdgeDomRefs {
+  group: SVGGElement | null
+  path: SVGPathElement | null
+  halo: SVGPathElement | null
+  gradient: SVGLinearGradientElement | null
+}
+
 export interface MapEdgesProps {
   readonly edges: readonly RenderedMapEdge[]
   readonly nodeColors: ReadonlyMap<string, NodeColorStyles>
   readonly fallbackStroke: string
+  readonly edgeRefs?: RefObject<Map<string, EdgeDomRefs>>
+}
+
+function setEdgeRefField<K extends keyof EdgeDomRefs>(
+  edgeRefs: RefObject<Map<string, EdgeDomRefs>> | undefined,
+  edgeId: string,
+  field: K,
+  el: EdgeDomRefs[K],
+): void {
+  if (!edgeRefs) return
+  const map = edgeRefs.current
+  let entry = map.get(edgeId)
+  if (!entry) {
+    if (el === null) return
+    entry = { group: null, path: null, halo: null, gradient: null }
+    map.set(edgeId, entry)
+  }
+  entry[field] = el
+  if (
+    entry.group === null &&
+    entry.path === null &&
+    entry.halo === null &&
+    entry.gradient === null
+  ) {
+    map.delete(edgeId)
+  }
 }
 
 /**
@@ -17,7 +51,7 @@ export interface MapEdgesProps {
  * Uses layered stroke halos for focus paths (strictly NO `<filter>` blur) and
  * `userSpaceOnUse` linear gradients for wide-fan source-base fading (`FR-MAP-09`).
  */
-export function MapEdges({ edges, nodeColors, fallbackStroke }: MapEdgesProps) {
+export function MapEdges({ edges, nodeColors, fallbackStroke, edgeRefs }: MapEdgesProps) {
   const fadedEdges = edges.filter((edge) => edge.fadeSourceBase && edge.gradientId !== null)
   const sortedEdges = [...edges].sort((a, b) => Number(a.isOnFocusPath) - Number(b.isOnFocusPath))
 
@@ -31,6 +65,7 @@ export function MapEdges({ edges, nodeColors, fallbackStroke }: MapEdgesProps) {
             return (
               <linearGradient
                 key={edge.gradientId}
+                ref={(el) => setEdgeRefField(edgeRefs, edge.id, 'gradient', el)}
                 id={edge.gradientId!}
                 gradientUnits="userSpaceOnUse"
                 x1={sx}
@@ -57,11 +92,13 @@ export function MapEdges({ edges, nodeColors, fallbackStroke }: MapEdgesProps) {
         return (
           <g
             key={edge.id}
+            ref={(el) => setEdgeRefField(edgeRefs, edge.id, 'group', el)}
             data-edge-id={edge.id}
             data-fade-base={edge.fadeSourceBase ? 'true' : 'false'}
           >
             {edge.isOnFocusPath ? (
               <path
+                ref={(el) => setEdgeRefField(edgeRefs, edge.id, 'halo', el)}
                 d={edge.d}
                 fill="none"
                 stroke={strokeColor}
@@ -72,6 +109,7 @@ export function MapEdges({ edges, nodeColors, fallbackStroke }: MapEdgesProps) {
               />
             ) : null}
             <path
+              ref={(el) => setEdgeRefField(edgeRefs, edge.id, 'path', el)}
               d={edge.d}
               fill="none"
               stroke={useGradient ? `url(#${edge.gradientId})` : strokeColor}

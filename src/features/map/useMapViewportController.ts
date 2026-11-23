@@ -1,12 +1,14 @@
 import { select } from 'd3-selection'
-import { zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom'
-import { useCallback, useEffect, useRef } from 'react'
+import { ZoomTransform, zoom, zoomIdentity, type D3ZoomEvent, type ZoomBehavior } from 'd3-zoom'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 import type { ComputeVisibleResult, MapLayoutResult, ZoomTier } from '@/domain/layout'
+import type { EdgeDomRefs } from '@/features/map/MapEdges'
 import type { MapBoundingBox } from '@/features/map/map-bounds'
 import {
   MAP_FOCUS_TRANSITION_MS,
   MAP_ZOOM_MAX,
   MAP_ZOOM_MIN,
+  ZERO_HUD_INSETS,
   buildTransitionStartPositions,
   clampCameraTransform,
   computeCameraForFocus,
@@ -14,14 +16,65 @@ import {
   interpolateNodePositions,
   resolveViewportZoomTier,
   stepZoomCamera,
+  type CameraHudInsets,
   type CameraTransform,
   type NodeTransitionState,
 } from '@/features/map/map-camera'
-import type { MapEdgeOrientation } from '@/features/map/map-edge-path'
+import {
+  computeLiveEdgePath,
+  type MapEdgeOrientation,
+  type RenderedMapEdge,
+} from '@/features/map/map-edge-path'
 
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function applyEdgeFrameToDom(
+  edgeDomMap: ReadonlyMap<string, EdgeDomRefs>,
+  posMap: ReadonlyMap<string, NodeTransitionState>,
+  currentLayout: MapLayoutResult,
+  currentEdges: readonly RenderedMapEdge[],
+  currentOrientation: MapEdgeOrientation,
+  settled: boolean,
+): void {
+  for (const edge of currentEdges) {
+    const dom = edgeDomMap.get(edge.id)
+    if (!dom) continue
+    if (settled) {
+      dom.path?.setAttribute('d', edge.d)
+      dom.halo?.setAttribute('d', edge.d)
+      if (dom.group) dom.group.style.opacity = ''
+      if (dom.gradient) {
+        const { sx, sy, tx, ty } = edge.controlPoints
+        dom.gradient.setAttribute('x1', String(sx))
+        dom.gradient.setAttribute('y1', String(sy))
+        dom.gradient.setAttribute('x2', String(tx))
+        dom.gradient.setAttribute('y2', String(ty))
+      }
+      continue
+    }
+    const srcNode = currentLayout.nodes[edge.sourceId]
+    const dstNode = currentLayout.nodes[edge.targetId]
+    const srcPos = posMap.get(edge.sourceId)
+    const dstPos = posMap.get(edge.targetId)
+    if (!srcNode || !dstNode || !srcPos || !dstPos) continue
+    const live = computeLiveEdgePath(srcNode, dstNode, srcPos, dstPos, currentOrientation)
+    dom.path?.setAttribute('d', live.d)
+    dom.halo?.setAttribute('d', live.d)
+    if (dom.group) {
+      const edgeOpacity = Math.min(srcPos.opacity, dstPos.opacity)
+      dom.group.style.opacity = edgeOpacity < 1 ? edgeOpacity.toFixed(3) : ''
+    }
+    if (dom.gradient) {
+      const { sx, sy, tx, ty } = live.controlPoints
+      dom.gradient.setAttribute('x1', String(sx))
+      dom.gradient.setAttribute('y1', String(sy))
+      dom.gradient.setAttribute('x2', String(tx))
+      dom.gradient.setAttribute('y2', String(ty))
+    }
+  }
 }
 
 export interface UseMapViewportControllerOptions {
@@ -29,41 +82,74 @@ export interface UseMapViewportControllerOptions {
   readonly svgRef: React.RefObject<SVGSVGElement | null>
   readonly cameraGroupRef: React.RefObject<SVGGElement | null>
   readonly nodeGroupRefs: React.RefObject<Map<string, SVGGElement>>
+  readonly edgeRefs: React.RefObject<Map<string, EdgeDomRefs>>
   readonly layout: MapLayoutResult
   readonly visible: ComputeVisibleResult
+  readonly renderedEdges: readonly RenderedMapEdge[]
   readonly bbox: MapBoundingBox
   readonly focusId: string
   readonly orientation: MapEdgeOrientation
   readonly nonRootCount: number
+  readonly hudInsets?: CameraHudInsets
   readonly onScaleTierChange?: (scale: number, tier: ZoomTier) => void
   readonly onFrameSample?: (dtMs: number) => void
 }
 
 /**
- * Manages `d3-zoom` pan/zoom clamping, `requestAnimationFrame` focus transitions via DOM refs
- * (zero React re-renders per frame, `FR-MAP-17`), and transition-frozen semantic zoom tier feedback.
+ * Manages `d3-zoom` pan/zoom clamping (via `.constrain`), `requestAnimationFrame` focus
+ * transitions for camera, nodes, and edges via DOM refs (zero React re-renders per frame,
+ * `FR-MAP-05`, `FR-MAP-17`), and transition-frozen semantic zoom tier feedback.
  */
 export function useMapViewportController({
   containerRef,
   svgRef,
   cameraGroupRef,
   nodeGroupRefs,
+  edgeRefs,
   layout,
   visible,
+  renderedEdges,
   bbox,
   focusId,
   orientation,
   nonRootCount,
+  hudInsets = ZERO_HUD_INSETS,
   onScaleTierChange,
   onFrameSample,
 }: UseMapViewportControllerOptions) {
+  const hasNodes = nonRootCount > 0
+
   const zoomBehaviorRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null)
   const cameraRef = useRef<CameraTransform>({ x: 640, y: 360, k: 1 })
   const liveNodePositionsRef = useRef<Map<string, NodeTransitionState>>(new Map())
   const rafIdRef = useRef<number | null>(null)
   const isTransitioningRef = useRef(false)
+  const isSyncingZoomRef = useRef(false)
   const hasInitializedCameraRef = useRef(false)
   const lastReportedRef = useRef<{ scale: number; tier: ZoomTier }>({ scale: 1, tier: layout.tier })
+
+  // Keep latest props accessible inside stable d3-zoom / RAF callbacks without tearing down listeners
+  const bboxRef = useRef(bbox)
+  const layoutRef = useRef(layout)
+  const visibleRef = useRef(visible)
+  const renderedEdgesRef = useRef(renderedEdges)
+  const orientationRef = useRef(orientation)
+  const focusIdRef = useRef(focusId)
+  const hudInsetsRef = useRef(hudInsets)
+  const onScaleTierChangeRef = useRef(onScaleTierChange)
+  const onFrameSampleRef = useRef(onFrameSample)
+
+  useLayoutEffect(() => {
+    bboxRef.current = bbox
+    layoutRef.current = layout
+    visibleRef.current = visible
+    renderedEdgesRef.current = renderedEdges
+    orientationRef.current = orientation
+    focusIdRef.current = focusId
+    hudInsetsRef.current = hudInsets
+    onScaleTierChangeRef.current = onScaleTierChange
+    onFrameSampleRef.current = onFrameSample
+  })
 
   const getViewportSize = useCallback((): { width: number; height: number } => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -89,25 +175,22 @@ export function useMapViewportController({
       const svg = svgRef.current
       const behavior = zoomBehaviorRef.current
       if (!svg || !behavior) return
-      isTransitioningRef.current = true
+      isSyncingZoomRef.current = true
       select(svg).call(behavior.transform, zoomIdentity.translate(next.x, next.y).scale(next.k))
-      isTransitioningRef.current = false
+      isSyncingZoomRef.current = false
     },
     [svgRef],
   )
 
-  const notifyScaleTier = useCallback(
-    (scale: number, force = false) => {
-      if (isTransitioningRef.current && !force) return
-      const resolved = resolveViewportZoomTier(scale)
-      const prev = lastReportedRef.current
-      if (force || Math.abs(scale - prev.scale) >= 0.015 || resolved.tier !== prev.tier) {
-        lastReportedRef.current = { scale, tier: resolved.tier }
-        onScaleTierChange?.(scale, resolved.tier)
-      }
-    },
-    [onScaleTierChange],
-  )
+  const notifyScaleTier = useCallback((scale: number, force = false) => {
+    if (isTransitioningRef.current && !force) return
+    const resolved = resolveViewportZoomTier(scale)
+    const prev = lastReportedRef.current
+    if (force || Math.abs(scale - prev.scale) >= 0.015 || resolved.tier !== prev.tier) {
+      lastReportedRef.current = { scale, tier: resolved.tier }
+      onScaleTierChangeRef.current?.(scale, resolved.tier)
+    }
+  }, [])
 
   const cancelAnimation = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -121,16 +204,20 @@ export function useMapViewportController({
     (targetCam: CameraTransform, animateNodes: boolean) => {
       cancelAnimation()
       const reduced = prefersReducedMotion()
+      const currentLayout = layoutRef.current
+      const currentVisible = visibleRef.current
+      const currentEdges = renderedEdgesRef.current
+      const currentOrientation = orientationRef.current
       const startCam = cameraRef.current
       const startPositions = animateNodes
-        ? buildTransitionStartPositions(liveNodePositionsRef.current, layout, visible)
+        ? buildTransitionStartPositions(liveNodePositionsRef.current, currentLayout, currentVisible)
         : liveNodePositionsRef.current
 
       const applyFrame = (rawT: number) => {
         const cam = interpolateCamera(startCam, targetCam, rawT, reduced)
         applyCameraToDom(cam)
         if (animateNodes) {
-          const posMap = interpolateNodePositions(startPositions, layout, rawT, reduced)
+          const posMap = interpolateNodePositions(startPositions, currentLayout, rawT, reduced)
           liveNodePositionsRef.current = posMap
           const groupMap = nodeGroupRefs.current
           for (const [id, st] of posMap.entries()) {
@@ -143,6 +230,14 @@ export function useMapViewportController({
             )
             el.style.opacity = st.opacity < 1 ? st.opacity.toFixed(3) : ''
           }
+          applyEdgeFrameToDom(
+            edgeRefs.current,
+            posMap,
+            currentLayout,
+            currentEdges,
+            currentOrientation,
+            reduced || rawT >= 1,
+          )
         }
       }
 
@@ -154,11 +249,12 @@ export function useMapViewportController({
       }
 
       isTransitioningRef.current = true
+      applyFrame(0)
       const tStart = performance.now()
       let lastTs = tStart
 
       const step = (now: number) => {
-        onFrameSample?.(now - lastTs)
+        onFrameSampleRef.current?.(now - lastTs)
         lastTs = now
         const rawT = Math.min(1, (now - tStart) / MAP_FOCUS_TRANSITION_MS)
         applyFrame(rawT)
@@ -176,18 +272,17 @@ export function useMapViewportController({
     [
       applyCameraToDom,
       cancelAnimation,
-      layout,
+      edgeRefs,
       nodeGroupRefs,
       notifyScaleTier,
-      onFrameSample,
       syncZoomBehaviorTransform,
-      visible,
     ],
   )
 
-  useEffect(() => {
+  // Setup d3-zoom ONCE per empty<->non-empty lifecycle (reads bbox via ref, enforces pan clamp in .constrain)
+  useLayoutEffect(() => {
     const svg = svgRef.current
-    if (!svg || nonRootCount === 0) return
+    if (!svg || !hasNodes) return
 
     let lastZoomTs = performance.now()
     const behavior = zoom<SVGSVGElement, unknown>()
@@ -199,25 +294,48 @@ export function useMapViewportController({
         ]
       })
       .scaleExtent([MAP_ZOOM_MIN, MAP_ZOOM_MAX])
-      .filter((event: Event) => event.type !== 'dblclick')
-      .on('zoom', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
-        if (isTransitioningRef.current) return
-        const now = performance.now()
-        onFrameSample?.(now - lastZoomTs)
-        lastZoomTs = now
-        const { width, height } = getViewportSize()
+      .constrain((transform, extent) => {
+        const width = extent[1][0] - extent[0][0]
+        const height = extent[1][1] - extent[0][1]
         const clamped = clampCameraTransform(
-          { x: event.transform.x, y: event.transform.y, k: event.transform.k },
-          bbox,
+          { x: transform.x, y: transform.y, k: transform.k },
+          bboxRef.current,
           width,
           height,
         )
-        applyCameraToDom(clamped)
-        notifyScaleTier(clamped.k)
+        if (clamped.x === transform.x && clamped.y === transform.y && clamped.k === transform.k) {
+          return transform
+        }
+        return new ZoomTransform(clamped.k, clamped.x, clamped.y)
+      })
+      .filter((event: Event) => event.type !== 'dblclick')
+      .on('start', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        if (!isSyncingZoomRef.current && event.sourceEvent && isTransitioningRef.current) {
+          cancelAnimation()
+        }
+      })
+      .on('zoom', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        if (isSyncingZoomRef.current) return
+        if (event.sourceEvent && isTransitioningRef.current) {
+          cancelAnimation()
+        }
+        const now = performance.now()
+        onFrameSampleRef.current?.(now - lastZoomTs)
+        lastZoomTs = now
+        const next: CameraTransform = {
+          x: event.transform.x,
+          y: event.transform.y,
+          k: event.transform.k,
+        }
+        applyCameraToDom(next)
+        notifyScaleTier(next.k)
       })
 
     zoomBehaviorRef.current = behavior
     select(svg).call(behavior)
+    if (hasInitializedCameraRef.current) {
+      syncZoomBehaviorTransform(cameraRef.current)
+    }
     return () => {
       cancelAnimation()
       select(svg).on('.zoom', null)
@@ -225,19 +343,57 @@ export function useMapViewportController({
     }
   }, [
     applyCameraToDom,
-    bbox,
     cancelAnimation,
     getViewportSize,
-    nonRootCount,
+    hasNodes,
     notifyScaleTier,
-    onFrameSample,
     svgRef,
+    syncZoomBehaviorTransform,
   ])
 
-  const hasNodes = nonRootCount > 0
+  // Initial fit-all camera & smooth focus/orientation/root transitions (runs BEFORE settled sync!)
+  useLayoutEffect(() => {
+    if (!hasNodes) return
+    const { width, height } = getViewportSize()
+    const currentLayout = layoutRef.current
+    if (!hasInitializedCameraRef.current) {
+      hasInitializedCameraRef.current = true
+      const targetCam = computeCameraForFocus(
+        currentLayout,
+        focusId,
+        width,
+        height,
+        'fit-all',
+        hudInsetsRef.current,
+        cameraRef.current.k,
+      )
+      const initialPositions = new Map<string, NodeTransitionState>()
+      for (const id of currentLayout.orderedIds) {
+        const n = currentLayout.nodes[id]
+        if (n) initialPositions.set(id, { x: n.x, y: n.y, scale: 1, opacity: 1 })
+      }
+      liveNodePositionsRef.current = initialPositions
+      applyCameraToDom(targetCam)
+      syncZoomBehaviorTransform(targetCam)
+      notifyScaleTier(targetCam.k, true)
+      return
+    }
+    const targetCam = computeCameraForFocus(
+      currentLayout,
+      focusId,
+      width,
+      height,
+      'focus',
+      hudInsetsRef.current,
+      cameraRef.current.k,
+    )
+    animateCameraAndNodes(targetCam, true)
+    // Intentionally triggered ONLY on focus, orientation, root, or empty->non-empty transitions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, orientation, layout.rootId, hasNodes])
 
-  // Keep liveNodePositionsRef synced with settled layout updates (e.g. semantic zoom tier or +N expand)
-  useEffect(() => {
+  // Sync settled layout updates (e.g. semantic zoom tier or +N expand) ONLY when not transitioning
+  useLayoutEffect(() => {
     if (!hasNodes || isTransitioningRef.current) return
     const synced = new Map<string, NodeTransitionState>()
     for (const id of layout.orderedIds) {
@@ -251,56 +407,56 @@ export function useMapViewportController({
       }
     }
     liveNodePositionsRef.current = synced
-  }, [hasNodes, layout, nodeGroupRefs])
-
-  useEffect(() => {
-    if (!hasNodes) return
-    const { width, height } = getViewportSize()
-    const mode = hasInitializedCameraRef.current ? 'focus' : 'fit-all'
-    const targetCam = computeCameraForFocus(layout, visible, focusId, width, height, mode)
-    if (!hasInitializedCameraRef.current) {
-      hasInitializedCameraRef.current = true
-      const initialPositions = new Map<string, NodeTransitionState>()
-      for (const id of layout.orderedIds) {
-        const n = layout.nodes[id]
-        if (n) initialPositions.set(id, { x: n.x, y: n.y, scale: 1, opacity: 1 })
-      }
-      liveNodePositionsRef.current = initialPositions
-      applyCameraToDom(targetCam)
-      syncZoomBehaviorTransform(targetCam)
-      notifyScaleTier(targetCam.k, true)
-      return
-    }
-    animateCameraAndNodes(targetCam, true)
-    // Intentionally triggered ONLY on focus, orientation, root, or empty->non-empty transitions
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusId, orientation, layout.rootId, hasNodes])
+    applyEdgeFrameToDom(edgeRefs.current, synced, layout, renderedEdges, orientation, true)
+  }, [edgeRefs, hasNodes, layout, nodeGroupRefs, orientation, renderedEdges])
 
   const zoomIn = useCallback(() => {
     const { width, height } = getViewportSize()
-    animateCameraAndNodes(stepZoomCamera(cameraRef.current, 'in', width, height, bbox), false)
-  }, [animateCameraAndNodes, bbox, getViewportSize])
+    animateCameraAndNodes(
+      stepZoomCamera(cameraRef.current, 'in', width, height, bboxRef.current),
+      false,
+    )
+  }, [animateCameraAndNodes, getViewportSize])
 
   const zoomOut = useCallback(() => {
     const { width, height } = getViewportSize()
-    animateCameraAndNodes(stepZoomCamera(cameraRef.current, 'out', width, height, bbox), false)
-  }, [animateCameraAndNodes, bbox, getViewportSize])
+    animateCameraAndNodes(
+      stepZoomCamera(cameraRef.current, 'out', width, height, bboxRef.current),
+      false,
+    )
+  }, [animateCameraAndNodes, getViewportSize])
 
   const fitAll = useCallback(() => {
     const { width, height } = getViewportSize()
     animateCameraAndNodes(
-      computeCameraForFocus(layout, visible, focusId, width, height, 'fit-all'),
+      computeCameraForFocus(
+        layoutRef.current,
+        focusIdRef.current,
+        width,
+        height,
+        'fit-all',
+        hudInsetsRef.current,
+        cameraRef.current.k,
+      ),
       false,
     )
-  }, [animateCameraAndNodes, focusId, getViewportSize, layout, visible])
+  }, [animateCameraAndNodes, getViewportSize])
 
   const recenterFocus = useCallback(() => {
     const { width, height } = getViewportSize()
     animateCameraAndNodes(
-      computeCameraForFocus(layout, visible, focusId, width, height, 'focus'),
+      computeCameraForFocus(
+        layoutRef.current,
+        focusIdRef.current,
+        width,
+        height,
+        'focus',
+        hudInsetsRef.current,
+        cameraRef.current.k,
+      ),
       false,
     )
-  }, [animateCameraAndNodes, focusId, getViewportSize, layout, visible])
+  }, [animateCameraAndNodes, getViewportSize])
 
   const getTransform = useCallback(() => cameraRef.current, [])
 

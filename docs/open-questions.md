@@ -29,6 +29,10 @@ Ringkasan keputusan yang diambil pemilik pada 2026-11-21 (ditetapkan tanpa mengu
 - Repo aplikasi publik; hosting ditunda sampai M8.
 - **Status Spike S2:** ditutup pada **2026-11-21** dengan status **`LOLOS BERSYARAT`**; seluruh syarat tersisa untuk implementasi M4 dicatat di bagian **Syarat M4** pada [`docs/plan.md`](plan.md).
 
+## Keputusan pemilik (2026-11-23)
+
+- **Aturan kamera fokus peta (`T3.5-fix`, `T3.6`, `FR-MAP-05`, `FR-MAP-06`):** Menggantikan aturan lama auto-zoom fokus & `MAP_FOCUS_NON_ROOT_MIN_K = 0.54`. Saat sebuah node diklik atau tombol `Focus` ditekan, kamera menggeser `(focusNode.x, focusNode.y)` **tepat ke pusat area viewport aman** (`centerScreenX`, `centerScreenY` memperhitungkan `hudInsets`) dengan **mempertahankan nilai zoom `k` saat ini** (nol perubahan zoom). Muatan awal dan tombol `Fit` tetap memakai `fit-all` (menampilkan seluruh graf).
+
 ## Catatan temuan agent
 
 Format entri:

@@ -1,7 +1,6 @@
 import { easeCubicOut } from 'd3-ease'
 import {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
-  MAP_ROOT_ID,
   resolveScreenZoomTier,
   type ComputeVisibleResult,
   type MapLayoutResult,
@@ -22,11 +21,8 @@ export const MAP_ZOOM_MAX = 3
 /** Multiplicative zoom step for HUD zoom-in / zoom-out buttons (`FR-MAP-06`). */
 export const MAP_ZOOM_STEP_FACTOR = 1.25
 
-/** Minimum readable scale for non-root focus transitions (`docs/spec-map.md` S3 notes). */
-export const MAP_FOCUS_NON_ROOT_MIN_K = 0.54
-
-/** Focus transition animation duration within the 450–600 ms spec window (`FR-MAP-05`). */
-export const MAP_FOCUS_TRANSITION_MS = 500
+/** Focus transition animation duration within the 450–600 ms spec window (`FR-MAP-05`, `T3.6`). */
+export const MAP_FOCUS_TRANSITION_MS = 550
 
 /** Minimum pixels of the map bounding box kept reachable inside the viewport during pan. */
 export const MAP_PAN_KEEP_IN_VIEW_PX = 96
@@ -66,110 +62,55 @@ export function resolveViewportZoomTier(scale: number): ScreenTierResolution {
   return resolveScreenZoomTier(scale, undefined, DEFAULT_RADIAL_LAYOUT_CONFIG)
 }
 
-function computeTargetBounds(
-  layout: MapLayoutResult,
-  visible: ComputeVisibleResult,
-  focusId: string,
-  mode: 'focus' | 'fit-all',
-): MapBoundingBox {
-  if (mode === 'fit-all' || focusId === MAP_ROOT_ID || !layout.nodes[focusId]) {
-    return computeMapBoundingBox(layout)
-  }
-
-  const focusVisible = visible.nodes[focusId]
-  const targetIds = new Set<string>([focusId])
-
-  if (focusVisible) {
-    if (focusVisible.parentId && layout.nodes[focusVisible.parentId]) {
-      targetIds.add(focusVisible.parentId)
-    }
-    if (focusVisible.visibleChildIds.length > 0) {
-      // Branch focus rule (Syarat M3): frame focus + visible children (+ parent for orientation)
-      for (const cid of focusVisible.visibleChildIds) {
-        if (layout.nodes[cid]) targetIds.add(cid)
-      }
-    } else if (focusVisible.parentId) {
-      // Leaf focus rule (Syarat M3): frame leaf + parent + visible siblings
-      const parentVisible = visible.nodes[focusVisible.parentId]
-      if (parentVisible) {
-        for (const sibId of parentVisible.visibleChildIds) {
-          if (layout.nodes[sibId]) targetIds.add(sibId)
-        }
-      }
-    }
-  }
-
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const id of targetIds) {
-    const n = layout.nodes[id]
-    if (!n) continue
-    minX = Math.min(minX, n.x - n.width / 2, n.labelBox ? n.labelBox.x : Infinity)
-    maxX = Math.max(
-      maxX,
-      n.x + n.width / 2,
-      n.labelBox ? n.labelBox.x + n.labelBox.width : -Infinity,
-    )
-    minY = Math.min(minY, n.y - n.height / 2, n.labelBox ? n.labelBox.y : Infinity)
-    maxY = Math.max(
-      maxY,
-      n.y + n.height / 2,
-      n.labelBox ? n.labelBox.y + n.labelBox.height : -Infinity,
-    )
-  }
-
-  if (!Number.isFinite(minX)) return computeMapBoundingBox(layout)
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
-  }
-}
-
 /**
- * Computes camera `{ x, y, k }` for `fit-all` or `focus` framing (`FR-MAP-05`, `FR-MAP-06`, Syarat M3).
- * Accounts for `hudInsets` and `MAP_FIT_PADDING_PX` so framed nodes never sit beneath HUD controls.
+ * Computes camera `{ x, y, k }` for `fit-all` or pure-center `focus` framing (`FR-MAP-05`,
+ * `FR-MAP-06`, owner decision 2026-11-23).
+ * - `focus`: places `(focusNode.x, focusNode.y)` strictly at the safe viewport center
+ *   `(centerScreenX, centerScreenY)` accounting for `hudInsets` while preserving `currentK`
+ *   (zero zoom change).
+ * - `fit-all`: frames the full map bounding box inside the HUD-safe viewport area.
  */
 export function computeCameraForFocus(
   layout: MapLayoutResult,
-  visible: ComputeVisibleResult,
   focusId: string,
   viewportW: number,
   viewportH: number,
   mode: 'focus' | 'fit-all',
   hudInsets: CameraHudInsets = ZERO_HUD_INSETS,
+  currentK = 1,
 ): CameraTransform {
   const safeW = Math.max(240, viewportW)
   const safeH = Math.max(180, viewportH)
   const usableW = Math.max(120, safeW - hudInsets.left - hudInsets.right)
   const usableH = Math.max(100, safeH - hudInsets.top - hudInsets.bottom)
+  const centerScreenX = hudInsets.left + usableW / 2
+  const centerScreenY = hudInsets.top + usableH / 2
+
+  if (mode === 'focus') {
+    const focusNode = layout.nodes[focusId] ?? layout.nodes[layout.rootId]
+    if (focusNode) {
+      const k = Math.max(
+        MAP_ZOOM_MIN,
+        Math.min(MAP_ZOOM_MAX, Number.isFinite(currentK) ? currentK : 1),
+      )
+      return {
+        x: centerScreenX - focusNode.x * k,
+        y: centerScreenY - focusNode.y * k,
+        k,
+      }
+    }
+  }
+
   const availW = Math.max(80, usableW - MAP_FIT_PADDING_PX * 2)
   const availH = Math.max(80, usableH - MAP_FIT_PADDING_PX * 2)
-
-  const targetBox = computeTargetBounds(layout, visible, focusId, mode)
+  const targetBox = computeMapBoundingBox(layout)
   const boxW = Math.max(160, targetBox.width)
   const boxH = Math.max(120, targetBox.height)
 
-  const isNonRootFocus =
-    mode === 'focus' && focusId !== MAP_ROOT_ID && Boolean(layout.nodes[focusId])
-  const minK = isNonRootFocus ? MAP_FOCUS_NON_ROOT_MIN_K : MAP_ZOOM_MIN
-  const maxK = mode === 'fit-all' ? 1.2 : isNonRootFocus ? 1.35 : 1.1
-
   const fitK = Math.min(availW / boxW, availH / boxH)
-  const k = Math.max(minK, Math.min(maxK, fitK))
-
-  const focusNode = layout.nodes[focusId]
-  const anchorOnFocus = isNonRootFocus && focusNode && fitK < minK
-  const cx = anchorOnFocus ? focusNode.x : (targetBox.minX + targetBox.maxX) / 2
-  const cy = anchorOnFocus ? focusNode.y : (targetBox.minY + targetBox.maxY) / 2
-
-  const centerScreenX = hudInsets.left + usableW / 2
-  const centerScreenY = hudInsets.top + usableH / 2
+  const k = Math.max(MAP_ZOOM_MIN, Math.min(1.2, fitK))
+  const cx = (targetBox.minX + targetBox.maxX) / 2
+  const cy = (targetBox.minY + targetBox.maxY) / 2
 
   return {
     x: centerScreenX - cx * k,
