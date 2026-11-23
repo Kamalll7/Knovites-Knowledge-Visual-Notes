@@ -246,7 +246,9 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
       await page.mouse.move(10, 10)
     }
 
-    // Click +N overflow bubble and confirm node count expands
+    // Click Fit so the wide 24-child fan + overflow bubble (+36) sit inside viewport, then click +N
+    await page.getByTestId('map-fit').click()
+    await waitForStableSvg(page)
     const overflowBubble = page.locator('[data-testid="map-node"][data-node-kind="overflow"]')
     await expect(overflowBubble).toBeVisible()
     const beforeOverflowCount = await page.locator('[data-testid="map-node"]').count()
