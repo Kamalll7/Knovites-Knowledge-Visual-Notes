@@ -216,4 +216,198 @@ test.describe('Map static SVG visual baseline [T3.4b, FR-MAP-09]', () => {
     console.info(`[T3_4B_BASELINE] ${JSON.stringify(metricsLog)}`)
     expect(consoleErrors).toEqual([])
   })
+
+  test('captures fit-viewBox baseline screenshots for radial (t0/t1/t2) and horizontal (t2) across 6 datasets × 2 themes [T3.4c-c]', async ({
+    page,
+  }) => {
+    test.setTimeout(150_000)
+    mkdirSync(SCREENS_DIR, { recursive: true })
+
+    const consoleErrors: string[] = []
+    page.on('pageerror', (err) => consoleErrors.push(err.message))
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize(VIEWPORT)
+
+    const fitSpecs: ReadonlyArray<{
+      readonly mode: 'radial' | 'horizontal'
+      readonly tier: 0 | 1 | 2
+      readonly scale: number
+    }> = [
+      { mode: 'radial', tier: 0, scale: 0.85 },
+      { mode: 'radial', tier: 1, scale: 1 },
+      { mode: 'radial', tier: 2, scale: 1 },
+      { mode: 'horizontal', tier: 2, scale: 1 },
+    ]
+
+    const fitMetrics: Array<Record<string, number | string>> = []
+
+    for (const theme of THEMES) {
+      for (const dataset of DATASETS) {
+        for (const { mode, tier, scale } of fitSpecs) {
+          // Omit vw/vh so MapSvgView computes fit viewBox = bbox + MAP_FIT_PADDING_PX
+          const url = `/#/__dev/map?dataset=${dataset}&theme=${theme}&tier=${tier}&scale=${scale}&mode=${mode}`
+          await page.goto(url)
+          await page.waitForSelector('[data-testid="dev-map-route"][data-ready="true"]')
+          await page.waitForSelector('[data-testid="map-svg"]')
+          await expect(page.locator('html')).toHaveClass(new RegExp(theme))
+
+          await page.evaluate(async () => {
+            await document.fonts.ready
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            )
+          })
+
+          const audit = await page.evaluate(() => {
+            const svg = document.querySelector<SVGSVGElement>('[data-testid="map-svg"]')!
+            const diag = document.querySelector<HTMLElement>('[data-testid="dev-map-diagnostics"]')!
+            const hud = document.querySelector<HTMLElement>('[data-testid="dev-map-hud"]')!
+            const filterCount = svg.querySelectorAll('filter').length
+            const hudRect = hud.getBoundingClientRect()
+            const svgRect = svg.getBoundingClientRect()
+            const nodeEls = Array.from(
+              svg.querySelectorAll<SVGGElement>('[data-testid="map-node"]'),
+            )
+
+            let hudOverlaps = 0
+            let labelOverflows = 0
+            let truncatedCount = 0
+            const nodeBoxesWorld: Array<{
+              id: string
+              minX: number
+              minY: number
+              maxX: number
+              maxY: number
+            }> = []
+
+            for (const g of nodeEls) {
+              const id = g.dataset.nodeId ?? ''
+              if (g.dataset.truncated === 'true') truncatedCount += 1
+              const shape = g.querySelector<SVGGraphicsElement>('[data-testid="map-node-shape"]')
+              if (!shape) continue
+              const sRect = shape.getBoundingClientRect()
+              const visLeft = Math.max(sRect.left, svgRect.left)
+              const visRight = Math.min(sRect.right, svgRect.right)
+              const visTop = Math.max(sRect.top, svgRect.top)
+              const visBottom = Math.min(sRect.bottom, svgRect.bottom)
+              const isVisibleInSvg = visRight > visLeft && visBottom > visTop
+              if (
+                isVisibleInSvg &&
+                visRight > hudRect.left &&
+                visLeft < hudRect.right &&
+                visBottom > hudRect.top &&
+                visTop < hudRect.bottom
+              ) {
+                hudOverlaps += 1
+              }
+
+              const tf = g.getAttribute('transform') ?? ''
+              const m = /translate\(([^,]+),\s*([^)]+)\)/.exec(tf)
+              const nx = m ? Number.parseFloat(m[1]!) : 0
+              const ny = m ? Number.parseFloat(m[2]!) : 0
+              const sb = shape.getBBox()
+              nodeBoxesWorld.push({
+                id,
+                minX: nx + sb.x,
+                minY: ny + sb.y,
+                maxX: nx + sb.x + sb.width,
+                maxY: ny + sb.y + sb.height,
+              })
+
+              const label = g.querySelector<SVGTextElement>('[data-testid="map-node-label"]')
+              if (label && g.dataset.nodeShape === 'capsule') {
+                const lb = label.getBBox()
+                if (lb.x < sb.x + 1 || lb.x + lb.width > sb.x + sb.width - 1) {
+                  labelOverflows += 1
+                }
+              }
+            }
+
+            let sampledEdgeNodeCrossings = 0
+            const edgeGroups = Array.from(svg.querySelectorAll<SVGGElement>('[data-edge-id]'))
+            for (const eg of edgeGroups) {
+              const edgeId = eg.dataset.edgeId ?? ''
+              const [srcId, dstId] = edgeId.split('->')
+              const path = eg.querySelector<SVGPathElement>('[data-testid="map-edge-path"]')
+              if (!path) continue
+              const totalLen = path.getTotalLength()
+              if (totalLen <= 0) continue
+              const samples = 10
+              for (let s = 1; s < samples; s += 1) {
+                const pt = path.getPointAtLength((totalLen * s) / samples)
+                for (const box of nodeBoxesWorld) {
+                  if (box.id === srcId || box.id === dstId) continue
+                  if (
+                    pt.x >= box.minX &&
+                    pt.x <= box.maxX &&
+                    pt.y >= box.minY &&
+                    pt.y <= box.maxY
+                  ) {
+                    sampledEdgeNodeCrossings += 1
+                    break
+                  }
+                }
+              }
+            }
+
+            return {
+              filterCount,
+              hudOverlaps,
+              labelOverflows,
+              truncatedCount,
+              sampledEdgeNodeCrossings,
+              overlapCount: Number(diag.dataset.overlapCount ?? '0'),
+              edgeCrossings: Number(diag.dataset.edgeCrossings ?? '0'),
+              bboxW: Number(diag.dataset.bboxW ?? '0'),
+              bboxH: Number(diag.dataset.bboxH ?? '0'),
+              nodeCount: Number(diag.dataset.nodeCount ?? '0'),
+            }
+          })
+
+          expect(audit.filterCount, `${dataset}/${mode}/${theme}/t${tier} fit filters`).toBe(0)
+          expect(audit.hudOverlaps, `${dataset}/${mode}/${theme}/t${tier} fit HUD overlaps`).toBe(0)
+          expect(
+            audit.labelOverflows,
+            `${dataset}/${mode}/${theme}/t${tier} fit label overflows`,
+          ).toBe(0)
+          expect(
+            audit.overlapCount,
+            `${dataset}/${mode}/${theme}/t${tier} fit layout overlaps`,
+          ).toBe(0)
+          expect(
+            audit.edgeCrossings,
+            `${dataset}/${mode}/${theme}/t${tier} fit layout edge crossings`,
+          ).toBe(0)
+          expect(
+            audit.sampledEdgeNodeCrossings,
+            `${dataset}/${mode}/${theme}/t${tier} fit sampled curve crossings`,
+          ).toBe(0)
+
+          if (theme === 'dark') {
+            fitMetrics.push({
+              dataset,
+              mode,
+              tier,
+              nodeCount: audit.nodeCount,
+              truncatedCount: audit.truncatedCount,
+              bboxW: audit.bboxW,
+              bboxH: audit.bboxH,
+            })
+          }
+
+          await page.screenshot({
+            path: `${SCREENS_DIR}/${dataset}-${mode}-${theme}-t${tier}-fit.png`,
+            animations: 'disabled',
+          })
+        }
+      }
+    }
+
+    console.info(`[T3_4C_FIT_BASELINE] ${JSON.stringify(fitMetrics)}`)
+    expect(consoleErrors).toEqual([])
+  })
 })

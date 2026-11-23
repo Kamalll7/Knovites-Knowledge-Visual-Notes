@@ -195,9 +195,15 @@ describe('map-edge-path [T3.4a, FR-MAP-09]', () => {
             const rawEdge = layout.edges[i]!
             expect(
               rEdge.d.startsWith(
-                `M ${Number(rawEdge.sourceX.toFixed(2))} ${Number(rawEdge.sourceY.toFixed(2))} C `,
+                `M ${Number(rawEdge.sourceX.toFixed(2))} ${Number(rawEdge.sourceY.toFixed(2))} `,
               ),
             ).toBe(true)
+            expect(
+              rEdge.d.endsWith(
+                `${Number(rawEdge.targetX.toFixed(2))} ${Number(rawEdge.targetY.toFixed(2))}`,
+              ),
+            ).toBe(true)
+            expect(rEdge.d.includes(' C ')).toBe(true)
             expect(rEdge.d.includes('NaN')).toBe(false)
             const pts = sampleCubicBezierPoints(rEdge.controlPoints, 8)
             expect(pts[0]!.x).toBeCloseTo(rawEdge.sourceX, 6)

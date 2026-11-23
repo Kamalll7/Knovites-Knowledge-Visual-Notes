@@ -107,6 +107,29 @@ export function formatEdgePathD(cp: EdgeControlPoints): string {
   return `M ${f(cp.sx)} ${f(cp.sy)} C ${f(cp.cx1)} ${f(cp.cy1)}, ${f(cp.cx2)} ${f(cp.cy2)}, ${f(cp.tx)} ${f(cp.ty)}`
 }
 
+/**
+ * Formats a horizontal edge routed through the obstacle-free inter-column gutter
+ * `[gutterLeft, gutterRight]`. Horizontal stubs run along the parent's and child's
+ * own rows (`sy`, `ty`), while the vertical S-curve stays strictly inside `[gutterLeft, gutterRight]`,
+ * guaranteeing zero crossings over wider sibling capsules (`T3.4c-c`, `FR-MAP-04`).
+ */
+export function formatHorizontalGutterEdgePathD(
+  cp: EdgeControlPoints,
+  gutterLeft: number,
+  gutterRight: number,
+): string {
+  if (!(gutterRight > gutterLeft + 1) || cp.sx > gutterLeft + 0.5 || cp.tx < gutterRight - 0.5) {
+    return formatEdgePathD(cp)
+  }
+  const f = (n: number) => Number(n.toFixed(2))
+  const gLeft = Math.max(cp.sx, gutterLeft)
+  const gRight = Math.min(cp.tx, gutterRight)
+  const gMid = (gLeft + gRight) * 0.5
+  const startStub = gLeft - cp.sx > 0.5 ? ` L ${f(gLeft)} ${f(cp.sy)}` : ''
+  const endStub = cp.tx - gRight > 0.5 ? ` L ${f(cp.tx)} ${f(cp.ty)}` : ''
+  return `M ${f(cp.sx)} ${f(cp.sy)}${startStub} C ${f(gMid)} ${f(cp.sy)}, ${f(gMid)} ${f(cp.ty)}, ${f(gRight)} ${f(cp.ty)}${endStub}`
+}
+
 /** Samples `steps + 1` points along a cubic Bezier curve for geometric crossing checks. */
 export function sampleCubicBezierPoints(
   cp: EdgeControlPoints,
@@ -143,11 +166,23 @@ export function buildRenderedMapEdges(
     outgoingCountBySource.set(edge.sourceId, (outgoingCountBySource.get(edge.sourceId) ?? 0) + 1)
   }
 
+  const colMaxRight = new Map<number, number>()
+  const colMinLeft = new Map<number, number>()
+  if (orientation === 'horizontal') {
+    for (const id of layout.orderedIds) {
+      const n = layout.nodes[id]
+      if (!n) continue
+      colMaxRight.set(n.depth, Math.max(colMaxRight.get(n.depth) ?? -Infinity, n.x + n.width / 2))
+      colMinLeft.set(n.depth, Math.min(colMinLeft.get(n.depth) ?? Infinity, n.x - n.width / 2))
+    }
+  }
+
   return layout.edges.map((edge, idx) => {
     const cp = computeEdgeControlPoints(edge, orientation)
     const srcVisible = visible.nodes[edge.sourceId]
     const dstVisible = visible.nodes[edge.targetId]
     const isOnFocusPath = Boolean(srcVisible?.isOnFocusPath && dstVisible?.isOnFocusPath)
+    const srcDepth = layout.nodes[edge.sourceId]?.depth ?? srcVisible?.depth ?? 0
     const dstDepth = layout.nodes[edge.targetId]?.depth ?? dstVisible?.depth ?? 1
     const baseStroke = Math.max(
       EDGE_STROKE.minWidthPx,
@@ -163,11 +198,16 @@ export function buildRenderedMapEdges(
       ? edge.fadeSourceBase
       : sourceFanCount >= wideFanThreshold
 
+    const d =
+      orientation === 'horizontal' && colMaxRight.has(srcDepth) && colMinLeft.has(dstDepth)
+        ? formatHorizontalGutterEdgePathD(cp, colMaxRight.get(srcDepth)!, colMinLeft.get(dstDepth)!)
+        : formatEdgePathD(cp)
+
     return {
       id: edge.id,
       sourceId: edge.sourceId,
       targetId: edge.targetId,
-      d: formatEdgePathD(cp),
+      d,
       controlPoints: cp,
       isOnFocusPath,
       strokeWidth,

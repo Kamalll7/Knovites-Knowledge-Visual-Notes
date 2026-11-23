@@ -147,7 +147,7 @@ export function MapSvgView({
       data-testid="map-svg-container"
       data-orientation={orientation}
       data-tier={layout.tier}
-      className="relative flex h-full w-full flex-1 overflow-hidden bg-background"
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
       <h1 className="sr-only">{en.map.title}</h1>
       <svg
@@ -156,7 +156,7 @@ export function MapSvgView({
         data-testid="map-svg"
         viewBox={viewBox}
         preserveAspectRatio="xMidYMid meet"
-        className="block h-full w-full select-none"
+        className="absolute inset-0 block h-full w-full select-none"
         style={{ backgroundColor: palette.bg }}
       >
         <MapEdges edges={renderedEdges} nodeColors={nodeColors} fallbackStroke={palette.accent} />
