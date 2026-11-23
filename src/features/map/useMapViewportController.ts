@@ -123,6 +123,7 @@ export function useMapViewportController({
   const cameraRef = useRef<CameraTransform>({ x: 640, y: 360, k: 1 })
   const liveNodePositionsRef = useRef<Map<string, NodeTransitionState>>(new Map())
   const rafIdRef = useRef<number | null>(null)
+  const interactionPerfRafRef = useRef<number | null>(null)
   const isTransitioningRef = useRef(false)
   const isSyncingZoomRef = useRef(false)
   const hasInitializedCameraRef = useRef(false)
@@ -192,6 +193,26 @@ export function useMapViewportController({
     }
   }, [])
 
+  const stopInteractionPerfRaf = useCallback(() => {
+    if (interactionPerfRafRef.current !== null) {
+      cancelAnimationFrame(interactionPerfRafRef.current)
+      interactionPerfRafRef.current = null
+    }
+  }, [])
+
+  const startInteractionPerfRaf = useCallback(() => {
+    if (!onFrameSampleRef.current || interactionPerfRafRef.current !== null) return
+    let lastTs: number | null = null
+    const tick = (now: number) => {
+      if (lastTs !== null) {
+        onFrameSampleRef.current?.(now - lastTs)
+      }
+      lastTs = now
+      interactionPerfRafRef.current = requestAnimationFrame(tick)
+    }
+    interactionPerfRafRef.current = requestAnimationFrame(tick)
+  }, [])
+
   const cancelAnimation = useCallback(() => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current)
@@ -249,13 +270,16 @@ export function useMapViewportController({
       }
 
       isTransitioningRef.current = true
+      stopInteractionPerfRaf()
       applyFrame(0)
       const tStart = performance.now()
-      let lastTs = tStart
+      let lastRafTs: number | null = null
 
       const step = (now: number) => {
-        onFrameSampleRef.current?.(now - lastTs)
-        lastTs = now
+        if (lastRafTs !== null) {
+          onFrameSampleRef.current?.(now - lastRafTs)
+        }
+        lastRafTs = now
         const rawT = Math.min(1, (now - tStart) / MAP_FOCUS_TRANSITION_MS)
         applyFrame(rawT)
         if (rawT < 1) {
@@ -275,6 +299,7 @@ export function useMapViewportController({
       edgeRefs,
       nodeGroupRefs,
       notifyScaleTier,
+      stopInteractionPerfRaf,
       syncZoomBehaviorTransform,
     ],
   )
@@ -284,7 +309,6 @@ export function useMapViewportController({
     const svg = svgRef.current
     if (!svg || !hasNodes) return
 
-    let lastZoomTs = performance.now()
     const behavior = zoom<SVGSVGElement, unknown>()
       .extent(() => {
         const { width, height } = getViewportSize()
@@ -310,18 +334,17 @@ export function useMapViewportController({
       })
       .filter((event: Event) => event.type !== 'dblclick')
       .on('start', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
-        if (!isSyncingZoomRef.current && event.sourceEvent && isTransitioningRef.current) {
+        if (isSyncingZoomRef.current || !event.sourceEvent) return
+        if (isTransitioningRef.current) {
           cancelAnimation()
         }
+        startInteractionPerfRaf()
       })
       .on('zoom', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
         if (isSyncingZoomRef.current) return
         if (event.sourceEvent && isTransitioningRef.current) {
           cancelAnimation()
         }
-        const now = performance.now()
-        onFrameSampleRef.current?.(now - lastZoomTs)
-        lastZoomTs = now
         const next: CameraTransform = {
           x: event.transform.x,
           y: event.transform.y,
@@ -330,6 +353,10 @@ export function useMapViewportController({
         applyCameraToDom(next)
         notifyScaleTier(next.k)
       })
+      .on('end', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
+        if (isSyncingZoomRef.current || !event.sourceEvent) return
+        stopInteractionPerfRaf()
+      })
 
     zoomBehaviorRef.current = behavior
     select(svg).call(behavior)
@@ -337,6 +364,7 @@ export function useMapViewportController({
       syncZoomBehaviorTransform(cameraRef.current)
     }
     return () => {
+      stopInteractionPerfRaf()
       cancelAnimation()
       select(svg).on('.zoom', null)
       zoomBehaviorRef.current = null
@@ -347,6 +375,8 @@ export function useMapViewportController({
     getViewportSize,
     hasNodes,
     notifyScaleTier,
+    startInteractionPerfRaf,
+    stopInteractionPerfRaf,
     svgRef,
     syncZoomBehaviorTransform,
   ])

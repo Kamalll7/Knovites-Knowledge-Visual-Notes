@@ -262,21 +262,26 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
       animations: 'disabled',
     })
 
-    // 3. Dev measurement HUD: real IndexedDB hydrate benchmark + FPS log (printed only, not gated) + Reset pengukuran
+    // 3. Dev measurement HUD: real IndexedDB hydrate benchmark + active-interaction RAF FPS log + Reset pengukuran
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
     await page.goto('/#/__dev/map?dataset=unbalanced150&interactive=1&theme=dark')
     await page.waitForSelector('[data-testid="dev-map-route"][data-ready="true"]')
     await page.getByTestId('dev-bench-hydrate').click()
     await expect(page.getByTestId('dev-map-diagnostics')).not.toHaveAttribute('data-hydrate-ms', '')
-    await page.waitForTimeout(400)
+    // Trigger an active zoom transition so the active-interaction RAF sampler records real frames
+    await page.getByTestId('map-zoom-in').click()
+    await page.waitForTimeout(700)
 
     const diag = page.getByTestId('dev-map-diagnostics')
+    await expect(diag).not.toHaveAttribute('data-fps-samples', '0')
     const hudSnapshot = {
       nodeCount: Number(await diag.getAttribute('data-node-count')),
       layoutMs: Number(await diag.getAttribute('data-layout-ms')),
       hydrateMs: Number(await diag.getAttribute('data-hydrate-ms')),
       fpsP50: Number(await diag.getAttribute('data-fps-p50')),
       fpsP95: Number(await diag.getAttribute('data-fps-p95')),
-      fpsMax: Number(await diag.getAttribute('data-fps-max')),
+      fpsMin: Number(await diag.getAttribute('data-fps-min')),
+      frameMaxMs: Number(await diag.getAttribute('data-frame-max-ms')),
       fpsSamples: Number(await diag.getAttribute('data-fps-samples')),
     }
     // Headless FPS is printed for visibility only (owner measures real GPU FPS in Chrome)
@@ -284,10 +289,19 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(hudSnapshot.hydrateMs).toBeGreaterThanOrEqual(0)
     expect(hudSnapshot.layoutMs).toBeGreaterThanOrEqual(0)
     expect(hudSnapshot.nodeCount).toBeGreaterThan(0)
+    expect(hudSnapshot.fpsSamples).toBeGreaterThan(0)
+    expect(hudSnapshot.frameMaxMs).toBeGreaterThan(0)
+    expect(hudSnapshot.fpsMin).toBeLessThanOrEqual(hudSnapshot.fpsP95)
+    expect(hudSnapshot.fpsP95).toBeLessThanOrEqual(hudSnapshot.fpsP50)
+    await expect(diag).toContainText(
+      `fps(5s):${hudSnapshot.fpsP50}/${hudSnapshot.fpsP95}/${hudSnapshot.fpsMin}`,
+    )
+    await expect(diag).toContainText(`max:${hudSnapshot.frameMaxMs}ms`)
 
-    // Verify Reset pengukuran button clears hydrateMs
+    // Verify Reset pengukuran button clears hydrateMs & perf samples
     await page.getByTestId('dev-perf-reset').click()
     await expect(diag).toHaveAttribute('data-hydrate-ms', '')
+    await expect(diag).toHaveAttribute('data-fps-samples', '0')
 
     expect(consoleErrors).toEqual([])
   })

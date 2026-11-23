@@ -159,24 +159,22 @@ export default function DevMapRoute() {
     }
   }, [])
 
-  // Passive RAF FPS monitor in interactive mode (updates HUD display at 4 Hz to avoid extra renders)
+  // Refresh HUD summary at ~4 Hz strictly from active-interaction RAF samples (never pushes idle frames)
   useEffect(() => {
     if (!isInteractive) return
-    let rafId = 0
-    let lastTs = performance.now()
-    let lastReportTs = lastTs
-    const tick = (now: number) => {
-      const dt = now - lastTs
-      lastTs = now
-      perfWindowRef.current.push(dt, now)
-      if (now - lastReportTs >= 250) {
-        lastReportTs = now
-        setPerfSummary(perfWindowRef.current.summarize(now))
-      }
-      rafId = requestAnimationFrame(tick)
-    }
-    rafId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafId)
+    const timerId = window.setInterval(() => {
+      const next = perfWindowRef.current.summarize(performance.now())
+      setPerfSummary((prev) =>
+        prev.sampleCount === next.sampleCount &&
+        prev.p50Fps === next.p50Fps &&
+        prev.p95Fps === next.p95Fps &&
+        prev.minFps === next.minFps &&
+        prev.maxMs === next.maxMs
+          ? prev
+          : next,
+      )
+    }, 250)
+    return () => window.clearInterval(timerId)
   }, [isInteractive])
 
   const loaded = datasetsById[datasetId]
@@ -492,7 +490,8 @@ export default function DevMapRoute() {
           data-hydrate-ms={hydrateMs !== null ? String(hydrateMs) : ''}
           data-fps-p50={String(perfSummary.p50Fps)}
           data-fps-p95={String(perfSummary.p95Fps)}
-          data-fps-max={String(perfSummary.maxFps)}
+          data-fps-min={String(perfSummary.minFps)}
+          data-frame-max-ms={String(perfSummary.maxMs)}
           data-fps-samples={String(perfSummary.sampleCount)}
           data-non-converged={computed.hitMaxPasses || computed.overlapCount > 0 ? 'true' : 'false'}
           className="flex flex-wrap items-center gap-2 rounded border border-border bg-secondary px-2 py-0.5 font-mono text-[11px] text-foreground"
@@ -502,8 +501,9 @@ export default function DevMapRoute() {
           {isInteractive ? (
             <>
               <span>
-                fps(5s):{perfSummary.p50Fps}/{perfSummary.p95Fps}/{perfSummary.maxFps}
+                fps(5s):{perfSummary.p50Fps}/{perfSummary.p95Fps}/{perfSummary.minFps}
               </span>
+              <span>max:{perfSummary.maxMs}ms</span>
               <span>hydrate:{hydrateMs !== null ? `${hydrateMs}ms` : '—'}</span>
             </>
           ) : (

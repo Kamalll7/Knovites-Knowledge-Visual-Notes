@@ -10,7 +10,7 @@ export interface PerfWindowSummary {
   readonly sampleCount: number
   readonly p50Fps: number
   readonly p95Fps: number
-  readonly maxFps: number
+  readonly minFps: number
   readonly p50Ms: number
   readonly p95Ms: number
   readonly maxMs: number
@@ -20,7 +20,7 @@ export const EMPTY_PERF_SUMMARY: PerfWindowSummary = Object.freeze({
   sampleCount: 0,
   p50Fps: 0,
   p95Fps: 0,
-  maxFps: 0,
+  minFps: 0,
   p50Ms: 0,
   p95Ms: 0,
   maxMs: 0,
@@ -73,10 +73,9 @@ export class RollingPerfWindow {
   summarize(nowMs?: number): PerfWindowSummary {
     if (nowMs !== undefined) this.prune(nowMs)
     if (this.samples.length === 0) {
-      return { sampleCount: 0, p50Fps: 0, p95Fps: 0, maxFps: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 }
+      return { sampleCount: 0, p50Fps: 0, p95Fps: 0, minFps: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 }
     }
     const dts = this.samples.map((s) => s.dtMs).sort((a, b) => a - b)
-    const minMs = dts[0]!
     const p50Ms = percentile(dts, 0.5)
     const p95Ms = percentile(dts, 0.95)
     const maxMs = dts[dts.length - 1]!
@@ -84,7 +83,7 @@ export class RollingPerfWindow {
       sampleCount: dts.length,
       p50Fps: dtToFps(p50Ms),
       p95Fps: dtToFps(p95Ms),
-      maxFps: dtToFps(minMs),
+      minFps: dtToFps(maxMs),
       p50Ms: Number(p50Ms.toFixed(1)),
       p95Ms: Number(p95Ms.toFixed(1)),
       maxMs: Number(maxMs.toFixed(1)),
