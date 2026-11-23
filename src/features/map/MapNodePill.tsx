@@ -27,8 +27,12 @@ export interface MapNodePillProps {
   readonly colors: NodeColorStyles
   readonly theme: MapThemeMode
   readonly measureText?: TextMeasurerFn
+  readonly isHovered?: boolean
   readonly onSelect?: (nodeId: string) => void
   readonly onOpen?: (nodeId: string) => void
+  readonly onHoverStart?: (nodeId: string) => void
+  readonly onHoverEnd?: (nodeId: string) => void
+  readonly groupRef?: (el: SVGGElement | null) => void
 }
 
 function StatusGlyph({
@@ -93,8 +97,12 @@ export function MapNodePill({
   visibleNode,
   colors,
   theme,
+  isHovered = false,
   onSelect,
   onOpen,
+  onHoverStart,
+  onHoverEnd,
+  groupRef,
 }: MapNodePillProps) {
   const palette = MAP_THEME_PALETTES[theme]
   const isOverflow = layoutNode.kind === 'overflow'
@@ -125,21 +133,107 @@ export function MapNodePill({
     const lb = layoutNode.labelBox
     return (
       <g
+        ref={groupRef}
         data-testid="map-node"
         data-node-id={layoutNode.id}
         data-node-kind={layoutNode.kind}
         data-node-shape="circle"
         data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
+        data-hovered={isHovered ? 'true' : 'false'}
         transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onMouseEnter={() => onHoverStart?.(layoutNode.id)}
+        onMouseLeave={() => onHoverEnd?.(layoutNode.id)}
         style={{ cursor: onSelect || onOpen ? 'pointer' : 'default' }}
       >
-        {visibleNode.isFocus ? (
+        <g transform={isHovered ? 'scale(1.04)' : undefined}>
+          {visibleNode.isFocus ? (
+            <circle
+              cx={0}
+              cy={0}
+              r={r + FOCUS_HALO_STROKE_EXPAND_PX}
+              fill="none"
+              stroke={colors.accentHex}
+              strokeWidth={FOCUS_HALO_STROKE_WIDTH_PX}
+              opacity={FOCUS_HALO_OPACITY}
+              data-testid="map-node-focus-halo"
+            />
+          ) : null}
           <circle
             cx={0}
             cy={0}
-            r={r + FOCUS_HALO_STROKE_EXPAND_PX}
+            r={r}
+            fill={colors.fillHex}
+            stroke={colors.borderHex}
+            strokeWidth={strokeWidth}
+            data-testid="map-node-shape"
+          />
+          {statusColor ? (
+            <StatusGlyph
+              status={status as Exclude<NodeStatus, 'none'>}
+              color={statusColor}
+              cx={3}
+              cy={0}
+            />
+          ) : null}
+          {layoutNode.labelVisible ? (
+            <text
+              x={lb ? lb.x - layoutNode.x + lb.width / 2 : 0}
+              y={lb ? lb.y - layoutNode.y + lb.height * 0.72 : 0}
+              textAnchor="middle"
+              dominantBaseline={lb ? 'auto' : 'central'}
+              fill={colors.textHex}
+              fontSize={layoutNode.modelFontPx}
+              fontWeight={fontWeight}
+              fontFamily={fontFamily}
+              paintOrder={lb ? 'stroke' : undefined}
+              stroke={lb ? palette.bg : undefined}
+              strokeWidth={lb ? 4 : undefined}
+              strokeLinejoin={lb ? 'round' : undefined}
+              data-testid="map-node-label"
+            >
+              {titleText}
+              {badgeSuffix ? (
+                <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
+                  {badgeSuffix}
+                </tspan>
+              ) : null}
+            </text>
+          ) : null}
+        </g>
+      </g>
+    )
+  }
+
+  const halfW = layoutNode.width / 2
+  const halfH = layoutNode.height / 2
+  const textX = hasStatus ? -halfW + CAPSULE_LEFT_PAD_PX + STATUS_INDICATOR_OFFSET_X_PX : 0
+
+  return (
+    <g
+      ref={groupRef}
+      data-testid="map-node"
+      data-node-id={layoutNode.id}
+      data-node-kind={layoutNode.kind}
+      data-node-shape="capsule"
+      data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
+      data-hovered={isHovered ? 'true' : 'false'}
+      transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      onMouseEnter={() => onHoverStart?.(layoutNode.id)}
+      onMouseLeave={() => onHoverEnd?.(layoutNode.id)}
+      style={{ cursor: onSelect || onOpen ? 'pointer' : 'default' }}
+    >
+      <g transform={isHovered ? 'scale(1.04)' : undefined}>
+        {visibleNode.isFocus ? (
+          <rect
+            x={-halfW - FOCUS_HALO_STROKE_EXPAND_PX}
+            y={-halfH - FOCUS_HALO_STROKE_EXPAND_PX}
+            width={layoutNode.width + FOCUS_HALO_STROKE_EXPAND_PX * 2}
+            height={layoutNode.height + FOCUS_HALO_STROKE_EXPAND_PX * 2}
+            rx={CAPSULE_CORNER_RADIUS_PX + FOCUS_HALO_STROKE_EXPAND_PX}
             fill="none"
             stroke={colors.accentHex}
             strokeWidth={FOCUS_HALO_STROKE_WIDTH_PX}
@@ -147,37 +241,36 @@ export function MapNodePill({
             data-testid="map-node-focus-halo"
           />
         ) : null}
-        <circle
-          cx={0}
-          cy={0}
-          r={r}
+        <rect
+          x={-halfW}
+          y={-halfH}
+          width={layoutNode.width}
+          height={layoutNode.height}
+          rx={isOverflow ? halfH : CAPSULE_CORNER_RADIUS_PX}
           fill={colors.fillHex}
           stroke={colors.borderHex}
           strokeWidth={strokeWidth}
+          strokeDasharray={isOverflow ? '4 3' : undefined}
           data-testid="map-node-shape"
         />
-        {statusColor ? (
+        {hasStatus ? (
           <StatusGlyph
             status={status as Exclude<NodeStatus, 'none'>}
             color={statusColor}
-            cx={3}
+            cx={-halfW + CAPSULE_LEFT_PAD_PX + 8.5}
             cy={0}
           />
         ) : null}
         {layoutNode.labelVisible ? (
           <text
-            x={lb ? lb.x - layoutNode.x + lb.width / 2 : 0}
-            y={lb ? lb.y - layoutNode.y + lb.height * 0.72 : 0}
-            textAnchor="middle"
-            dominantBaseline={lb ? 'auto' : 'central'}
-            fill={colors.textHex}
+            x={textX}
+            y={0}
+            textAnchor={hasStatus ? 'start' : 'middle'}
+            dominantBaseline="central"
+            fill={isOverflow ? palette.fgMuted : colors.textHex}
             fontSize={layoutNode.modelFontPx}
             fontWeight={fontWeight}
             fontFamily={fontFamily}
-            paintOrder={lb ? 'stroke' : undefined}
-            stroke={lb ? palette.bg : undefined}
-            strokeWidth={lb ? 4 : undefined}
-            strokeLinejoin={lb ? 'round' : undefined}
             data-testid="map-node-label"
           >
             {titleText}
@@ -189,79 +282,6 @@ export function MapNodePill({
           </text>
         ) : null}
       </g>
-    )
-  }
-
-  const halfW = layoutNode.width / 2
-  const halfH = layoutNode.height / 2
-  const textX = hasStatus ? -halfW + CAPSULE_LEFT_PAD_PX + STATUS_INDICATOR_OFFSET_X_PX : 0
-
-  return (
-    <g
-      data-testid="map-node"
-      data-node-id={layoutNode.id}
-      data-node-kind={layoutNode.kind}
-      data-node-shape="capsule"
-      data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
-      transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      style={{ cursor: onSelect || onOpen ? 'pointer' : 'default' }}
-    >
-      {visibleNode.isFocus ? (
-        <rect
-          x={-halfW - FOCUS_HALO_STROKE_EXPAND_PX}
-          y={-halfH - FOCUS_HALO_STROKE_EXPAND_PX}
-          width={layoutNode.width + FOCUS_HALO_STROKE_EXPAND_PX * 2}
-          height={layoutNode.height + FOCUS_HALO_STROKE_EXPAND_PX * 2}
-          rx={CAPSULE_CORNER_RADIUS_PX + FOCUS_HALO_STROKE_EXPAND_PX}
-          fill="none"
-          stroke={colors.accentHex}
-          strokeWidth={FOCUS_HALO_STROKE_WIDTH_PX}
-          opacity={FOCUS_HALO_OPACITY}
-          data-testid="map-node-focus-halo"
-        />
-      ) : null}
-      <rect
-        x={-halfW}
-        y={-halfH}
-        width={layoutNode.width}
-        height={layoutNode.height}
-        rx={isOverflow ? halfH : CAPSULE_CORNER_RADIUS_PX}
-        fill={colors.fillHex}
-        stroke={colors.borderHex}
-        strokeWidth={strokeWidth}
-        strokeDasharray={isOverflow ? '4 3' : undefined}
-        data-testid="map-node-shape"
-      />
-      {hasStatus ? (
-        <StatusGlyph
-          status={status as Exclude<NodeStatus, 'none'>}
-          color={statusColor}
-          cx={-halfW + CAPSULE_LEFT_PAD_PX + 8.5}
-          cy={0}
-        />
-      ) : null}
-      {layoutNode.labelVisible ? (
-        <text
-          x={textX}
-          y={0}
-          textAnchor={hasStatus ? 'start' : 'middle'}
-          dominantBaseline="central"
-          fill={isOverflow ? palette.fgMuted : colors.textHex}
-          fontSize={layoutNode.modelFontPx}
-          fontWeight={fontWeight}
-          fontFamily={fontFamily}
-          data-testid="map-node-label"
-        >
-          {titleText}
-          {badgeSuffix ? (
-            <tspan fontSize={badgeFontPx} fill={palette.fgMuted}>
-              {badgeSuffix}
-            </tspan>
-          ) : null}
-        </text>
-      ) : null}
     </g>
   )
 }
