@@ -371,26 +371,26 @@ describe('MapSvgView, MapNodePill, MapEdges [T3.4b, FR-MAP-09, FR-MAP-12]', () =
 
             const renderFontCss = `${renderedFontWeight} ${renderedFontPx}px ${MAP_CAPSULE_BOX_CONFIG.fonts.family}`
             const badgeReserve = vn.hiddenCount > 0 ? MAP_CAPSULE_BOX_CONFIG.capsuleMetaWidthPx : 0
-            const untruncatedW = Math.ceil(
-              measurer.measure(vn.title.trim(), renderFontCss) +
-                MAP_CAPSULE_BOX_CONFIG.capsulePaddingXPx +
-                badgeReserve,
-            )
+            const maxTextW =
+              MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx -
+              MAP_CAPSULE_BOX_CONFIG.capsulePaddingXPx -
+              badgeReserve
+            const rawTitleW = measurer.measure(vn.title.trim(), renderFontCss)
 
             const badgeSuffix = vn.hiddenCount > 0 ? ` · ${vn.hiddenCount}` : ''
             const expectedText = `${ln.displayTitle}${badgeSuffix}`
             expect(labelEl.textContent).toBe(expectedText)
 
             if (ln.isTruncated) {
-              // Truncation is legal ONLY when the untruncated capsule exceeds the 268 px cap
+              // Truncation is legal ONLY when raw title exceeds the 268 px capsule text budget
               expect(
-                untruncatedW,
-                `${ds.id}/${orientation}/t${tier}/${id} truncated despite fitting (${untruncatedW} <= ${MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx})`,
-              ).toBeGreaterThan(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx)
+                rawTitleW,
+                `${ds.id}/${orientation}/t${tier}/${id} truncated despite fitting (${rawTitleW} <= ${maxTextW})`,
+              ).toBeGreaterThan(maxTextW)
             } else {
               // Untruncated layout node MUST render full title without any secondary ellipsis
               expect(ln.displayTitle).toBe(vn.title.trim())
-              expect(untruncatedW).toBeLessThanOrEqual(MAP_CAPSULE_BOX_CONFIG.capsuleMaxWidthPx)
+              expect(rawTitleW).toBeLessThanOrEqual(maxTextW)
             }
 
             // Rendered text + badge + chrome (status & padding) must fit strictly inside capsule width
