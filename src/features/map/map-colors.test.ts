@@ -15,6 +15,7 @@ import {
   mixHex,
   type MapThemeMode,
 } from '@/features/map/map-colors'
+import { EDGE_OPACITY } from '@/features/map/map-edge-path'
 
 function makeNode(
   partial: Partial<VisibleMapNode> & Pick<VisibleMapNode, 'id' | 'parentId' | 'title' | 'depth'>,
@@ -197,5 +198,79 @@ describe('map-colors [T3.4a, FR-MAP-09]', () => {
       }),
       { numRuns: 100 },
     )
+  })
+
+  it('measures non-fade edge stroke contrast ratios vs background per theme and branch (report-only for < 3:1) [T3.4c-b]', () => {
+    const summary: Record<
+      MapThemeMode,
+      {
+        minSolid: number
+        minFocus: number
+        minNormal: number
+        branches: Array<{
+          index: number
+          baseHex: string
+          solidD1: number
+          solidD4: number
+          focusD1: number
+          focusD4: number
+          normalD1: number
+          normalD4: number
+        }>
+      }
+    > = {
+      dark: { minSolid: Infinity, minFocus: Infinity, minNormal: Infinity, branches: [] },
+      light: { minSolid: Infinity, minFocus: Infinity, minNormal: Infinity, branches: [] },
+    }
+
+    for (const theme of ['dark', 'light'] as const) {
+      const pal = MAP_THEME_PALETTES[theme]
+      for (let i = 0; i < pal.branches.length; i += 1) {
+        const baseHex = pal.branches[i]!
+        const row = {
+          index: i,
+          baseHex,
+          solidD1: 0,
+          solidD4: 0,
+          focusD1: 0,
+          focusD4: 0,
+          normalD1: 0,
+          normalD4: 0,
+        }
+        for (const depth of [1, 2, 3, 4]) {
+          const hex = accentForDepth(baseHex, depth, theme)
+          const solid = Number(contrastRatio(hex, pal.bg).toFixed(2))
+          const focus = Number(
+            contrastRatio(mixHex(hex, pal.bg, EDGE_OPACITY.focus), pal.bg).toFixed(2),
+          )
+          const normal = Number(
+            contrastRatio(mixHex(hex, pal.bg, EDGE_OPACITY.normal), pal.bg).toFixed(2),
+          )
+          expect(solid).toBeGreaterThan(1)
+          expect(focus).toBeGreaterThan(1)
+          expect(normal).toBeGreaterThan(1)
+          summary[theme].minSolid = Math.min(summary[theme].minSolid, solid)
+          summary[theme].minFocus = Math.min(summary[theme].minFocus, focus)
+          summary[theme].minNormal = Math.min(summary[theme].minNormal, normal)
+          if (depth === 1) {
+            row.solidD1 = solid
+            row.focusD1 = focus
+            row.normalD1 = normal
+          }
+          if (depth === 4) {
+            row.solidD4 = solid
+            row.focusD4 = focus
+            row.normalD4 = normal
+          }
+        }
+        summary[theme].branches.push(row)
+      }
+    }
+
+    // Verify exact reported minimums stay deterministic (tokens intentionally untouched per T3.4c-b)
+    expect(summary.dark.minSolid).toBeGreaterThanOrEqual(7)
+    expect(summary.dark.minFocus).toBeGreaterThanOrEqual(6.5)
+    expect(summary.light.branches.every((b) => b.solidD1 >= 4.5)).toBe(true)
+    console.info(`[T3_4C_EDGE_CONTRAST] ${JSON.stringify(summary)}`)
   })
 })
