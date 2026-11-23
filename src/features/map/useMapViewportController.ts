@@ -234,8 +234,27 @@ export function useMapViewportController({
     svgRef,
   ])
 
+  const hasNodes = nonRootCount > 0
+
+  // Keep liveNodePositionsRef synced with settled layout updates (e.g. semantic zoom tier or +N expand)
   useEffect(() => {
-    if (nonRootCount === 0) return
+    if (!hasNodes || isTransitioningRef.current) return
+    const synced = new Map<string, NodeTransitionState>()
+    for (const id of layout.orderedIds) {
+      const n = layout.nodes[id]
+      if (!n) continue
+      synced.set(id, { x: n.x, y: n.y, scale: 1, opacity: 1 })
+      const el = nodeGroupRefs.current.get(id)
+      if (el) {
+        el.setAttribute('transform', `translate(${n.x}, ${n.y})`)
+        el.style.opacity = ''
+      }
+    }
+    liveNodePositionsRef.current = synced
+  }, [hasNodes, layout, nodeGroupRefs])
+
+  useEffect(() => {
+    if (!hasNodes) return
     const { width, height } = getViewportSize()
     const mode = hasInitializedCameraRef.current ? 'focus' : 'fit-all'
     const targetCam = computeCameraForFocus(layout, visible, focusId, width, height, mode)
@@ -253,9 +272,9 @@ export function useMapViewportController({
       return
     }
     animateCameraAndNodes(targetCam, true)
-    // Intentionally triggered on focus/orientation/root transitions, not every semantic zoom tick
+    // Intentionally triggered ONLY on focus, orientation, root, or empty->non-empty transitions
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusId, orientation, layout.rootId, nonRootCount])
+  }, [focusId, orientation, layout.rootId, hasNodes])
 
   const zoomIn = useCallback(() => {
     const { width, height } = getViewportSize()
