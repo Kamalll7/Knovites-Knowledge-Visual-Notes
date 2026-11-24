@@ -125,8 +125,15 @@ export function useMapViewportController({
   const rafIdRef = useRef<number | null>(null)
   const interactionPerfRafRef = useRef<number | null>(null)
   const isTransitioningRef = useRef(false)
+  const isAnimatingNodesRef = useRef(false)
+  const transitionLayoutRef = useRef<MapLayoutResult | null>(null)
   const isSyncingZoomRef = useRef(false)
-  const hasInitializedCameraRef = useRef(false)
+  const prevTransitionKeyRef = useRef<{
+    readonly focusId: string
+    readonly orientation: MapEdgeOrientation
+    readonly rootId: string
+    readonly hasNodes: boolean
+  } | null>(null)
   const lastReportedRef = useRef<{ scale: number; tier: ZoomTier }>({ scale: 1, tier: layout.tier })
 
   // Keep latest props accessible inside stable d3-zoom / RAF callbacks without tearing down listeners
@@ -219,6 +226,8 @@ export function useMapViewportController({
       rafIdRef.current = null
     }
     isTransitioningRef.current = false
+    isAnimatingNodesRef.current = false
+    transitionLayoutRef.current = null
   }, [])
 
   const animateCameraAndNodes = useCallback(
@@ -237,7 +246,11 @@ export function useMapViewportController({
       const applyFrame = (rawT: number) => {
         const cam = interpolateCamera(startCam, targetCam, rawT, reduced)
         applyCameraToDom(cam)
-        if (animateNodes) {
+        if (
+          animateNodes &&
+          (reduced ||
+            (isAnimatingNodesRef.current && transitionLayoutRef.current === currentLayout))
+        ) {
           const posMap = interpolateNodePositions(startPositions, currentLayout, rawT, reduced)
           liveNodePositionsRef.current = posMap
           const groupMap = nodeGroupRefs.current
@@ -270,6 +283,8 @@ export function useMapViewportController({
       }
 
       isTransitioningRef.current = true
+      isAnimatingNodesRef.current = animateNodes
+      transitionLayoutRef.current = animateNodes ? currentLayout : null
       stopInteractionPerfRaf()
       applyFrame(0)
       const tStart = performance.now()
@@ -287,6 +302,8 @@ export function useMapViewportController({
         } else {
           rafIdRef.current = null
           isTransitioningRef.current = false
+          isAnimatingNodesRef.current = false
+          transitionLayoutRef.current = null
           syncZoomBehaviorTransform(targetCam)
           notifyScaleTier(targetCam.k, true)
         }
@@ -360,7 +377,7 @@ export function useMapViewportController({
 
     zoomBehaviorRef.current = behavior
     select(svg).call(behavior)
-    if (hasInitializedCameraRef.current) {
+    if (prevTransitionKeyRef.current !== null) {
       syncZoomBehaviorTransform(cameraRef.current)
     }
     return () => {
@@ -381,13 +398,18 @@ export function useMapViewportController({
     syncZoomBehaviorTransform,
   ])
 
-  // Initial fit-all camera & smooth focus/orientation/root transitions (runs BEFORE settled sync!)
+  // Initial fit-all camera & smooth focus/orientation/root transitions (runs BEFORE layout sync!)
   useLayoutEffect(() => {
-    if (!hasNodes) return
+    if (!hasNodes) {
+      prevTransitionKeyRef.current = null
+      return
+    }
     const { width, height } = getViewportSize()
     const currentLayout = layoutRef.current
-    if (!hasInitializedCameraRef.current) {
-      hasInitializedCameraRef.current = true
+    const prev = prevTransitionKeyRef.current
+    const nextKey = { focusId, orientation, rootId: layout.rootId, hasNodes }
+    if (prev === null) {
+      prevTransitionKeyRef.current = nextKey
       const targetCam = computeCameraForFocus(
         currentLayout,
         focusId,
@@ -408,6 +430,18 @@ export function useMapViewportController({
       notifyScaleTier(targetCam.k, true)
       return
     }
+    if (
+      prev.focusId === nextKey.focusId &&
+      prev.orientation === nextKey.orientation &&
+      prev.rootId === nextKey.rootId &&
+      prev.hasNodes === nextKey.hasNodes
+    ) {
+      // React StrictMode effect re-invocation with identical props: keep camera synced without a bogus transition
+      applyCameraToDom(cameraRef.current)
+      syncZoomBehaviorTransform(cameraRef.current)
+      return
+    }
+    prevTransitionKeyRef.current = nextKey
     const targetCam = computeCameraForFocus(
       currentLayout,
       focusId,
@@ -422,9 +456,14 @@ export function useMapViewportController({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, orientation, layout.rootId, hasNodes])
 
-  // Sync settled layout updates (e.g. semantic zoom tier or +N expand) ONLY when not transitioning
+  // Always sync DOM nodes & edges whenever layout changes without a matching active node transition
+  // (e.g. semantic zoom tier T1 <-> T2 <-> T0, +N overflow expand, or font re-measure — even during camera zoom/fit)
   useLayoutEffect(() => {
-    if (!hasNodes || isTransitioningRef.current) return
+    if (!hasNodes) return
+    if (isAnimatingNodesRef.current && transitionLayoutRef.current === layout) return
+    // Disarm any stale node interpolation from a previous layout/tier so RAF cannot overwrite new-tier DOM nodes/edges
+    isAnimatingNodesRef.current = false
+    transitionLayoutRef.current = null
     const synced = new Map<string, NodeTransitionState>()
     for (const id of layout.orderedIds) {
       const n = layout.nodes[id]

@@ -14,6 +14,144 @@ async function waitForStableSvg(page: Page) {
   })
 }
 
+async function auditDomEdgeNodeConnectivity(page: Page) {
+  return page.evaluate(() => {
+    const svg = document.querySelector<SVGSVGElement>('[data-testid="map-svg"]')!
+    const viewport = document.querySelector<HTMLElement>('[data-testid="map-viewport"]')
+    const orientation = viewport?.dataset.orientation ?? 'radial'
+    const camGroup = document.querySelector<SVGGElement>('[data-testid="map-camera-group"]')!
+    const tfStr = camGroup.getAttribute('transform') ?? ''
+    const scaleMatch = /scale\(([^)]+)\)/.exec(tfStr)
+    const scale = scaleMatch ? Number.parseFloat(scaleMatch[1]!) : 1
+
+    const nodeElById = new Map<string, SVGGElement>()
+    for (const g of svg.querySelectorAll<SVGGElement>('[data-testid="map-node"]')) {
+      const id = g.dataset.nodeId
+      if (id) nodeElById.set(id, g)
+    }
+
+    const distToRectBoundary = (px: number, py: number, r: DOMRect): number => {
+      const dxOut = Math.max(r.left - px, 0, px - r.right)
+      const dyOut = Math.max(r.top - py, 0, py - r.bottom)
+      if (dxOut > 0 || dyOut > 0) return Math.hypot(dxOut, dyOut)
+      return Math.min(px - r.left, r.right - px, py - r.top, r.bottom - py)
+    }
+
+    const distToNodeEndpoint = (
+      px: number,
+      py: number,
+      nodeG: SVGGElement,
+      allowRootLabelClip: boolean,
+    ): number => {
+      const shape = nodeG.querySelector<SVGGraphicsElement>('[data-testid="map-node-shape"]')!
+      const sRect = shape.getBoundingClientRect()
+      const shapeKind = nodeG.dataset.nodeShape
+      let bestDist: number
+      if (shapeKind === 'circle') {
+        const cx = (sRect.left + sRect.right) / 2
+        const cy = (sRect.top + sRect.bottom) / 2
+        const radius = (sRect.width + sRect.height) / 4
+        bestDist = Math.abs(Math.hypot(px - cx, py - cy) - radius)
+      } else {
+        bestDist = distToRectBoundary(px, py, sRect)
+      }
+
+      if (allowRootLabelClip && orientation === 'radial' && nodeG.dataset.nodeKind === 'root') {
+        const labelBg =
+          nodeG.querySelector<SVGGraphicsElement>('[data-testid="map-node-label-bg"]') ??
+          nodeG.querySelector<SVGGraphicsElement>('[data-testid="map-node-label"]')
+        if (labelBg) {
+          const lbRect = labelBg.getBoundingClientRect()
+          // map-edge-path clips radial root edges with ROOT_LABEL_CLEARANCE_PX (4 world px) outside labelBox
+          // while label-bg expands labelBox by 4px horizontally and 1px vertically -> offset <= 3 * scale px.
+          const padY = 3 * scale
+          const expanded = new DOMRect(
+            lbRect.left,
+            lbRect.top - padY,
+            lbRect.width,
+            lbRect.height + padY * 2,
+          )
+          bestDist = Math.min(bestDist, distToRectBoundary(px, py, expanded))
+        }
+      }
+      return bestDist
+    }
+
+    const edgeGroups = Array.from(svg.querySelectorAll<SVGGElement>('[data-edge-id]'))
+    const tolPx = Math.max(5, 4 * scale + 2.5)
+    const disconnected: Array<{
+      edgeId: string
+      end: 'source' | 'target' | 'missing-node' | 'halo'
+      distPx: number
+      tolPx: number
+    }> = []
+
+    for (const eg of edgeGroups) {
+      const edgeId = eg.dataset.edgeId ?? ''
+      const [srcId, dstId] = edgeId.split('->')
+      const srcG = srcId ? nodeElById.get(srcId) : undefined
+      const dstG = dstId ? nodeElById.get(dstId) : undefined
+      if (!srcG || !dstG) {
+        disconnected.push({ edgeId, end: 'missing-node', distPx: Infinity, tolPx })
+        continue
+      }
+      const path = eg.querySelector<SVGPathElement>('[data-testid="map-edge-path"]')
+      if (!path) continue
+      const totalLen = path.getTotalLength()
+      const ctm = path.getScreenCTM()
+      if (!ctm || totalLen <= 0) continue
+
+      const p0 = path.getPointAtLength(0).matrixTransform(ctm)
+      const p1 = path.getPointAtLength(totalLen).matrixTransform(ctm)
+
+      const srcDist = distToNodeEndpoint(p0.x, p0.y, srcG, true)
+      if (srcDist > tolPx) {
+        disconnected.push({
+          edgeId,
+          end: 'source',
+          distPx: Number(srcDist.toFixed(2)),
+          tolPx: Number(tolPx.toFixed(2)),
+        })
+      }
+
+      const dstDist = distToNodeEndpoint(p1.x, p1.y, dstG, false)
+      if (dstDist > tolPx) {
+        disconnected.push({
+          edgeId,
+          end: 'target',
+          distPx: Number(dstDist.toFixed(2)),
+          tolPx: Number(tolPx.toFixed(2)),
+        })
+      }
+
+      const halo = eg.querySelector<SVGPathElement>('[data-testid="map-edge-focus-halo"]')
+      if (halo) {
+        const hLen = halo.getTotalLength()
+        const hCtm = halo.getScreenCTM()
+        if (hCtm && hLen > 0) {
+          const hp0 = halo.getPointAtLength(0).matrixTransform(hCtm)
+          const hp1 = halo.getPointAtLength(hLen).matrixTransform(hCtm)
+          const hGap = Math.max(
+            Math.hypot(hp0.x - p0.x, hp0.y - p0.y),
+            Math.hypot(hp1.x - p1.x, hp1.y - p1.y),
+          )
+          if (hGap > 2) {
+            disconnected.push({ edgeId, end: 'halo', distPx: Number(hGap.toFixed(2)), tolPx: 2 })
+          }
+        }
+      }
+    }
+
+    return {
+      edgeCount: edgeGroups.length,
+      scale: Number(scale.toFixed(3)),
+      tier: viewport?.dataset.tier ?? '',
+      orientation,
+      disconnected,
+    }
+  })
+}
+
 async function auditInteractiveMap(page: Page) {
   return page.evaluate((minFontPx: number) => {
     const svg = document.querySelector<SVGSVGElement>('[data-testid="map-svg"]')!
@@ -200,6 +338,9 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(initialAudit.statusDotPaddingViolations).toBe(0)
     expect(initialAudit.rootLabelEdgeCrossings).toBe(0)
     expect(initialAudit.passesMinFont).toBe(true)
+    const initialConn = await auditDomEdgeNodeConnectivity(page)
+    expect(initialConn.edgeCount).toBeGreaterThan(0)
+    expect(initialConn.disconnected, 'initial load edge-node connectivity').toEqual([])
 
     await page.getByTestId('map-zoom-in').click()
     await page.waitForTimeout(550)
@@ -240,6 +381,9 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     expect(afterFocusAudit.statusDotPaddingViolations).toBe(0)
     expect(afterFocusAudit.rootLabelEdgeCrossings).toBe(0)
     expect(afterFocusAudit.passesMinFont).toBe(true)
+    const afterFocusConn = await auditDomEdgeNodeConnectivity(page)
+    expect(afterFocusConn.edgeCount).toBeGreaterThan(0)
+    expect(afterFocusConn.disconnected, 'after focus settled edge-node connectivity').toEqual([])
 
     await page.screenshot({
       path: `${SCREENS_DIR}/t3.5-demo-interactive-dark.png`,
@@ -259,12 +403,16 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
       'aria-pressed',
       'true',
     )
+    await waitForStableSvg(page)
 
     const afterReloadAudit = await auditInteractiveMap(page)
     expect(afterReloadAudit.hudOverlaps).toBe(0)
     expect(afterReloadAudit.sampledEdgeNodeCrossings).toBe(0)
     expect(afterReloadAudit.labelOverflows).toBe(0)
     expect(afterReloadAudit.statusDotPaddingViolations).toBe(0)
+    const afterReloadConn = await auditDomEdgeNodeConnectivity(page)
+    expect(afterReloadConn.edgeCount).toBeGreaterThan(0)
+    expect(afterReloadConn.disconnected, 'horizontal reload edge-node connectivity').toEqual([])
 
     await page.screenshot({
       path: `${SCREENS_DIR}/t3.5-demo-horizontal-reload-dark.png`,
@@ -301,11 +449,53 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     await waitForStableSvg(page)
     const afterOverflowCount = await page.locator('[data-testid="map-node"]').count()
     expect(afterOverflowCount).toBeGreaterThan(beforeOverflowCount)
+    const afterExpandConn = await auditDomEdgeNodeConnectivity(page)
+    expect(afterExpandConn.edgeCount).toBeGreaterThan(24)
+    expect(afterExpandConn.disconnected, 'after +N expand edge-node connectivity').toEqual([])
 
     await page.screenshot({
       path: `${SCREENS_DIR}/t3.5-wide60-expanded-dark.png`,
       animations: 'disabled',
     })
+
+    // Measure wide60Children 62-node viewport bounds before vs after Fit to confirm fit-all padding math
+    const measureNodesVsSvg = () =>
+      page.evaluate(() => {
+        const svg = document.querySelector<SVGSVGElement>('[data-testid="map-svg"]')!
+        const camGroup = document.querySelector<SVGGElement>('[data-testid="map-camera-group"]')!
+        const m = /scale\(([^)]+)\)/.exec(camGroup.getAttribute('transform') ?? '')
+        const scale = m ? Number.parseFloat(m[1]!) : 1
+        const sr = svg.getBoundingClientRect()
+        let minTop = Infinity
+        let maxBottom = -Infinity
+        let minLeft = Infinity
+        let maxRight = -Infinity
+        for (const s of svg.querySelectorAll<SVGGraphicsElement>(
+          '[data-testid="map-node-shape"]',
+        )) {
+          const r = s.getBoundingClientRect()
+          minTop = Math.min(minTop, r.top - sr.top)
+          maxBottom = Math.max(maxBottom, r.bottom - sr.top)
+          minLeft = Math.min(minLeft, r.left - sr.left)
+          maxRight = Math.max(maxRight, r.right - sr.left)
+        }
+        return {
+          scale: Number(scale.toFixed(4)),
+          svgW: Math.round(sr.width),
+          svgH: Math.round(sr.height),
+          padTop: Math.round(minTop),
+          padBottom: Math.round(sr.height - maxBottom),
+          padLeft: Math.round(minLeft),
+          padRight: Math.round(sr.width - maxRight),
+        }
+      })
+    const wide60BeforePostExpandFit = await measureNodesVsSvg()
+    await page.getByTestId('map-fit').click()
+    await waitForStableSvg(page)
+    const wide60AfterPostExpandFit = await measureNodesVsSvg()
+    console.info(
+      `[T3_5_WIDE60_FIT_DIAG] ${JSON.stringify({ beforeFit: wide60BeforePostExpandFit, afterFit: wide60AfterPostExpandFit })}`,
+    )
 
     // 3. Dev measurement HUD: real IndexedDB hydrate benchmark + active-interaction RAF FPS log + Reset pengukuran
     await page.emulateMedia({ reducedMotion: 'no-preference' })
@@ -632,6 +822,102 @@ test.describe('Map interactions, semantic zoom, persistence, and dev perf HUD [T
     await waitForStableSvg(page)
     const camAfterPullBack = await parseCamera()
     expect(camAtClamp.x - camAfterPullBack.x).toBeGreaterThan(80)
+
+    expect(consoleErrors).toEqual([])
+  })
+
+  test('keeps every DOM edge endpoint attached to its source/target node across semantic zoom tier changes (T1 -> T2 -> T0 -> T2) [T3.5-fix2]', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000)
+
+    const consoleErrors: string[] = []
+    page.on('pageerror', (err) => consoleErrors.push(err.message))
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+
+    await page.setViewportSize(VIEWPORT)
+
+    // Test horizontal mode with normal motion enabled (catches T1 -> T2 initial tier upgrade + animated T2 -> T0 -> T2)
+    await page.goto('/#/__dev/map?dataset=demo&interactive=1&mode=horizontal&theme=dark')
+    await page.waitForSelector('[data-testid="dev-map-route"][data-ready="true"]')
+    await page.waitForSelector('[data-testid="map-viewport"]')
+    await waitForStableSvg(page)
+
+    const viewport = page.getByTestId('map-viewport')
+    const zoomOutBtn = page.getByTestId('map-zoom-out')
+    const zoomInBtn = page.getByTestId('map-zoom-in')
+
+    // Start at T2 (upgraded from initial T1 by fit-all -> 120% T2), verify connectivity
+    await expect(viewport).toHaveAttribute('data-tier', '2')
+    const initConn = await auditDomEdgeNodeConnectivity(page)
+    expect(initConn.edgeCount).toBe(14)
+    expect(initConn.disconnected, 'horizontal initial T1 -> T2 connectivity').toEqual([])
+
+    // Zoom out repeatedly until Tier 0
+    for (let i = 0; i < 6; i += 1) {
+      const curTier = await viewport.getAttribute('data-tier')
+      if (curTier === '0') break
+      await zoomOutBtn.click()
+      await page.waitForTimeout(620)
+      await waitForStableSvg(page)
+      const stepConn = await auditDomEdgeNodeConnectivity(page)
+      expect(stepConn.disconnected, `zoom-out step ${i} (tier=${stepConn.tier})`).toEqual([])
+    }
+    await expect(viewport).toHaveAttribute('data-tier', '0')
+    const t0Conn = await auditDomEdgeNodeConnectivity(page)
+    expect(t0Conn.edgeCount).toBe(3)
+    expect(t0Conn.disconnected, 'horizontal T0 connectivity').toEqual([])
+
+    // Zoom back in rapidly (overlapping animations while tier flips T0 -> T2!)
+    await zoomInBtn.click()
+    await page.waitForTimeout(150)
+    await zoomInBtn.click()
+    await page.waitForTimeout(150)
+    await zoomInBtn.click()
+    await page.waitForTimeout(700)
+    await waitForStableSvg(page)
+
+    // Ensure we reach T2
+    for (let i = 0; i < 4; i += 1) {
+      const curTier = await viewport.getAttribute('data-tier')
+      if (curTier === '2') break
+      await zoomInBtn.click()
+      await page.waitForTimeout(620)
+      await waitForStableSvg(page)
+    }
+    await expect(viewport).toHaveAttribute('data-tier', '2')
+    const backT2Conn = await auditDomEdgeNodeConnectivity(page)
+    expect(backT2Conn.edgeCount).toBe(14)
+    expect(backT2Conn.disconnected, 'horizontal T0 -> T2 connectivity').toEqual([])
+
+    // Also test explicit T1 -> T2 -> T0 -> T2 via wheel zoom on radial mode
+    await page.goto('/#/__dev/map?dataset=demo&interactive=1&mode=radial&theme=dark')
+    await page.waitForSelector('[data-testid="dev-map-route"][data-ready="true"]')
+    await waitForStableSvg(page)
+
+    const svgBox = (await page.getByTestId('map-svg').boundingBox())!
+    await page.mouse.move(svgBox.x + svgBox.width / 2, svgBox.y + svgBox.height / 2)
+
+    // Wheel zoom out to T0
+    for (let i = 0; i < 6; i += 1) {
+      await page.mouse.wheel(0, 220)
+      await waitForStableSvg(page)
+    }
+    await expect(viewport).toHaveAttribute('data-tier', '0')
+    const radT0 = await auditDomEdgeNodeConnectivity(page)
+    expect(radT0.disconnected, 'radial wheel T0 connectivity').toEqual([])
+
+    // Wheel zoom back in to T2
+    for (let i = 0; i < 8; i += 1) {
+      await page.mouse.wheel(0, -220)
+      await waitForStableSvg(page)
+    }
+    await expect(viewport).toHaveAttribute('data-tier', '2')
+    const radT2 = await auditDomEdgeNodeConnectivity(page)
+    expect(radT2.edgeCount).toBe(14)
+    expect(radT2.disconnected, 'radial wheel T0 -> T2 connectivity').toEqual([])
 
     expect(consoleErrors).toEqual([])
   })

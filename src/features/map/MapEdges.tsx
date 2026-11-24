@@ -64,7 +64,7 @@ export function MapEdges({ edges, nodeColors, fallbackStroke, edgeRefs }: MapEdg
             const { sx, sy, tx, ty } = edge.controlPoints
             return (
               <linearGradient
-                key={edge.gradientId}
+                key={edge.id}
                 ref={(el) => setEdgeRefField(edgeRefs, edge.id, 'gradient', el)}
                 id={edge.gradientId!}
                 gradientUnits="userSpaceOnUse"
