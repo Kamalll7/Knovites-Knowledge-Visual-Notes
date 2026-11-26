@@ -2,14 +2,18 @@ import { castDraft } from 'immer'
 import { createStore, type StoreApi } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createIdGenerator, nowUtcIso } from '@/app/clock-id'
-import type { NodeStatus, NodeType } from '@/domain/schema'
+import type { CanvasJson, NodeStatus, NodeType, SchemaIssue, VirtualRootId } from '@/domain/schema'
+import { serializeCanvasJson } from '@/domain/serialize'
 import {
+  VIRTUAL_ROOT_ID,
   buildTree,
   createNode as domainCreateNode,
   deleteNode as domainDeleteNode,
+  isVirtualRootId,
   moveNode as domainMoveNode,
   renameNode as domainRenameNode,
   reorderNode as domainReorderNode,
+  resolveCanvasFilePath,
   type Changeset,
   type ReorderNodeInput,
   type TreeBuildEntry,
@@ -21,15 +25,76 @@ import {
   appendErrorLog,
   applyChangeset,
   finalizeSoftDeletes,
+  getCanvasRecord,
   loadTreeBuildEntries,
   restoreSoftDeletedSubtree,
   softDeleteSubtree,
   type ErrorLogRecord,
   type KnovitesDatabase,
   type RestoreSoftDeleteResult,
+  type StoredCanvasRecord,
 } from '@/storage'
 
 export const UNDO_DELETE_TIMEOUT_MS = 10_000
+export const HOME_PAGE_TITLE = 'Home' as const
+export const HOME_PAGE_ROUTE = `/n/${VIRTUAL_ROOT_ID}` as const
+
+export function getPageRouteForNode(nodeId: string): string {
+  return isVirtualRootId(nodeId) ? HOME_PAGE_ROUTE : `/n/${nodeId}`
+}
+
+export function canMutateTreeNode(nodeId: string): boolean {
+  return !isVirtualRootId(nodeId)
+}
+
+export interface RootHomeState {
+  id: VirtualRootId
+  title: string
+  hasCanvas: boolean
+  assets: string[]
+  extraFiles: string[]
+  corrupt: boolean
+  corruptErrors?: SchemaIssue[]
+  newerSchemaVersion?: number
+}
+
+export type PageTarget =
+  | {
+      kind: 'home'
+      nodeId: VirtualRootId
+      title: string
+      route: string
+      hasCanvas: boolean
+      assets: string[]
+      extraFiles: string[]
+      canMutateTree: false
+      corrupt: boolean
+      corruptErrors?: SchemaIssue[]
+      newerSchemaVersion?: number
+    }
+  | {
+      kind: 'node'
+      nodeId: string
+      title: string
+      path: string
+      route: string
+      hasCanvas: boolean
+      assets: string[]
+      extraFiles: string[]
+      canMutateTree: boolean
+      corrupt: boolean
+      corruptErrors?: SchemaIssue[]
+      newerSchemaVersion?: number
+    }
+
+export interface LoadedPageCanvas {
+  nodeId: string
+  exists: boolean
+  doc: CanvasJson
+  corrupt: boolean
+  corruptErrors?: SchemaIssue[]
+  newerSchemaVersion?: number
+}
 
 export interface StorageErrorState {
   code: string
@@ -58,6 +123,7 @@ export type StoreOperationResult =
 
 export interface WorkspaceStorageAdapter {
   loadEntries: () => Promise<TreeBuildEntry[]>
+  loadCanvas: (nodeId: string) => Promise<StoredCanvasRecord | undefined>
   applyChangeset: (changeset: Changeset, options?: { now?: string }) => Promise<void>
   softDeleteSubtree: (nodeIds: readonly string[], deletedAt: string) => Promise<void>
   restoreSoftDeletedSubtree: (
@@ -81,6 +147,7 @@ export interface WorkspaceStoreDeps {
 export interface WorkspaceStoreState {
   hydrated: boolean
   tree: TreeState
+  rootHome: RootHomeState
   issues: TreeIssue[]
   pendingUndoDelete: PendingUndoDelete | null
   lastUndoResult: RestoreSoftDeleteResult | null
@@ -89,6 +156,9 @@ export interface WorkspaceStoreState {
   isReadOnlyTab: boolean
   isLockSupported: boolean
   hydrate: () => Promise<void>
+  resolvePageTarget: (nodeId: string) => PageTarget | null
+  loadPageCanvas: (nodeId: string) => Promise<LoadedPageCanvas>
+  savePageCanvas: (nodeId: string, doc: CanvasJson) => Promise<StoreOperationResult>
   createNode: (input: {
     title: string
     parentId: string | null
@@ -116,9 +186,52 @@ export interface WorkspaceStoreState {
 
 export type WorkspaceStoreApi = StoreApi<WorkspaceStoreState>
 
+export function selectPageTarget(
+  state: Pick<WorkspaceStoreState, 'tree' | 'rootHome'>,
+  nodeId: string,
+): PageTarget | null {
+  if (isVirtualRootId(nodeId)) {
+    return {
+      kind: 'home',
+      nodeId: VIRTUAL_ROOT_ID,
+      title: state.rootHome.title,
+      route: HOME_PAGE_ROUTE,
+      hasCanvas: state.rootHome.hasCanvas,
+      assets: state.rootHome.assets,
+      extraFiles: state.rootHome.extraFiles,
+      canMutateTree: false,
+      corrupt: state.rootHome.corrupt,
+      ...(state.rootHome.corruptErrors ? { corruptErrors: state.rootHome.corruptErrors } : {}),
+      ...(state.rootHome.newerSchemaVersion !== undefined
+        ? { newerSchemaVersion: state.rootHome.newerSchemaVersion }
+        : {}),
+    }
+  }
+
+  const node = state.tree.nodes[nodeId]
+  if (!node) return null
+  return {
+    kind: 'node',
+    nodeId: node.id,
+    title: node.meta.title,
+    path: node.path,
+    route: getPageRouteForNode(node.id),
+    hasCanvas: node.hasCanvas,
+    assets: node.assets,
+    extraFiles: node.extraFiles,
+    canMutateTree: !node.corrupt && node.newerSchemaVersion === undefined,
+    corrupt: node.corrupt,
+    ...(node.corruptErrors ? { corruptErrors: node.corruptErrors } : {}),
+    ...(node.newerSchemaVersion !== undefined
+      ? { newerSchemaVersion: node.newerSchemaVersion }
+      : {}),
+  }
+}
+
 export function createDexieWorkspaceAdapter(db: KnovitesDatabase): WorkspaceStorageAdapter {
   return {
     loadEntries: () => loadTreeBuildEntries(db),
+    loadCanvas: (nodeId) => getCanvasRecord(db, nodeId),
     applyChangeset: (changeset, options) => applyChangeset(db, changeset, options),
     softDeleteSubtree: (nodeIds, deletedAt) => softDeleteSubtree(db, { nodeIds, deletedAt }),
     restoreSoftDeletedSubtree: (nodeIds, now) => restoreSoftDeletedSubtree(db, nodeIds, now),
@@ -135,12 +248,53 @@ export function createUnavailableStorageAdapter(reasonMessage: string): Workspac
   }
   return {
     loadEntries: rejectUnavailable,
+    loadCanvas: rejectUnavailable,
     applyChangeset: rejectUnavailable,
     softDeleteSubtree: rejectUnavailable,
     restoreSoftDeletedSubtree: rejectUnavailable,
     finalizeSoftDeletes: rejectUnavailable,
     appendErrorLog: async () => {},
   }
+}
+
+function makeEmptyRootHomeState(): RootHomeState {
+  return {
+    id: VIRTUAL_ROOT_ID,
+    title: HOME_PAGE_TITLE,
+    hasCanvas: false,
+    assets: [],
+    extraFiles: [],
+    corrupt: false,
+  }
+}
+
+function buildRootHomeState(tree: TreeState): RootHomeState {
+  return {
+    id: VIRTUAL_ROOT_ID,
+    title: HOME_PAGE_TITLE,
+    hasCanvas: tree.rootHasCanvas ?? false,
+    assets: tree.rootAssets ? [...tree.rootAssets] : [],
+    extraFiles: tree.rootExtraFiles ? [...tree.rootExtraFiles] : [],
+    corrupt: Boolean(tree.rootCanvasCorrupt),
+    ...(tree.rootCanvasCorruptErrors ? { corruptErrors: tree.rootCanvasCorruptErrors } : {}),
+    ...(tree.rootCanvasNewerSchemaVersion !== undefined
+      ? { newerSchemaVersion: tree.rootCanvasNewerSchemaVersion }
+      : {}),
+  }
+}
+
+function guardNotVirtualRoot(
+  nodeId: string,
+  action: 'delete' | 'rename' | 'move' | 'reorder',
+): StoreOperationResult | null {
+  if (isVirtualRootId(nodeId)) {
+    return {
+      ok: false,
+      reason: 'cannot_mutate_root',
+      message: `Cannot ${action} virtual root "${VIRTUAL_ROOT_ID}".`,
+    }
+  }
+  return null
 }
 
 function collectSubtreeIds(tree: TreeState, rootId: string): string[] {
@@ -257,7 +411,8 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
 
       return {
         hydrated: false,
-        tree: { nodes: {}, rootIds: [] },
+        tree: { nodes: {}, rootIds: [], rootHasCanvas: false, rootAssets: [], rootExtraFiles: [] },
+        rootHome: makeEmptyRootHomeState(),
         issues: [],
         pendingUndoDelete: null,
         lastUndoResult: null,
@@ -281,6 +436,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             pendingRetryOp = null
             set((draft) => {
               draft.tree = castDraft(built.state)
+              draft.rootHome = castDraft(buildRootHomeState(built.state))
               draft.issues = built.issues
               draft.pendingUndoDelete = null
               draft.lastUndoResult = null
@@ -297,6 +453,123 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
           }
         },
 
+        resolvePageTarget: (nodeId: string) => selectPageTarget(get(), nodeId),
+
+        loadPageCanvas: async (nodeId: string): Promise<LoadedPageCanvas> => {
+          const record = await deps.storage.loadCanvas(nodeId)
+          if (!record || record.deletedAt !== 0) {
+            return {
+              nodeId,
+              exists: false,
+              doc: { schema: 1, elements: {} },
+              corrupt: false,
+            }
+          }
+          return {
+            nodeId,
+            exists: true,
+            doc: record.doc ?? { schema: 1, elements: {} },
+            corrupt: record.corrupt,
+            ...(record.corruptErrors ? { corruptErrors: record.corruptErrors } : {}),
+            ...(record.newerSchemaVersion !== undefined
+              ? { newerSchemaVersion: record.newerSchemaVersion }
+              : {}),
+          }
+        },
+
+        savePageCanvas: async (nodeId: string, doc: CanvasJson): Promise<StoreOperationResult> => {
+          if (get().isReadOnlyTab) {
+            return {
+              ok: false,
+              reason: 'readonly_tab',
+              message: 'This tab is read-only because another tab holds write access.',
+            }
+          }
+          if (get().storageError !== null) {
+            return {
+              ok: false,
+              reason: 'storage_error',
+              message:
+                'Cannot modify workspace while local storage has unsaved changes. Retry saving first.',
+            }
+          }
+
+          let canvasFilePath: string
+          if (isVirtualRootId(nodeId)) {
+            const rootHome = get().rootHome
+            if (rootHome.newerSchemaVersion !== undefined) {
+              return {
+                ok: false,
+                reason: 'newer_schema_node',
+                message: `Cannot edit home canvas (uses newer schema v${rootHome.newerSchemaVersion}).`,
+              }
+            }
+            if (rootHome.corrupt) {
+              return {
+                ok: false,
+                reason: 'corrupt_node',
+                message: 'Cannot edit corrupt read-only home canvas.',
+              }
+            }
+            canvasFilePath = resolveCanvasFilePath('')
+          } else {
+            const node = get().tree.nodes[nodeId]
+            if (!node) {
+              return {
+                ok: false,
+                reason: 'not_found',
+                message: `Node "${nodeId}" does not exist.`,
+              }
+            }
+            if (node.newerSchemaVersion !== undefined) {
+              return {
+                ok: false,
+                reason: 'newer_schema_node',
+                message: `Cannot edit canvas for read-only node "${node.path}" (schema v${node.newerSchemaVersion}).`,
+              }
+            }
+            if (node.corrupt) {
+              return {
+                ok: false,
+                reason: 'corrupt_node',
+                message: `Cannot edit canvas for corrupt read-only node "${node.path}".`,
+              }
+            }
+            canvasFilePath = resolveCanvasFilePath(node.path)
+          }
+
+          const now = getNow()
+          const serialized = serializeCanvasJson(doc)
+          const changeset: Changeset = {
+            upserts: [{ path: canvasFilePath, content: serialized }],
+            moves: [],
+            deletes: [],
+          }
+
+          set((draft) => {
+            if (isVirtualRootId(nodeId)) {
+              draft.tree.rootHasCanvas = true
+              draft.rootHome.hasCanvas = true
+            } else if (draft.tree.nodes[nodeId]) {
+              draft.tree.nodes[nodeId]!.hasCanvas = true
+            }
+          })
+
+          try {
+            await deps.storage.applyChangeset(changeset, { now })
+          } catch (error) {
+            pendingRetryOp = async () => {
+              await deps.storage.applyChangeset(changeset, { now })
+            }
+            await recordStorageFailure('storage_write_failed', error)
+          }
+
+          return {
+            ok: true,
+            nodeId,
+          }
+        },
+
         createNode: (input) =>
           executeTreeMutation((tree, now) =>
             domainCreateNode(tree, {
@@ -306,32 +579,43 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             }),
           ),
 
-        renameNode: (input) =>
-          executeTreeMutation((tree, now) =>
+        renameNode: async (input) => {
+          const rootBlocked = guardNotVirtualRoot(input.nodeId, 'rename')
+          if (rootBlocked) return rootBlocked
+          return executeTreeMutation((tree, now) =>
             domainRenameNode(tree, {
               ...input,
               now,
             }),
-          ),
+          )
+        },
 
-        moveNode: (input) =>
-          executeTreeMutation((tree, now) =>
+        moveNode: async (input) => {
+          const rootBlocked = guardNotVirtualRoot(input.nodeId, 'move')
+          if (rootBlocked) return rootBlocked
+          return executeTreeMutation((tree, now) =>
             domainMoveNode(tree, {
               ...input,
               now,
             }),
-          ),
+          )
+        },
 
-        reorderNode: (input) =>
-          executeTreeMutation((tree, now) => {
+        reorderNode: async (input) => {
+          const rootBlocked = guardNotVirtualRoot(input.nodeId, 'reorder')
+          if (rootBlocked) return rootBlocked
+          return executeTreeMutation((tree, now) => {
             const domainInput: ReorderNodeInput =
               'direction' in input
                 ? { nodeId: input.nodeId, direction: input.direction, now }
                 : { nodeId: input.nodeId, targetIndex: input.targetIndex, now }
             return domainReorderNode(tree, domainInput)
-          }),
+          })
+        },
 
         deleteNode: async (nodeId: string): Promise<StoreOperationResult> => {
+          const rootBlocked = guardNotVirtualRoot(nodeId, 'delete')
+          if (rootBlocked) return rootBlocked
           if (get().isReadOnlyTab) {
             return {
               ok: false,
@@ -421,6 +705,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             }
             set((draft) => {
               draft.tree = castDraft(built.state)
+              draft.rootHome = castDraft(buildRootHomeState(built.state))
               draft.issues = built.issues
               draft.pendingUndoDelete = null
               draft.lastUndoResult = restoreResult

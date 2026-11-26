@@ -4,23 +4,31 @@ import fc from 'fast-check'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '@/app/App'
 import {
+  HOME_PAGE_ROUTE,
+  HOME_PAGE_TITLE,
   UNDO_DELETE_TIMEOUT_MS,
+  canMutateTreeNode,
   createDexieWorkspaceAdapter,
   createUnavailableStorageAdapter,
   createWorkspaceStore,
+  getPageRouteForNode,
+  selectPageTarget,
   type WorkspaceStorageAdapter,
 } from '@/app/store'
 import { serializeCanvasJson } from '@/domain/serialize'
+import { VIRTUAL_ROOT_ID } from '@/domain/tree'
 import {
   collectDirtyFiles,
   createBrowserTabLockCoordinator,
   createFakeTabLockRegistry,
   createKnovitesDatabase,
+  getCanvasRecord,
   getEffectiveDeletes,
   getMovedBasePaths,
   getPendingDeletes,
   loadTreeBuildEntries,
   saveAsset,
+  saveRootExtraFiles,
 } from '@/storage'
 
 function createDeterministicClock(startIso = '2026-11-19T10:00:00Z') {
@@ -1041,5 +1049,231 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     store2.getState().dispose()
     db1.close()
     db2.close()
+  })
+
+  describe('home root ("__root__") hydrate, mutation guards, and page access contract [M3-HomeRoot]', () => {
+    it('hydrates lazy absent root canvas cleanly, loads/saves root canvas lazily, and reloads persisted home root state', async () => {
+      const indexedDB = new IDBFactory()
+      const db1 = createKnovitesDatabase('store-home-root-lazy-test', { indexedDB, IDBKeyRange })
+      const store1 = createWorkspaceStore({
+        storage: createDexieWorkspaceAdapter(db1),
+        now: createDeterministicClock('2026-11-26T10:00:00Z'),
+      })
+
+      await store1.getState().hydrate()
+      expect(store1.getState().hydrated).toBe(true)
+      expect(store1.getState().rootHome).toEqual({
+        id: VIRTUAL_ROOT_ID,
+        title: HOME_PAGE_TITLE,
+        hasCanvas: false,
+        assets: [],
+        extraFiles: [],
+        corrupt: false,
+      })
+      expect(await getCanvasRecord(db1, VIRTUAL_ROOT_ID)).toBeUndefined()
+      expect(await collectDirtyFiles(db1)).toEqual({
+        nodes: [],
+        canvases: [],
+        assets: [],
+        pendingDeletes: [],
+      })
+
+      // Page access contract resolves __root__ even when lazy/uncreated, without writing to IndexedDB
+      expect(HOME_PAGE_ROUTE).toBe('/n/__root__')
+      expect(getPageRouteForNode(VIRTUAL_ROOT_ID)).toBe('/n/__root__')
+      expect(getPageRouteForNode('01JC8ZQ4M7X2K9T5VB3N6D8RHW')).toBe(
+        '/n/01JC8ZQ4M7X2K9T5VB3N6D8RHW',
+      )
+      expect(canMutateTreeNode(VIRTUAL_ROOT_ID)).toBe(false)
+      expect(canMutateTreeNode('01JC8ZQ4M7X2K9T5VB3N6D8RHW')).toBe(true)
+
+      const homeTarget = store1.getState().resolvePageTarget(VIRTUAL_ROOT_ID)
+      expect(homeTarget).toEqual({
+        kind: 'home',
+        nodeId: VIRTUAL_ROOT_ID,
+        title: HOME_PAGE_TITLE,
+        route: '/n/__root__',
+        hasCanvas: false,
+        assets: [],
+        extraFiles: [],
+        canMutateTree: false,
+        corrupt: false,
+      })
+      expect(selectPageTarget(store1.getState(), VIRTUAL_ROOT_ID)).toEqual(homeTarget)
+
+      const lazyLoaded = await store1.getState().loadPageCanvas(VIRTUAL_ROOT_ID)
+      expect(lazyLoaded).toEqual({
+        nodeId: VIRTUAL_ROOT_ID,
+        exists: false,
+        doc: { schema: 1, elements: {} },
+        corrupt: false,
+      })
+      expect(await getCanvasRecord(db1, VIRTUAL_ROOT_ID)).toBeUndefined()
+
+      // First edit saves root canvas lazily as 'canvas.json' without creating any db.nodes row
+      const savedHome = await store1.getState().savePageCanvas(VIRTUAL_ROOT_ID, {
+        schema: 1,
+        elements: {
+          e_home0001: {
+            type: 'text',
+            x: 10,
+            y: 20,
+            w: 300,
+            z: 'a0',
+            style: { bg: null, border: null },
+            content: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Welcome Home' }] }],
+            },
+            updatedAt: '2026-11-26T10:00:05Z',
+          },
+        },
+      })
+      expect(savedHome).toEqual({ ok: true, nodeId: VIRTUAL_ROOT_ID })
+      expect(store1.getState().rootHome.hasCanvas).toBe(true)
+      expect(store1.getState().tree.rootHasCanvas).toBe(true)
+      expect(await db1.nodes.get(VIRTUAL_ROOT_ID)).toBeUndefined()
+
+      await saveAsset(db1, {
+        nodeId: VIRTUAL_ROOT_ID,
+        path: 'assets/7ab1c2d3e4f50987.webp',
+        basePath: null,
+        blob: new Uint8Array([1, 2, 3]),
+        sha: null,
+        dirty: 1,
+        deletedAt: 0,
+      })
+      await saveRootExtraFiles(db1, ['README.md', '.gitignore'], '2026-11-26T10:00:06Z')
+
+      const dirty = await collectDirtyFiles(db1)
+      expect(dirty.canvases.map((c) => ({ nodeId: c.nodeId, path: c.path }))).toEqual([
+        { nodeId: VIRTUAL_ROOT_ID, path: 'canvas.json' },
+      ])
+      expect(dirty.assets.map((a) => ({ nodeId: a.nodeId, path: a.path }))).toEqual([
+        { nodeId: VIRTUAL_ROOT_ID, path: 'assets/7ab1c2d3e4f50987.webp' },
+      ])
+
+      store1.getState().dispose()
+      db1.close()
+
+      // Reload: hydrate restores root canvas, rootAssets, and rootExtraFiles cleanly
+      const db2 = createKnovitesDatabase('store-home-root-lazy-test', { indexedDB, IDBKeyRange })
+      const store2 = createWorkspaceStore({
+        storage: createDexieWorkspaceAdapter(db2),
+        now: createDeterministicClock('2026-11-26T10:05:00Z'),
+      })
+      await store2.getState().hydrate()
+
+      expect(store2.getState().rootHome).toEqual({
+        id: VIRTUAL_ROOT_ID,
+        title: HOME_PAGE_TITLE,
+        hasCanvas: true,
+        assets: ['assets/7ab1c2d3e4f50987.webp'],
+        extraFiles: ['.gitignore', 'README.md'],
+        corrupt: false,
+      })
+      const loadedAfterReload = await store2.getState().loadPageCanvas(VIRTUAL_ROOT_ID)
+      expect(loadedAfterReload.exists).toBe(true)
+      expect(Object.keys(loadedAfterReload.doc.elements)).toEqual(['e_home0001'])
+
+      store2.getState().dispose()
+      db2.close()
+    })
+
+    it('rejects delete, rename, move, and reorder on "__root__" at the store guard without touching state, active Undo toast, clock, or dirty tracking', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const indexedDB = new IDBFactory()
+      const db = createKnovitesDatabase('store-root-guard-test', { indexedDB, IDBKeyRange })
+      const baseAdapter = createDexieWorkspaceAdapter(db)
+      const finalizeSpy = vi.fn(baseAdapter.finalizeSoftDeletes)
+      const softDeleteSpy = vi.fn(baseAdapter.softDeleteSubtree)
+      const applyChangesetSpy = vi.fn(baseAdapter.applyChangeset)
+      const baseClock = createDeterministicClock('2026-11-26T10:00:00Z')
+      const nowSpy = vi.fn(() => baseClock())
+
+      const store = createWorkspaceStore({
+        storage: {
+          ...baseAdapter,
+          finalizeSoftDeletes: finalizeSpy,
+          softDeleteSubtree: softDeleteSpy,
+          applyChangeset: applyChangesetSpy,
+        },
+        now: nowSpy,
+      })
+
+      await store.getState().hydrate()
+      const pwn = await store.getState().createNode({ title: 'PWN', parentId: null })
+      const re = await store.getState().createNode({ title: 'RE', parentId: VIRTUAL_ROOT_ID })
+      expect(pwn.ok && re.ok).toBe(true)
+      if (!pwn.ok || !re.ok) return
+      expect(store.getState().tree.nodes[re.nodeId]?.parentId).toBeNull()
+
+      // Delete PWN so there is an active 10s Undo toast in pendingUndoDelete
+      expect((await store.getState().deleteNode(pwn.nodeId)).ok).toBe(true)
+      const pendingBefore = store.getState().pendingUndoDelete
+      expect(pendingBefore?.rootNodeId).toBe(pwn.nodeId)
+
+      const treeBefore = store.getState().tree
+      const dirtyBefore = await collectDirtyFiles(db)
+      finalizeSpy.mockClear()
+      softDeleteSpy.mockClear()
+      applyChangesetSpy.mockClear()
+      nowSpy.mockClear()
+
+      // 1. Delete __root__ while an Undo toast is active MUST be rejected by store guard
+      //    and MUST NOT finalize pendingUndoDelete or touch storage/clock!
+      const delRoot = await store.getState().deleteNode(VIRTUAL_ROOT_ID)
+      expect(delRoot.ok).toBe(false)
+      if (!delRoot.ok) expect(delRoot.reason).toBe('cannot_mutate_root')
+      expect(store.getState().pendingUndoDelete).toEqual(pendingBefore)
+      expect(finalizeSpy).not.toHaveBeenCalled()
+      expect(softDeleteSpy).not.toHaveBeenCalled()
+
+      // 2. Rename, move, reorder __root__ MUST be rejected by store guard before touching clock/storage
+      const renRoot = await store
+        .getState()
+        .renameNode({ nodeId: VIRTUAL_ROOT_ID, title: 'Illegal Rename' })
+      expect(renRoot.ok).toBe(false)
+      if (!renRoot.ok) expect(renRoot.reason).toBe('cannot_mutate_root')
+
+      const movRoot = await store
+        .getState()
+        .moveNode({ nodeId: VIRTUAL_ROOT_ID, newParentId: re.nodeId })
+      expect(movRoot.ok).toBe(false)
+      if (!movRoot.ok) expect(movRoot.reason).toBe('cannot_mutate_root')
+
+      const reordRoot = await store
+        .getState()
+        .reorderNode({ nodeId: VIRTUAL_ROOT_ID, direction: 'earlier' })
+      expect(reordRoot.ok).toBe(false)
+      if (!reordRoot.ok) expect(reordRoot.reason).toBe('cannot_mutate_root')
+
+      expect(nowSpy).not.toHaveBeenCalled()
+      expect(applyChangesetSpy).not.toHaveBeenCalled()
+      expect(store.getState().tree).toBe(treeBefore)
+      expect(store.getState().hasUnsavedChanges).toBe(false)
+      expect(store.getState().storageError).toBeNull()
+      expect(await collectDirtyFiles(db)).toEqual(dirtyBefore)
+      expect(await getPendingDeletes(db)).toEqual([])
+
+      // 3. Even on a read-only tab, __root__ mutations still reject with cannot_mutate_root at the store guard
+      store.getState().setReadOnlyTab(true)
+      const roDelRoot = await store.getState().deleteNode(VIRTUAL_ROOT_ID)
+      const roRenRoot = await store
+        .getState()
+        .renameNode({ nodeId: VIRTUAL_ROOT_ID, title: 'Blocked' })
+      expect(roDelRoot.ok).toBe(false)
+      expect(roRenRoot.ok).toBe(false)
+      if (!roDelRoot.ok) expect(roDelRoot.reason).toBe('cannot_mutate_root')
+      if (!roRenRoot.ok) expect(roRenRoot.reason).toBe('cannot_mutate_root')
+
+      // Restoring writer role confirms original PWN Undo toast is still alive and works!
+      store.getState().setReadOnlyTab(false)
+      expect(await store.getState().undoDelete()).toBe(true)
+      expect(store.getState().tree.nodes[pwn.nodeId]?.meta.title).toBe('PWN')
+
+      store.getState().dispose()
+      db.close()
+    })
   })
 })
