@@ -68,7 +68,7 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
 - **T3.5** Pan dan zoom (`d3-zoom`), semantic zoom, fit dan recenter (FR-MAP-06, FR-MAP-08). **Checkpoint pemilik.**
 - **T3.6** Transisi fokus: interpolasi per id, dapat disela, reduced-motion (FR-MAP-05). **Checkpoint pemilik.**
 - **T3.7** Keyboard, breadcrumb, toolbar node, dialog Create, Rename, Move to, Delete, ubah tipe, status, warna (FR-MAP-07, FR-MAP-10, FR-MAP-11, `spec-nodes-search.md` §6.7) — *[bergantung pada Task sisi data home root untuk membuka halaman home & mengunci root dari Delete/Move/Rename]*.
-- **T3.8** Performa: ukur dataset 150 dan 2.000 node, perbaiki, screenshot semua dataset, laporan `docs/perf.md` (FR-MAP-17).
+- **T3.8** Performa: ukur dataset 150 dan 2.000 node, perbaiki, screenshot semua dataset, laporan `docs/perf.md` (FR-MAP-17) — *[Selesai 2026-11-26; hasil lengkap di [`docs/perf.md`](perf.md), guard E2E di `e2e/map-perf.spec.ts`]*.
 - **T3.9 (P1)** Minimap, outline view, drag-and-drop pindah node, busur cross-link.
 - **Syarat M3 (tinjauan screenshot Spike S3, wajib terpenuhi di M3):**
   - Lebar kapsul dihitung dari pengukuran teks nyata (tidak boleh ada judul terpotong di awal; truncation hanya di akhir dengan ellipsis `…`) (`tanpa FR`, terkait `FR-MAP-09`).
@@ -78,7 +78,7 @@ Jika sebuah asumsi PRD ternyata salah, agent **berhenti dan melapor ke pemilik**
   - Uji tema light: pastikan kontras teks pada tint warna cabang memenuhi WCAG AA serta perbedaan antar-hue cabang tetap jelas terbaca (`FR-MAP-09`, `spec-ui-nfr.md` §7.4).
   - HUD (chip zoom, kontrol, breadcrumb/metrics) tidak boleh menimpa node (beri padding viewport saat auto-fit / recenter; `tanpa FR`, terkait `spec-ui-nfr.md` §8.2).
   - Tes otomatis tambahan (selain cek overlap antar-node): cek edge yang melintas di atas node, label yang terpotong di luar batas kapsul, dan ukuran font minimum di layar (`FR-MAP-03`, `tanpa FR` untuk metrik tambahan).
-  - **[Belum terbukti]** Ukur FPS pada `unbalanced150` dan `large2000` oleh pemilik di browser **non-headless dengan GPU** sebelum kriteria sukses S1 / `FR-MAP-17` (`>= 55 fps`) dinyatakan tercapai (angka `~60 fps` Spike S3 berasal dari Chromium headless).
+  - **[Terindikasi tercapai — 2026-11-26, lihat `docs/perf.md`]** Pemilik telah menguji langsung di browser Chrome **non-headless ber-GPU** pada `unbalanced150` dan `large2000` dengan rata-rata stabil **~59 fps** (memenuhi indikasi S1 / `FR-MAP-17` `>= 55 fps`; rincian `p95`/`max` ms per dataset di GPU belum dicatat terpisah). Hidrasi IndexedDB browser nyata juga telah terukur di Playwright Chromium (`unbalanced150` `10.9 ms`, `large2000` `144.9 ms`).
   - **Jaminan nol tumpang tindih pada 300 node terlihat di layout radial (`T3.2f`, `FR-MAP-03`) [Terbukti — Keputusan pemilik 2026-11-26: Opsi B]:** Perbaikan 2D AABB `rings.ts` + reklamasi busur terbuang `> 255°` di root (`ch >= 3`) + solver paralel analitik di `collision.ts` (paritas bit-demi-bit dengan `__reference__/collision-reference.ts`) membuat seluruh 8 bentuk uji 300 node (`worstCase300_default`: `11` pass, `maxR = 19.902 px`, median `~9.2 ms`; `deepChainPlusFan_default`: `6` pass, `maxR = 24.773 px`; `wideFan300_expandedOverflow`: `1` pass; `fans12x24_pinned300`: `1` pass; `random300_pinned`: `11` pass) serta seluruh 5 dataset wajib (`large2000_deep`: `2` pass, median `< 1 ms`, `maxR` turun `-47%..-51%`) konvergen dengan **`0` tumpang tindih** dan **`0` perpotongan edge** dalam batas default `maxCollisionPasses = 36`. Golden SHA-256 radial telah diperbarui dengan persetujuan pemilik.
   - **[Keputusan menunggu pemilik]** (tercatat di `docs/open-questions.md` & `docs/spikes/s3-radial.md`): (i) gaya node peta: kapsul berlabel vs lingkaran (`tanpa FR`, terkait `FR-MAP-09`); (ii) sub-cincin stagger untuk fan sibling lebar `>= 12` (`FR-MAP-03`); (iii) formula bobot sudut: subtree terlihat *bottom-up* + boost jalur fokus & koefisien tersembunyi lebih kecil (`FR-MAP-03`).
 - **Done when:** S1 (kriteria sukses) tercapai, semua FR-MAP P0 dan FR-NODE P0 lulus, e2e E1 dan E2 hijau.
@@ -179,8 +179,8 @@ Semua task M6 mengikuti hasil spike S1 (`docs/spikes/s1-github.md`). Jika ada pe
 2. Planner push hanya menghapus path yang ada di tree remote (verifikasi di spike S1: apakah tree dengan `sha: null` untuk path yang tidak ada ditolak?).
 3. Operasi `normalizeSiblingOrders` di `domain/tree`: order kembar (dua perangkat menyisipkan setelah sibling yang sama) harus diberi ulang kunci, hanya `node.json` sibling yang terdampak yang berubah (`reorderNode` kini menolak `order_collision`).
 4. Take over saat tab lama punya `hasUnsavedChanges`: tentukan perilakunya.
-5. Dataset besar hanya dimuat lewat `import()` dinamis di route dev; cek `check:bundle`.
-6. Ukur `hydrate` di browser sungguhan (bukan `fake-indexeddb`) di M3.
+5. Dataset besar hanya dimuat lewat `import()` dinamis di route dev; cek `check:bundle`. *[Terpenuhi di M3/`T3.8`: `DEV_HUD_EXCLUDED_FROM_PROD=PASS`, initial bundle `254.83 KB / 600 KB` gzip — lihat [`docs/perf.md`](perf.md).]*
+6. Ukur `hydrate` di browser sungguhan (bukan `fake-indexeddb`) di M3. *[Terpenuhi di M3/`T3.8`: Chromium IndexedDB `unbalanced150` `10.9 ms`, `large2000` `144.9 ms` via `e2e/map-perf.spec.ts` — lihat [`docs/perf.md`](perf.md).]*
 
 - **T6.1** Fake GitHub (msw) dengan semantik Git Data API dan fault injection (`testing.md` §9.3). **Done when:** ada tes bahwa fake menolak non-fast-forward dan menghitung SHA dengan benar.
 - **T6.2** Klien GitHub terbungkus di `sync/` (typed, retry dan backoff, rate limit, ETag).

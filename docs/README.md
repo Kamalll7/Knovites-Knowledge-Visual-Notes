@@ -15,6 +15,7 @@ PRD Phase 1 (v0.1, 16 November 2026) dipecah menjadi beberapa file supaya agent 
 - `plan.md` — §10: milestone, spike, dan daftar task untuk agent.
 - `appendix.md` — Definition of Done, risiko, backlog setelah Phase 1, glosarium.
 - `open-questions.md` — pertanyaan terbuka untuk pemilik dan catatan temuan agent.
+- `perf.md` — laporan audit performa peta (150 & 2.000 node), hidrasi IndexedDB nyata, dan bundel produksi (`T3.8`, `FR-MAP-17`).
 - `decisions/` — catatan keputusan (ADR). Salin `0000-template.md` untuk membuat yang baru.
 - `spikes/` — laporan hasil spike (diisi agent).
 
