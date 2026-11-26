@@ -13,10 +13,12 @@ import {
   type MapLayoutResult,
   type ZoomTier,
 } from '@/domain/layout'
-import type { NodeType } from '@/domain/schema'
+import type { NodeStatus, NodeType } from '@/domain/schema'
 import { MapBreadcrumb } from '@/features/map/MapBreadcrumb'
 import { MapHudControls } from '@/features/map/MapHudControls'
 import { MapViewport, type MapViewportHandle } from '@/features/map/MapViewport'
+import { NodeActionToolbar } from '@/features/map/NodeActionToolbar'
+import { DeleteNodeDialog, MoveNodeDialog } from '@/features/map/NodeCrudDialogs'
 import { buildBreadcrumbTrail } from '@/features/map/map-breadcrumb'
 import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 import { useMapKeyboard } from '@/features/map/useMapKeyboard'
@@ -40,6 +42,11 @@ export function MapRoute() {
   const isReadOnlyTab = useWorkspaceStore((s) => s.isReadOnlyTab)
   const storageError = useWorkspaceStore((s) => s.storageError)
   const createNode = useWorkspaceStore((s) => s.createNode)
+  const renameNode = useWorkspaceStore((s) => s.renameNode)
+  const updateNodeMeta = useWorkspaceStore((s) => s.updateNodeMeta)
+  const moveNode = useWorkspaceStore((s) => s.moveNode)
+  const reorderNode = useWorkspaceStore((s) => s.reorderNode)
+  const deleteNode = useWorkspaceStore((s) => s.deleteNode)
   const { resolvedTheme } = useTheme()
   const { orientation, setOrientation } = useMapOrientationPreference()
   const navigate = useNavigate()
@@ -53,6 +60,9 @@ export function MapRoute() {
   const [zoomTier, setZoomTier] = useState<ZoomTier>(1)
   const [fontVersion, setFontVersion] = useState(0)
   const [keyboardFocusActive, setKeyboardFocusActive] = useState(false)
+  const [toolbarInteractiveOpen, setToolbarInteractiveOpen] = useState(false)
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   // Inline empty-state first-node creation form (FR-MAP-12, FR-NODE-01)
   const [creatingFirstNode, setCreatingFirstNode] = useState(false)
@@ -69,6 +79,15 @@ export function MapRoute() {
   }, [measurer])
 
   const effectiveFocusId = focusId === MAP_ROOT_ID || tree.nodes[focusId] ? focusId : MAP_ROOT_ID
+  const focusedNode =
+    effectiveFocusId === MAP_ROOT_ID ? null : (tree.nodes[effectiveFocusId] ?? null)
+  const siblingIds =
+    focusedNode === null
+      ? []
+      : focusedNode.parentId === null
+        ? tree.rootIds
+        : (tree.nodes[focusedNode.parentId]?.childrenIds ?? [])
+  const siblingIndex = focusedNode === null ? -1 : siblingIds.indexOf(focusedNode.id)
   const hasNodes = tree.rootIds.length > 0
   const writeDisabled = isReadOnlyTab || storageError !== null
 
@@ -171,6 +190,61 @@ export function MapRoute() {
     [createNode, firstNodeTitle, firstNodeType],
   )
 
+  const handleCreateChild = useCallback(
+    async (title: string, type: Exclude<NodeType, 'lab'>) => {
+      const parentId = effectiveFocusId === MAP_ROOT_ID ? null : effectiveFocusId
+      const result = await createNode({ parentId, title, type })
+      if (!result.ok) return { ok: false, message: result.message }
+      setFocusId(result.nodeId)
+      return { ok: true }
+    },
+    [createNode, effectiveFocusId],
+  )
+
+  const handleRenameFocused = useCallback(
+    async (title: string) => {
+      const result = await renameNode({ nodeId: effectiveFocusId, title })
+      return result.ok ? { ok: true } : { ok: false, message: result.message }
+    },
+    [effectiveFocusId, renameNode],
+  )
+
+  const handleUpdateFocusedMeta = useCallback(
+    async (patch: {
+      type?: NodeType
+      status?: NodeStatus
+      color?: string | null
+      tags?: readonly string[]
+    }) => {
+      const result = await updateNodeMeta({ nodeId: effectiveFocusId, ...patch })
+      return result.ok ? { ok: true } : { ok: false, message: result.message }
+    },
+    [effectiveFocusId, updateNodeMeta],
+  )
+
+  const handleReorderFocused = useCallback(
+    async (direction: 'earlier' | 'later') => {
+      await reorderNode({ nodeId: effectiveFocusId, direction })
+    },
+    [effectiveFocusId, reorderNode],
+  )
+
+  const handleConfirmMove = useCallback(
+    async (newParentId: string | null) => {
+      const result = await moveNode({ nodeId: effectiveFocusId, newParentId })
+      return result.ok ? { ok: true } : { ok: false, message: result.message }
+    },
+    [effectiveFocusId, moveNode],
+  )
+
+  const handleConfirmDelete = useCallback(async () => {
+    const fallbackFocusId = focusedNode?.parentId ?? MAP_ROOT_ID
+    const result = await deleteNode(effectiveFocusId)
+    if (!result.ok) return { ok: false, message: result.message }
+    setFocusId(fallbackFocusId)
+    return { ok: true }
+  }, [deleteNode, effectiveFocusId, focusedNode])
+
   const handleScaleTierChange = useCallback((nextScale: number, nextTier: ZoomTier) => {
     setZoomScale(nextScale)
     setZoomTier(nextTier)
@@ -180,7 +254,12 @@ export function MapRoute() {
     tree,
     focusId: effectiveFocusId,
     orientation,
-    disabled: !hasNodes || creatingFirstNode,
+    disabled:
+      !hasNodes ||
+      creatingFirstNode ||
+      toolbarInteractiveOpen ||
+      moveDialogOpen ||
+      deleteDialogOpen,
     onFocusNode: handleKeyboardFocusNode,
     onOpenNode: handleOpenNode,
     onKeyboardNavigate: handleKeyboardNavigate,
@@ -286,6 +365,49 @@ export function MapRoute() {
         onCreateFirstNode={handleOpenFirstNodeForm}
         onScaleTierChange={handleScaleTierChange}
       />
+
+      {hasNodes ? (
+        <NodeActionToolbar
+          key={effectiveFocusId}
+          focusId={effectiveFocusId}
+          focusedNode={focusedNode}
+          rootTitle={rootHome.title}
+          siblingIndex={siblingIndex}
+          siblingCount={siblingIds.length}
+          theme={resolvedTheme}
+          writeDisabled={writeDisabled}
+          onOpenNode={handleOpenNode}
+          onCreateChild={handleCreateChild}
+          onRenameNode={handleRenameFocused}
+          onUpdateMeta={handleUpdateFocusedMeta}
+          onReorderNode={handleReorderFocused}
+          onRequestMove={() => setMoveDialogOpen(true)}
+          onRequestDelete={() => setDeleteDialogOpen(true)}
+          onInteractiveOpenChange={setToolbarInteractiveOpen}
+        />
+      ) : null}
+
+      {focusedNode ? (
+        <>
+          <MoveNodeDialog
+            open={moveDialogOpen}
+            tree={tree}
+            nodeId={focusedNode.id}
+            rootTitle={rootHome.title}
+            disabled={writeDisabled}
+            onOpenChange={setMoveDialogOpen}
+            onConfirmMove={handleConfirmMove}
+          />
+          <DeleteNodeDialog
+            open={deleteDialogOpen}
+            tree={tree}
+            nodeId={focusedNode.id}
+            disabled={writeDisabled}
+            onOpenChange={setDeleteDialogOpen}
+            onConfirmDelete={handleConfirmDelete}
+          />
+        </>
+      ) : null}
     </section>
   )
 }

@@ -138,4 +138,49 @@ describe('App shell, routing, theme, toast, and error boundary', () => {
     store.getState().dispose()
     db.close()
   })
+
+  it('deletes a node via Delete dialog and restores the subtree when clicking Undo toast [T3.7, FR-NODE-05]', async () => {
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('app-delete-undo-toast-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: () => '2026-11-26T10:00:00Z',
+    })
+    await store.getState().hydrate()
+
+    const pwn = await store.getState().createNode({ title: 'PWN', parentId: null })
+    if (!pwn.ok) throw new Error(pwn.message)
+    const stack = await store.getState().createNode({ title: 'Stack', parentId: pwn.nodeId })
+    if (!stack.ok) throw new Error(stack.message)
+
+    render(<App workspaceStore={store} />)
+
+    // Focus PWN -> More -> Delete -> confirm
+    fireEvent.keyDown(screen.getByTestId('map-viewport'), { key: 'ArrowDown' })
+    await waitFor(() => {
+      expect(screen.getByTestId('node-action-more')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('node-action-more'))
+    fireEvent.click(screen.getByTestId('node-action-delete'))
+
+    const dialog = await screen.findByTestId('delete-node-dialog')
+    expect(dialog).toHaveTextContent(/1 descendant/i)
+    fireEvent.click(screen.getByTestId('delete-node-confirm'))
+
+    await waitFor(() => {
+      expect(store.getState().tree.nodes[pwn.nodeId]).toBeUndefined()
+    })
+
+    // Click Undo button rendered in the 10s toast by AppShell -> restores PWN & Stack
+    const undoBtn = await screen.findByRole('button', { name: 'Undo' })
+    fireEvent.click(undoBtn)
+
+    await waitFor(() => {
+      expect(store.getState().tree.nodes[pwn.nodeId]?.meta.title).toBe('PWN')
+      expect(store.getState().tree.nodes[stack.nodeId]?.meta.title).toBe('Stack')
+    })
+
+    store.getState().dispose()
+    db.close()
+  })
 })
