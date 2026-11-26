@@ -349,8 +349,8 @@ function investigateScenario(
   }
 }
 
-describe('T3.2e worstCase300 & 300-node radial collision investigation (no behavior change)', () => {
-  it('reproduces worstCase300 and 4 additional 300-node shapes across 36/72/144/400 passes', () => {
+describe('T3.2f worstCase300 & 300-node radial collision convergence (FR-MAP-03)', () => {
+  it('converges worstCase300 and all 300-node shapes within default maxCollisionPasses = 36 with 0 overlaps and 0 edge crossings', () => {
     const reports: ScenarioReport[] = []
 
     // 0. worstCase300 (strictly default computeVisible!)
@@ -448,14 +448,31 @@ describe('T3.2e worstCase300 & 300-node radial collision investigation (no behav
       investigateScenario('random300_pinned', rndPinned300, false, rndDefault.orderedIds.length),
     )
 
-    console.info(`[T3_2E_REPORT] ${JSON.stringify(reports, null, 2)}`)
+    console.info(`[T3_2F_REPORT] ${JSON.stringify(reports, null, 2)}`)
 
-    // Sanity assertions verifying investigation integrity (without enforcing non-existent 0-overlap)
+    // T3.2f convergence guarantee: every 300-node scenario must converge within default 36 passes
     expect(reports).toHaveLength(8)
     for (const r of reports) {
       expect(r.steppedMatchesBudget400, `${r.scenario} stepped vs direct 400`).toBe(true)
       expect(r.cycleDetected, `${r.scenario} cycle detected`).toBe(false)
+      const b36 = r.budgets[0]!
+      expect(b36.maxCollisionPasses).toBe(DEFAULT_RADIAL_LAYOUT_CONFIG.maxCollisionPasses)
+      expect(b36.overlapCount, `${r.scenario} overlaps @36 passes`).toBe(0)
+      expect(b36.edgeCrossingsCount, `${r.scenario} edge crossings @36 passes`).toBe(0)
+      expect(b36.hitMaxPasses, `${r.scenario} hit maxCollisionPasses=36`).toBe(false)
+      expect(b36.passesUsed, `${r.scenario} passesUsed`).toBeLessThanOrEqual(
+        DEFAULT_RADIAL_LAYOUT_CONFIG.maxCollisionPasses,
+      )
     }
+
+    const byScenario = new Map(reports.map((r) => [r.scenario, r]))
+    expect(byScenario.get('worstCase300_default')!.budgets[0]!.maxRadiusPx).toBeLessThanOrEqual(
+      22_000,
+    )
+    expect(byScenario.get('deepChainPlusFan_default')!.budgets[0]!.maxRadiusPx).toBeLessThanOrEqual(
+      26_000,
+    )
+
     expect(wcDefault.orderedIds.length).toBe(300)
     expect(wfDefault.orderedIds.length).toBe(26)
     expect(wfExpanded300.orderedIds.length).toBe(300)

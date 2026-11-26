@@ -33,6 +33,13 @@ Ringkasan keputusan yang diambil pemilik pada 2026-11-21 (ditetapkan tanpa mengu
 
 - **Aturan kamera fokus peta (`T3.5-fix`, `T3.6`, `FR-MAP-05`, `FR-MAP-06`):** Menggantikan aturan lama auto-zoom fokus & `MAP_FOCUS_NON_ROOT_MIN_K = 0.54`. Saat sebuah node diklik atau tombol `Focus` ditekan, kamera menggeser `(focusNode.x, focusNode.y)` **tepat ke pusat area viewport aman** (`centerScreenX`, `centerScreenY` memperhitungkan `hudInsets`) dengan **mempertahankan nilai zoom `k` saat ini** (nol perubahan zoom). Muatan awal dan tombol `Fit` tetap memakai `fit-all` (menampilkan seluruh graf).
 
+## Keputusan pemilik (2026-11-26)
+
+- **Konvergensi layout radial 300 node (`T3.2f`, `FR-MAP-03` — Opsi B):** Disetujui perbaikan 3-bagian tanpa mengubah `weights.ts`, `staggerRadialStepPx = 56 px`, atau `maxCollisionPasses = 36`:
+  1. **`rings.ts` — Reklamasi busur terbuang `> 255°` di root:** hanya pada `current.id === rootId` saat `children.length >= 3` dan cabang terbesar memiliki anak terlihat (`usableSpan` non-root memang dibatasi `255°`, sehingga sisa di atas `255°` sebelumnya menjadi ruang kosong mati). Formula `subtreeWeight` di `weights.ts` dan seluruh rasio uji 2-cabang (`3:1`, `3.5:1`, `2.4:1`) tetap utuh.
+  2. **`rings.ts` — Ukuran radius awal 2D AABB eksak (`minClearBaseRadius`):** menggantikan perkiraan busur 1D isotropik (`minGroupArcRadius`/`sameRingPairArcNeeded`) dengan pemecah 2D AABB ber-titik-tetap (termasuk `localLabelBox` Tier 0 dan pasangan wrap-around root), sehingga menghilangkan dead-zone pembatalan Utara/Selatan dan over-estimation radius Timur/Barat.
+  3. **`collision.ts` & `__reference__/collision-reference.ts` — Lompatan analitik sibling + resolusi overlap multi-induk paralel:** menggantikan langkah `+56 px` dan `if (adjusted) break` serial antar-induk dengan lompatan analitik eksak (`exactUniformSiblingClearDeltaR`, batas aman `64 × stepR`) per induk (`parentPushedPass`) sambil menjaga paritas bit-demi-bit dengan referensi O(n²) dan memperbarui golden SHA-256 radial (`GOLDEN_RADIAL_SHA256`, `GOLDEN_WORST300_SHA256`).
+
 ## Catatan temuan agent
 
 Format entri:

@@ -87,6 +87,48 @@ export function computeRadialGeometryDiagnostics(
   return { overlapCount, edgeCrossingsCount }
 }
 
+const MAX_ANALYTICAL_SIBLING_STEP_MULT = 64
+
+/**
+ * Computes the exact uniform radial outward push `dR >= stepR` required to separate two
+ * overlapping sibling boxes `(a, b)` along their fixed rays `(thetaA, thetaB)`.
+ * Clamped to `stepR * 64` to protect grid allocation on degenerate near-zero angular gaps.
+ */
+export function exactUniformSiblingClearDeltaR(
+  thetaA: number,
+  cxA: number,
+  cyA: number,
+  wA: number,
+  hA: number,
+  thetaB: number,
+  cxB: number,
+  cyB: number,
+  wB: number,
+  hB: number,
+  minGapPx: number,
+  stepR: number,
+): number {
+  const reqX = (wA + wB) / 2 + minGapPx
+  const reqY = (hA + hB) / 2 + minGapPx
+  const dx0 = cxB - cxA
+  const dy0 = cyB - cyA
+  const ax = Math.sin(thetaB) - Math.sin(thetaA)
+  const ay = -Math.cos(thetaB) + Math.cos(thetaA)
+
+  const exitX =
+    Math.abs(ax) < 1e-12
+      ? Number.POSITIVE_INFINITY
+      : Math.max((-reqX - dx0) / ax, (reqX - dx0) / ax)
+  const exitY =
+    Math.abs(ay) < 1e-12
+      ? Number.POSITIVE_INFINITY
+      : Math.max((-reqY - dy0) / ay, (reqY - dy0) / ay)
+
+  const needed = Math.min(exitX, exitY)
+  if (!Number.isFinite(needed) || needed <= stepR) return stepR
+  return Math.min(Math.max(stepR, Math.ceil(needed) + 1), stepR * MAX_ANALYTICAL_SIBLING_STEP_MULT)
+}
+
 /** Checks whether two bounding boxes violate minimum gap clearance `minGapPx`. */
 export function boxesOverlapWithGap(a: BoxBounds, b: BoxBounds, minGapPx: number): boolean {
   const halfGap = minGapPx / 2
@@ -163,6 +205,7 @@ export function resolveCollisionsAndCrossings(
     prevOverflow = false,
     currOverflow = false
   const nodeLastMoved = new Int32Array(n).fill(-2),
+    parentPushedPass = new Int32Array(n).fill(-2),
     edgeCleanPass = new Int32Array(n).fill(-2),
     overlapCleanPass = new Int32Array(n).fill(-2)
   const pushQueue: number[] = [],
@@ -235,6 +278,7 @@ export function resolveCollisionsAndCrossings(
   for (let pass = 0; pass < config.maxCollisionPasses; pass += 1) {
     let adjusted = false
     for (let i = 0; i < n; i += 1) {
+      if (nodeLastMoved[i] === pass) continue
       const ax0 = x0[i]!,
         ay0 = y0[i]!,
         ax1 = x1[i]!,
@@ -258,9 +302,10 @@ export function resolveCollisionsAndCrossings(
         i,
       )
       sortAsc(g.candidates)
+      let hitForI = false
       for (let c = 0; c < g.candidates.length; c += 1) {
         const j = g.candidates[c]!
-        if (j === rootIdx) continue
+        if (j === rootIdx || nodeLastMoved[j] === pass) continue
         if (stats) stats.overlapChecks += 1
         if (
           ax1 + minGap <= x0[j]! ||
@@ -272,9 +317,26 @@ export function resolveCollisionsAndCrossings(
         const b = nodes[j]!
         if (a.parentId !== null && a.parentId === b.parentId) {
           const pIdx = parentIndex[i]!
-          if (pIdx >= 0)
-            for (const sibIdx of childrenIndices[pIdx]!) pushSubtree(sibIdx, stepR, pass)
-          adjusted = true
+          if (pIdx >= 0 && parentPushedPass[pIdx] !== pass) {
+            const dR = exactUniformSiblingClearDeltaR(
+              a.theta,
+              (ax0 + ax1) * 0.5,
+              (ay0 + ay1) * 0.5,
+              ax1 - ax0,
+              ay1 - ay0,
+              b.theta,
+              (x0[j]! + x1[j]!) * 0.5,
+              (y0[j]! + y1[j]!) * 0.5,
+              x1[j]! - x0[j]!,
+              y1[j]! - y0[j]!,
+              minGap,
+              stepR,
+            )
+            parentPushedPass[pIdx] = pass
+            for (const sibIdx of childrenIndices[pIdx]!) pushSubtree(sibIdx, dR, pass)
+            adjusted = true
+            hitForI = true
+          }
           break
         }
         const pushIsB = b.r >= a.r,
@@ -284,9 +346,10 @@ export function resolveCollisionsAndCrossings(
         const ry = Math.max(0, (ay1 - ay0 + y1[j]! - y0[j]!) / 2 + minGap - Math.abs(st.y - pt.y))
         pushSubtree(pushIsB ? j : i, Math.max(minGap, Math.ceil(Math.min(rx, ry)) + minGap), pass)
         adjusted = true
+        hitForI = true
+        if (!pushIsB) break
       }
-      if (adjusted) break
-      overlapCleanPass[i] = pass
+      if (!hitForI) overlapCleanPass[i] = pass
     }
 
     for (let cIdx = 0; cIdx < n; cIdx += 1) {

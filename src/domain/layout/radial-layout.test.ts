@@ -30,14 +30,14 @@ const MIN_REQUIRED_GAP_PX = 12
 const MIN_REQUIRED_SCREEN_FONT_PX = 11
 
 /**
- * GOLDEN HASH UPDATE PROCEDURE (T3.2c):
+ * GOLDEN HASH UPDATE PROCEDURE (T3.2c / updated for owner-approved T3.2f Opsi B):
  * - NEVER modify `GOLDEN_RADIAL_SHA256` or `GOLDEN_WORST300_SHA256` during performance refactors.
  * - Updating golden hashes is ONLY permitted after an explicitly approved behavioral change:
  *   1. Stop and report the behavioral diff before touching hashes.
  *   2. Run manually once: `UPDATE_GOLDEN=1 pnpm vitest run src/domain/layout/radial-layout.test.ts -t "golden"`
  *   3. Inspect and commit the approved hash map update (CI never sets `UPDATE_GOLDEN`).
  */
-const GOLDEN_WORST300_SHA256 = '2c91e249b3bea508ec838a70339fd779e695c78320452a7078b4f9e54f5cf773'
+const GOLDEN_WORST300_SHA256 = '7c98ef7a8eea43593432e26de43e0a972a6fa143bfd140df119a98a1aa9134cd'
 
 function buildWorstCaseVisible(maxVisibleNodes = 300): ComputeVisibleResult {
   const worstEntries: TreeBuildEntry[] = []
@@ -369,53 +369,53 @@ function assertRadialInvariants(layout: RadialLayoutResult): void {
 
 const GOLDEN_RADIAL_SHA256: Readonly<Record<string, string>> = {
   'unbalanced150:root:t1:s1': '85878e25389bc9ee986ae63ba307ff5613132b030803eb36426a97a996c80bd0',
-  'unbalanced150:root:t2:s1': '52c21eb3d21a1b5a2d2b1d950f8c03f58cdfb38cb7fdf4944a0305bad08602ab',
+  'unbalanced150:root:t2:s1': '072e13cfed8393d75ec10788e4e0bfa88e8860f3a62485196cd86efbc58d02ef',
   'unbalanced150:root:t0:s0.85': '8b0fc8e0704cc033333a3fc846f4f88f6c015f94a71e116ed77021357baa7975',
   'unbalanced150:root:t0:s0.35': '20ff2fc56c16ac7744ca689d4d62e7239025daa7c1606c1d2e43063373124356',
-  'unbalanced150:middle:t1:s1': '18f92442c8362115c66821fc2bb9408b8ee86449dc8146f86c7d41e2d56680f9',
-  'unbalanced150:middle:t2:s1': '650f56d25f96078af5f1c24d7c81e67b6ce8feea92295195ad33e289e18f9d68',
+  'unbalanced150:middle:t1:s1': 'd60f3b464cf2e4d3f343229e8b7c5854f88ca79b54e808871bd2aad19114e2b0',
+  'unbalanced150:middle:t2:s1': 'e4f44918d3312807d5fde1138347dd3ab0bbffae332a48d4dd799bbd693dc97c',
   'unbalanced150:middle:t0:s0.85':
-    '2cfe9d9617837eaad2ef0227c834126ee66af6ad94ee437a9ce677ee2a7ecf8e',
+    '69cecb2b158d4ff8b9d4b80868375abd85c571432fd2007f9a37f68a3151ed39',
   'unbalanced150:middle:t0:s0.35':
-    'ef0dc509de02fe8f0dd5eec8d400e5bc8bb07de452169dc8bd7501788b0f5b8d',
-  'unbalanced150:leaf:t1:s1': '3b12f48db3d9dab53b273ac129f31b2150e8aca3ee47e8ce5a2ba995b974d998',
-  'unbalanced150:leaf:t2:s1': '653dd5554dcbf5f0c12c538c49cae5c405d49214b87975a82828e579efe3f5c2',
-  'unbalanced150:leaf:t0:s0.85': 'de3bad5d36edf789b44d757a8dfeb89ec778e7c95b925f6848975a16ae05410f',
-  'unbalanced150:leaf:t0:s0.35': '3facf7cefb8e5bf40e3da0921bd4b8d9ffe732126b7462cdca95d67dd4967e20',
+    '43bec67b3a2f2ec2845007905595f615ca4c140e1e7cf07f34b58df3f56b4f24',
+  'unbalanced150:leaf:t1:s1': '49331e1ecf8fc21f911e778e8759ce3eb8fa394e6558fc94290ba6ccd2bad5a6',
+  'unbalanced150:leaf:t2:s1': 'baab12edd5e145dc108c5e90fcc0a9f932631da19c4380b1ce67999f0434d889',
+  'unbalanced150:leaf:t0:s0.85': 'cae334469718f26062d8e84cb8092f08698797185d32eb99d327005cf9deeb97',
+  'unbalanced150:leaf:t0:s0.35': '11755f283fdd9f3e53be84f873e555ecfd6db6bd1db474a4bcb1fe86f5fd51e8',
   'unbalanced150:withChildren:t1:s1':
-    '889324f53a16f4c412ad8cf599598e072f4d52326b55b90e92a0e5f8571c3e33',
+    'abf034f9938c72572e256e24ed84711c8d94bc1e025a6048154d2d42f827097f',
   'unbalanced150:withChildren:t2:s1':
-    'eef96a5a132c88274fd958c8498822bc7c3015bfda452cb4bac7a8c903021520',
+    'e043e6657bfecc476a3c78cb1645650ef2f8f5f083bdcaaaf514a27406400996',
   'unbalanced150:withChildren:t0:s0.85':
-    '1e6e6c4da64665837f42748cce76b8a2e63ff87a3c3531fca7618ef26694c449',
+    'da011800a0fed930bc08ef1af9e8611ae409a8d116e32fae19575085b8912488',
   'unbalanced150:withChildren:t0:s0.35':
-    '563333e964a42085ef2b11c7a253ddd3fd94e20c2347d56d388b9f1a120a717f',
+    '5e7a4d50d99919f9837293aac6ccd775c578471b4c26ec1287772b71a958e9ea',
   'wide60Children:root:t1:s1': 'a7b0c968cfa6f940ce2c00fb56e58251ad17672250cb6481091e16d2be3d16bf',
   'wide60Children:root:t2:s1': '5e244d5ba9bb4e6cb10f1e5772fb7930087526448942c018b2f3f743bc370297',
   'wide60Children:root:t0:s0.85':
     'd13132c75cf6c8e6f0e769b4c67215a33c6d3bef9461fe185d4d80d198e7e5dd',
   'wide60Children:root:t0:s0.35':
     'bd6364abdef69c51a6ca350d73c32012a81fe2c2773d4fa99216d8f04ec2e39e',
-  'wide60Children:middle:t1:s1': '19d7d6853c159bcf15b0a6fb895d92f546a6255ae3a337b22052aa8639fba4f1',
-  'wide60Children:middle:t2:s1': '5ccd2f877b60457cf759db017fca6eb15398e0cd18be9e10fb85793ff5c911af',
+  'wide60Children:middle:t1:s1': 'ba5b802a5a309d57cd2053779b37e9a1972d470b02f18fde2f99ea09224c4d7d',
+  'wide60Children:middle:t2:s1': 'a80e9d9911a56c6b0d31340acc483bee03880290022a9190705a2e5c949e629c',
   'wide60Children:middle:t0:s0.85':
-    '779b4a95f02cdf7c112414bac651a07aabcad988a83b8a68fc5ee250a507b250',
+    '8341b7b7b3e581e66477bdf331bfa33884f24dfaa1e48aeb625cc10826a108b1',
   'wide60Children:middle:t0:s0.35':
-    '7f9dc0785915ae8a48d728723db0fb560647021f88f50af7d11bfaad4f9fb093',
-  'wide60Children:leaf:t1:s1': 'e22f8d490e178ea948afe08eb56534b42c99427ff48b5184a077b0d56e27fe51',
-  'wide60Children:leaf:t2:s1': '21125476c747296bf579ca68804b375af3e14b6b64702b9391246260305bc2b8',
+    'd77bdcb012d8967930dcc2257597a1922f2c5686ff15da43e7a7bca786c2898b',
+  'wide60Children:leaf:t1:s1': 'fa0143ee2802baec113dc1e2774b14ee1146c13dcceaeb15e8a24ef1709b3641',
+  'wide60Children:leaf:t2:s1': 'e9cc0cd96586e99a87351d2ab7981d32d99d09004e586bbed53870cf852512a4',
   'wide60Children:leaf:t0:s0.85':
-    '305c42bd171c84bea7bd797e3e1053c219c5f5490b0c541aa707203ce111369d',
+    '38987747ff1864fe5b6226d20d8c4580aa43db46c5a891c7c28335c5a9aca439',
   'wide60Children:leaf:t0:s0.35':
-    'a33a0ee0506dec88bf20b07f8dec0c47670e1849dbf4370dda95b66d65b082e3',
+    '18e5720ea78c5d2d27777beaf89f3ee61f8c26763a54336e0076126aa7bd78f8',
   'wide60Children:withChildren:t1:s1':
-    '12abc3bdeff96905c9deba28c671f7a5c62b8de83eb1db70af382efcac5e8c08',
+    'a16937279a86aa02f9e2349ccc55124338b854531dd4e04cc2c68fdb94c0115d',
   'wide60Children:withChildren:t2:s1':
-    '15d101b21f4fae5f2b4759df04a349d438e17f45df6f13b6e8914fc4963a6c60',
+    '06d322d66406f243da259df079ab28c3fec7b5f4eeb18ae8750c03eaeb75bb62',
   'wide60Children:withChildren:t0:s0.85':
-    '58cb868f798d534432730d9060151e74806c73709b06284d1fe34258abfe5da1',
+    '38c9e6de0b5a18269c88dac03e4d5d796cc2c3843e577fa3d3b796b31a26311d',
   'wide60Children:withChildren:t0:s0.35':
-    '75d9b00ea17f1be6da39b144ce570fbcc3a13d30d39c1d2bb66fe7c03750963b',
+    'e98d9add36968be63fc2bb6ef78275efbdf36008761738c3f08ec46b011f1242',
   'chainDepth12:root:t1:s1': 'f046e7fbcc7e28272ca4857cfad4f88ad96aff6d496644854fa0ae841ea501b3',
   'chainDepth12:root:t2:s1': 'c26ad401470a976b7ff7eeec9ef03d9dd4133eeb29a098401bc2d83d5ba60a63',
   'chainDepth12:root:t0:s0.85': '85520764f624b762bd2408ece33922ac5b6af3e2032d3e2ddedc2537fe9e7d4a',
@@ -438,52 +438,52 @@ const GOLDEN_RADIAL_SHA256: Readonly<Record<string, string>> = {
     '6d69d9bbc46d95eabc8e9d230e725f89383aa4fa300b4ad2a211a4f485334002',
   'chainDepth12:withChildren:t0:s0.35':
     'c0dc4c0438390b19a73582ad1a96302305af2191b024da5115bbc9d0eb66b054',
-  'root20Children:root:t1:s1': '7afca6e7769d60feea16b78bb57e08e0aa5f33328f36b3e2f78fcf8ff931e6ee',
-  'root20Children:root:t2:s1': 'c4f7186fb90411dab403f9a4e44069c206cdbad84f7dc63ad9ab1030c0942cd5',
+  'root20Children:root:t1:s1': '97f7594e06048ba0decc2ed74744d45d0b5ad416dcbaeee8a5ef0968d094773b',
+  'root20Children:root:t2:s1': '8c463f705106b86bc792c82443d54b5e0935f41c5a3eb451257c377ae494b420',
   'root20Children:root:t0:s0.85':
-    'fbe6a0ca8bd25e70b3c1e71ef45999b61725182844932e27ba0e3b04bb696127',
+    '0afb2c739c7cbdc2d0ae25487c6d0ed2efbda839f76a969fe5dbf832ef927784',
   'root20Children:root:t0:s0.35':
-    '3b08075a3ceb658e270c5976bb2cacdfb4414a7a23041a319952fada8ce59fd4',
-  'root20Children:middle:t1:s1': '2b3a373f2e73f7eca274a8462eba2f190d27c992dde95fd71dc7572006ae66a7',
-  'root20Children:middle:t2:s1': '32caecef674bb6210f1a570bc80955ee0b07f264ccc3c27e1c58397fd4021f4b',
+    'c9eae60d97cb92c3e5942e3ae3fc5afe014a6b096f0917eb743ed5ec2fbb60ae',
+  'root20Children:middle:t1:s1': '54d96e4d0e6be0201a06a3ccc56176e8c9ebddc1a930274ee0464d8da0f4b683',
+  'root20Children:middle:t2:s1': '833607906f8545f80b0de4dd1a5f382dd20cc23c0fc20452fcc16a10eef57350',
   'root20Children:middle:t0:s0.85':
-    'b17e8d182ed234787c8ad4fd229fd1943fc3b12d7ce0bfd43cea3c97b7f86088',
+    '0c8bd8fe6fbb7ae0e6c6f08f8541882ca4becc2a06f9960fd13974be5974c690',
   'root20Children:middle:t0:s0.35':
-    'fc86fd23ffd5d854873f40dfb6300b21196581c6e709c01ed1ccc8b7d2044fd4',
-  'root20Children:leaf:t1:s1': '5c23ae5a277039b9c965f489b8677ab6aa938770fc347318a0586f4010cab427',
-  'root20Children:leaf:t2:s1': 'deb7f6ad472f7559d6d08a4c751127f9418ab54f389695eeeaa8c03339c3f995',
+    '8f4e34664fec0fb8574187718ea7889677e695e6af6078ad70c97a3fb7a17ecb',
+  'root20Children:leaf:t1:s1': '03cac8c9e217ffdca36025b55daae28af53f71dcae555fde4b99de3481e1fc4e',
+  'root20Children:leaf:t2:s1': 'a38abdc355df77836d9589ebc49169bb11de94c4e583a0184072395a52ac03ee',
   'root20Children:leaf:t0:s0.85':
-    'fc92956a79a054b61b894990329a7e61493f8a66bd80cd8bb9b0920637777455',
+    'c2ba402e157026e2cbfef9c10607fa0eae8cc20c6f76a86edafa62740531badd',
   'root20Children:leaf:t0:s0.35':
-    '51ad212cf08acb071072f0d273b793c5663696f62971852298d71b66695b9088',
+    '5895cd03aac8efdfc11a5f61fd6e3be2971c15f75bc591ba535c1809f98732da',
   'root20Children:withChildren:t1:s1':
-    '7afca6e7769d60feea16b78bb57e08e0aa5f33328f36b3e2f78fcf8ff931e6ee',
+    '97f7594e06048ba0decc2ed74744d45d0b5ad416dcbaeee8a5ef0968d094773b',
   'root20Children:withChildren:t2:s1':
-    'c4f7186fb90411dab403f9a4e44069c206cdbad84f7dc63ad9ab1030c0942cd5',
+    '8c463f705106b86bc792c82443d54b5e0935f41c5a3eb451257c377ae494b420',
   'root20Children:withChildren:t0:s0.85':
-    'fbe6a0ca8bd25e70b3c1e71ef45999b61725182844932e27ba0e3b04bb696127',
+    '0afb2c739c7cbdc2d0ae25487c6d0ed2efbda839f76a969fe5dbf832ef927784',
   'root20Children:withChildren:t0:s0.35':
-    '3b08075a3ceb658e270c5976bb2cacdfb4414a7a23041a319952fada8ce59fd4',
+    'c9eae60d97cb92c3e5942e3ae3fc5afe014a6b096f0917eb743ed5ec2fbb60ae',
   'large2000:root:t1:s1': '4a61089e1065ebae633cb989a6df4aaa7a2de153b93bcaea3352f41ec4dc348e',
-  'large2000:root:t2:s1': 'd23a803853346c23e9db3293803509801e03a289b0f90e323f527063d309e53f',
+  'large2000:root:t2:s1': '53d04247e93810e72137784ec965708ce596f6520eae50f81e5d2d6ddc1760d5',
   'large2000:root:t0:s0.85': '0a6fb46c64050dab7aedd8a40c6c78eff93eb0192535fcfe37f7a67719d0956e',
   'large2000:root:t0:s0.35': 'd32e82c9ad4be9a1282d5ba12af017e2e5d52a2ac9a22eaceeeca4823e344f0d',
-  'large2000:middle:t1:s1': '04c9f7ed8c0b2d3933dc3f92fb6f5ccf313bbf6a27ec42472e8b24a3b194db50',
-  'large2000:middle:t2:s1': '0c629ec46f75974289800bf2dad65278225b990fa5df845889be061ee9a37a3d',
-  'large2000:middle:t0:s0.85': '2f9571ca8b991b89282e763a021bcfb200fd38ce35c1cb290a1f64cca7049fe4',
-  'large2000:middle:t0:s0.35': '03886af9c43f45f0c4c36ea0146f91bac15c5c932563be37a017ec0485319b75',
-  'large2000:leaf:t1:s1': '53a1deab8027f7542f31b85b488f99a40b60f3fffa953e97b0842c0476d77d98',
-  'large2000:leaf:t2:s1': 'b97ba9680f7d88ae3c922bca54682f24aaff22569b7ba707457b4ca8ba69fa56',
-  'large2000:leaf:t0:s0.85': '56ef035262daecf8fd2eaa054662f04bb67ae6ca75c21a9c588390d4cc3230a1',
-  'large2000:leaf:t0:s0.35': '54914925ea0b52318351039a4cc98af212a86bbd21ca4a2ce4416f0d88a0441b',
+  'large2000:middle:t1:s1': 'c6663a99f5553469d99d3ac44d5f5c4b40ee4b7f6335d903edfd69b548d6d5ff',
+  'large2000:middle:t2:s1': '07a750acf049ef131a7505799d6e7a4ee571c2dd10a5688a90ca1a4de3063d40',
+  'large2000:middle:t0:s0.85': '33af20513a0aae36791bd60075a08b26249b8cbdb1a7e99eae63e7892c22c636',
+  'large2000:middle:t0:s0.35': 'ee2c2a43cd483cd7c805a2d42eaa5b0380e5dd72ffe72a418b791daffd96d767',
+  'large2000:leaf:t1:s1': '52ef3ddf5da00b324c71236b9a69ec36e96a2ec6ec7bf7dd415cd59b9e4323ef',
+  'large2000:leaf:t2:s1': '36cb806a4c879fecb06b72f55444e307584b05972a109a2affe23468b54269a2',
+  'large2000:leaf:t0:s0.85': '0cfb0f8b0fb0faf335dbcf7e41fb5557936c65d05af1bf3bae8535321c307a86',
+  'large2000:leaf:t0:s0.35': '5f1a656b8b1c772ba3674d67fa24c923e5d1634e2087ccc5ef9b5133d08290f4',
   'large2000:withChildren:t1:s1':
-    '88c2752530656d8330f08be4c272007263a0bb12bcb9f18461ab0427b867ebfa',
+    '5edd7b038f131a479dcd40721d6b28d48d5284962b2871b857936ea7e1febbea',
   'large2000:withChildren:t2:s1':
-    '507d271717680b79e09873089c5cadfc6de815b675a9ad9a239bbe38ff696e8e',
+    'd5477d533c3547d895775f71d45a9b3ce4f922b9e82d436a267ec293df19fdd1',
   'large2000:withChildren:t0:s0.85':
-    'a267dfb4b79a5e21910c4dba55211b2fb0736803c7ddb1929d7ce89f8aa82209',
+    '44b8a42bac5211a616b5efe4d8a4aea4e7b736fbb3738a7c909e4caba762ec1b',
   'large2000:withChildren:t0:s0.35':
-    'e2d20743dd38a80e7cc5774722a4be94f1e1f6f0fa152cdf5516b3564ab9d86b',
+    'e799417a83d0052d3e3d3a575ca11374ef47795bf9d9d69c54358dee318189f0',
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -499,6 +499,7 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     expect(datasets).toHaveLength(5)
 
     let checked = 0
+    const actualHashes: Record<string, string> = {}
     for (const ds of datasets) {
       const { state: tree } = buildTree(ds.entries)
       const middleId = ds.entries[Math.floor(ds.entries.length / 2)]?.node?.id ?? MAP_ROOT_ID
@@ -565,7 +566,10 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
           }
           const key = `${ds.id}:${focusKind}:t${tier}:s${scale}`
           const actualHash = await sha256Hex(JSON.stringify(canonicalGoldenPayload))
-          expect(actualHash, `golden hash mismatch for ${key}`).toBe(GOLDEN_RADIAL_SHA256[key])
+          actualHashes[key] = actualHash
+          if (!(process.env.UPDATE_GOLDEN === '1' && !process.env.CI)) {
+            expect(actualHash, `golden hash mismatch for ${key}`).toBe(GOLDEN_RADIAL_SHA256[key])
+          }
           checked += 1
         }
       }
@@ -581,6 +585,7 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     })
     const worstHash = await sha256Hex(JSON.stringify(worstLayout))
     if (process.env.UPDATE_GOLDEN === '1' && !process.env.CI) {
+      console.info(`[UPDATE_GOLDEN] GOLDEN_RADIAL_SHA256=${JSON.stringify(actualHashes, null, 2)}`)
       console.info(`[UPDATE_GOLDEN] GOLDEN_WORST300_SHA256=${worstHash}`)
     }
     expect(worstHash, 'golden hash mismatch for worstCase300').toBe(GOLDEN_WORST300_SHA256)
@@ -1187,6 +1192,254 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     assertRadialInvariants(layout)
   })
 
+  it('eliminates North/South stagger dead-zone overlaps at initial polar placement via 2D AABB [T3.2f]', () => {
+    const nodes: VisibleMapNode[] = [
+      makeVisibleNode({ id: MAP_ROOT_ID, parentId: null, title: 'Root Hub', depth: 0 }),
+    ]
+    for (let i = 0; i < 24; i += 1) {
+      nodes.push(
+        makeVisibleNode({
+          id: `fan_${String(i).padStart(2, '0')}`,
+          parentId: MAP_ROOT_ID,
+          title: `Dense Staggered Sibling Topic ${i} Extended`,
+          depth: 1,
+          order: `a${String(i).padStart(4, '0')}`,
+        }),
+      )
+    }
+    const visible = buildSyntheticVisible(nodes)
+    const resolution = resolveScreenZoomTier(1, 2, DEFAULT_RADIAL_LAYOUT_CONFIG)
+    const prepared = prepareSpecsAndWeights(
+      MAP_ROOT_ID,
+      visible,
+      resolution,
+      fixedWidthMeasure(7.5),
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    const { placed, placedPreOrder } = assignInitialPolarNodes(
+      MAP_ROOT_ID,
+      visible,
+      prepared,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    const pass0 = finalizeRadialResult(MAP_ROOT_ID, 1, resolution, placedPreOrder, placed, 0)
+    const pass0Geom = computeRadialGeometryDiagnostics(pass0)
+    expect(pass0Geom.overlapCount).toBe(0)
+
+    const full = computeRadialLayout({
+      visible,
+      measureText: fixedWidthMeasure(7.5),
+      scale: 1,
+      tier: 2,
+    })
+    expect(full.diagnostics.collisionPassesUsed).toBeLessThanOrEqual(2)
+    assertRadialInvariants(full)
+  })
+
+  it('reclaims wasted >255-deg root angular span for siblings when root has >= 3 children and heavy branch has children [T3.2f]', () => {
+    const nodes: VisibleMapNode[] = [
+      makeVisibleNode({ id: MAP_ROOT_ID, parentId: null, title: 'Root', depth: 0 }),
+      makeVisibleNode({
+        id: 'heavy',
+        parentId: MAP_ROOT_ID,
+        title: 'Heavy Branch',
+        depth: 1,
+        order: 'a0',
+        isOnFocusPath: true,
+      }),
+      makeVisibleNode({
+        id: 's1',
+        parentId: MAP_ROOT_ID,
+        title: 'Sibling 1',
+        depth: 1,
+        order: 'a1',
+      }),
+      makeVisibleNode({
+        id: 's2',
+        parentId: MAP_ROOT_ID,
+        title: 'Sibling 2',
+        depth: 1,
+        order: 'a2',
+      }),
+    ]
+    for (let i = 0; i < 16; i += 1) {
+      nodes.push(
+        makeVisibleNode({
+          id: `hc_${i}`,
+          parentId: 'heavy',
+          title: `Heavy Child ${i}`,
+          depth: 2,
+          order: `b${String(i).padStart(3, '0')}`,
+        }),
+      )
+    }
+    const visible = buildSyntheticVisible(nodes, 'heavy')
+    const layout = computeRadialLayout({
+      visible,
+      measureText: fixedWidthMeasure(8),
+      scale: 1,
+      tier: 1,
+    })
+
+    const heavy = layout.nodes.heavy!
+    const s1 = layout.nodes.s1!
+    const s2 = layout.nodes.s2!
+    const heavySpan = heavy.wedgeEnd - heavy.wedgeStart
+    const siblingsSpan = s1.wedgeEnd - s1.wedgeStart + (s2.wedgeEnd - s2.wedgeStart)
+
+    expect(heavySpan).toBeCloseTo(DEFAULT_RADIAL_LAYOUT_CONFIG.maxNonRootFanRadians, 5)
+    expect(siblingsSpan).toBeCloseTo(
+      Math.PI * 2 - DEFAULT_RADIAL_LAYOUT_CONFIG.maxNonRootFanRadians,
+      5,
+    )
+    // True bottom-up subtreeWeight on the node itself remains unmodified
+    expect(heavy.subtreeWeight).toBeGreaterThan(16)
+    assertRadialInvariants(layout)
+  })
+
+  it('resolves multiple independent dense sibling fans in parallel via analytical deltaR jumps [T3.2f]', () => {
+    const nodes: VisibleMapNode[] = [
+      makeVisibleNode({ id: MAP_ROOT_ID, parentId: null, title: 'Root', depth: 0 }),
+    ]
+    for (let f = 0; f < 6; f += 1) {
+      const fId = `fan_${f}`
+      nodes.push(
+        makeVisibleNode({
+          id: fId,
+          parentId: MAP_ROOT_ID,
+          title: `Branch Fan ${f}`,
+          depth: 1,
+          order: `a${String(f).padStart(2, '0')}`,
+        }),
+      )
+      for (let c = 0; c < 24; c += 1) {
+        nodes.push(
+          makeVisibleNode({
+            id: `gc_${f}_${c}`,
+            parentId: fId,
+            title: `Grandchild ${f}-${c} Extended Label`,
+            depth: 2,
+            order: `b${String(c).padStart(3, '0')}`,
+          }),
+        )
+      }
+    }
+    const visible = buildSyntheticVisible(nodes)
+    const layout = computeRadialLayout({
+      visible,
+      measureText: fixedWidthMeasure(7.5),
+      scale: 1,
+      tier: 2,
+    })
+    expect(layout.diagnostics.collisionPassesUsed).toBeLessThanOrEqual(6)
+    assertRadialInvariants(layout)
+  })
+
+  it('clears a North dead-zone staggered sibling overlap in <= 5 passes analytically (vs ~141 baseline) and matches reference [T3.2f]', () => {
+    const capsule = {
+      shape: 'capsule' as const,
+      displayTitle: 'DeadZone Sibling',
+      isTruncated: false,
+      labelVisible: true,
+      width: 240,
+      height: 44,
+      radius: null,
+      localLabelBox: null,
+    }
+    const makeDeadZone = (): Map<string, PlacedMutableNode> => {
+      const rA = 2200
+      const tA = 0.02
+      const rB = 2256
+      const tB = 0.045
+      return new Map([
+        [
+          MAP_ROOT_ID,
+          {
+            id: MAP_ROOT_ID,
+            parentId: null,
+            depth: 0,
+            kind: 'root',
+            spec: { ...capsule, shape: 'circle', width: 104, height: 104, radius: 52 },
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 2,
+            r: 0,
+            theta: 0,
+            x: 0,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI * 2,
+          },
+        ],
+        [
+          'sibA',
+          {
+            id: 'sibA',
+            parentId: MAP_ROOT_ID,
+            depth: 1,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 2,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r: rA,
+            theta: tA,
+            x: rA * Math.sin(tA),
+            y: -rA * Math.cos(tA),
+            wedgeStart: 0.01,
+            wedgeEnd: 0.03,
+          },
+        ],
+        [
+          'sibB',
+          {
+            id: 'sibB',
+            parentId: MAP_ROOT_ID,
+            depth: 1,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 2,
+            staggerIndex: 1,
+            subtreeWeight: 1,
+            r: rB,
+            theta: tB,
+            x: rB * Math.sin(tB),
+            y: -rB * Math.cos(tB),
+            wedgeStart: 0.03,
+            wedgeEnd: 0.06,
+          },
+        ],
+      ])
+    }
+    const order = [MAP_ROOT_ID, 'sibA', 'sibB']
+    const children = new Map<string, string[]>([
+      [MAP_ROOT_ID, ['sibA', 'sibB']],
+      ['sibA', []],
+      ['sibB', []],
+    ])
+    const actual = makeDeadZone()
+    const ref = makeDeadZone()
+    const actualPasses = resolveCollisionsAndCrossings(
+      MAP_ROOT_ID,
+      order,
+      children,
+      actual,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    const refPasses = resolveCollisionsAndCrossingsReference(
+      MAP_ROOT_ID,
+      order,
+      children,
+      ref,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    // Needs ~7,880 px radial expansion (~141 passes with +56px baseline); clamped analytical jump
+    // (<= 64 * stepR per pass) clears cleanly in 4 passes and matches O(n^2) reference bit-for-bit.
+    expect(actualPasses).toBeLessThanOrEqual(5)
+    expect(actualPasses).toBe(refPasses)
+    expect(Array.from(actual.entries())).toEqual(Array.from(ref.entries()))
+  })
+
   it('allocates angular weight proportionally using 0.35 * log2(1 + hiddenCount)', () => {
     const visible = makeStarVisible(2, {
       hiddenAtIndex: new Map([
@@ -1573,8 +1826,12 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
 
     const worstStats = scalingProfile[scalingProfile.length - 1]!
     expect(worstStats.n).toBe(300)
-    expect(worstStats.overlapChecks).toBeLessThanOrEqual(500)
-    expect(worstStats.edgeCrossChecks).toBeLessThanOrEqual(50_000)
+    // T3.2f Opsi B: multi-parent parallel sweep converges cleanly in 11 passes (~16.2k overlap checks,
+    // ~13.2k edge-crossing checks) vs baseline's unconverged early-break 36-pass artifact (36 overlap,
+    // 35.4k edge checks, 17 unresolved overlaps).
+    expect(worstStats.passesUsed).toBeLessThanOrEqual(16)
+    expect(worstStats.overlapChecks).toBeLessThanOrEqual(22_000)
+    expect(worstStats.edgeCrossChecks).toBeLessThanOrEqual(20_000)
 
     const passReport: {
       dataset: string
@@ -1660,6 +1917,17 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
       edgeCrossingsCount: worstDiag.edgeCrossingsCount,
     })
     console.info(`[T3_2D_PASS_REPORT] ${JSON.stringify(passReport)}`)
+    for (const entry of passReport) {
+      expect(
+        entry.hitMaxPasses,
+        `${entry.dataset}:${entry.focus}:t${entry.tier} hitMaxPasses`,
+      ).toBe(false)
+      expect(entry.overlapCount, `${entry.dataset}:${entry.focus}:t${entry.tier} overlaps`).toBe(0)
+      expect(
+        entry.edgeCrossingsCount,
+        `${entry.dataset}:${entry.focus}:t${entry.tier} edgeCrossings`,
+      ).toBe(0)
+    }
   })
 
   it('satisfies radial invariants under fast-check randomized trees', () => {
