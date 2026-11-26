@@ -1440,6 +1440,127 @@ describe('computeRadialLayout (FR-MAP-03)', () => {
     expect(Array.from(actual.entries())).toEqual(Array.from(ref.entries()))
   })
 
+  it('resolves overlaps across multiple unrelated parent groups in the same pass without cross-parent break [T3.2f]', () => {
+    const capsule = {
+      shape: 'capsule' as const,
+      displayTitle: 'Parallel Sibling',
+      isTruncated: false,
+      labelVisible: true,
+      width: 200,
+      height: 44,
+      radius: null,
+      localLabelBox: null,
+    }
+    const baseAngles = [-0.55, 0.55, Math.PI - 0.55, Math.PI + 0.55]
+    const buildMultiParentOverlaps = (): {
+      placed: Map<string, PlacedMutableNode>
+      order: string[]
+      children: Map<string, string[]>
+    } => {
+      const placed = new Map<string, PlacedMutableNode>([
+        [
+          MAP_ROOT_ID,
+          {
+            id: MAP_ROOT_ID,
+            parentId: null,
+            depth: 0,
+            kind: 'root',
+            spec: { ...capsule, shape: 'circle', width: 104, height: 104, radius: 52 },
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 8,
+            r: 0,
+            theta: 0,
+            x: 0,
+            y: 0,
+            wedgeStart: 0,
+            wedgeEnd: Math.PI * 2,
+          },
+        ],
+      ])
+      const order: string[] = [MAP_ROOT_ID]
+      const children = new Map<string, string[]>([[MAP_ROOT_ID, []]])
+
+      baseAngles.forEach((base, k) => {
+        const pId = `p_${k}`
+        const pR = 600
+        placed.set(pId, {
+          id: pId,
+          parentId: MAP_ROOT_ID,
+          depth: 1,
+          kind: 'node',
+          spec: capsule,
+          staggerRingCount: 1,
+          staggerIndex: 0,
+          subtreeWeight: 2,
+          r: pR,
+          theta: base,
+          x: pR * Math.sin(base),
+          y: -pR * Math.cos(base),
+          wedgeStart: base - 0.1,
+          wedgeEnd: base + 0.1,
+        })
+        order.push(pId)
+        children.get(MAP_ROOT_ID)!.push(pId)
+        children.set(pId, [])
+      })
+
+      baseAngles.forEach((base, k) => {
+        const pId = `p_${k}`
+        const specs: ReadonlyArray<readonly [string, number, number]> = [
+          [`c_${k}_0`, 1200, base - 0.025],
+          [`c_${k}_1`, 1200, base + 0.025],
+        ]
+        for (const [cId, r, theta] of specs) {
+          placed.set(cId, {
+            id: cId,
+            parentId: pId,
+            depth: 2,
+            kind: 'node',
+            spec: capsule,
+            staggerRingCount: 1,
+            staggerIndex: 0,
+            subtreeWeight: 1,
+            r,
+            theta,
+            x: r * Math.sin(theta),
+            y: -r * Math.cos(theta),
+            wedgeStart: theta - 0.02,
+            wedgeEnd: theta + 0.02,
+          })
+          order.push(cId)
+          children.get(pId)!.push(cId)
+          children.set(cId, [])
+        }
+      })
+
+      return { placed, order, children }
+    }
+
+    const actualSetup = buildMultiParentOverlaps()
+    const refSetup = buildMultiParentOverlaps()
+    const actualPasses = resolveCollisionsAndCrossings(
+      MAP_ROOT_ID,
+      actualSetup.order,
+      actualSetup.children,
+      actualSetup.placed,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+    const refPasses = resolveCollisionsAndCrossingsReference(
+      MAP_ROOT_ID,
+      refSetup.order,
+      refSetup.children,
+      refSetup.placed,
+      DEFAULT_RADIAL_LAYOUT_CONFIG,
+    )
+
+    // Parallel multi-parent sweep resolves all 4 independent sibling groups in pass 0 (2 passes
+    // total including clean verification pass); serialized `if (adjusted) break` would take 5.
+    expect(actualPasses).toBeLessThanOrEqual(2)
+    expect(actualPasses).toBe(refPasses)
+    expect(Array.from(actualSetup.placed.entries())).toEqual(Array.from(refSetup.placed.entries()))
+  })
+
   it('allocates angular weight proportionally using 0.35 * log2(1 + hiddenCount)', () => {
     const visible = makeStarVisible(2, {
       hiddenAtIndex: new Map([
