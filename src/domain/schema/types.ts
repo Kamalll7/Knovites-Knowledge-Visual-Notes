@@ -1,4 +1,15 @@
 export const CURRENT_SCHEMA_VERSION = 1 as const
+export const VIRTUAL_ROOT_ID = '__root__' as const
+export type VirtualRootId = typeof VIRTUAL_ROOT_ID
+
+export const KNOVITES_META_FILE = 'knovites.json' as const
+export const NODE_META_FILE = 'node.json' as const
+export const CANVAS_FILE = 'canvas.json' as const
+export const ASSETS_DIR = 'assets' as const
+
+export function isVirtualRootId(id: string | null | undefined): id is VirtualRootId {
+  return id === VIRTUAL_ROOT_ID
+}
 
 export const ULID_REGEX = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/
 export const ELEMENT_ID_REGEX = /^e_[a-z0-9]{8}$/

@@ -268,6 +268,13 @@ describe('canonical serializers [T1.2]', () => {
     if (canvasParsed.status === 'ok') {
       expect(serializeCanvasJson(canvasParsed.data)).toBe(canvasRaw)
     }
+
+    const rootCanvasRaw = readFixture('root-canvas.json')
+    const rootCanvasParsed = parseCanvasJson(rootCanvasRaw)
+    expect(rootCanvasParsed.status).toBe('ok')
+    if (rootCanvasParsed.status === 'ok') {
+      expect(serializeCanvasJson(rootCanvasParsed.data)).toBe(rootCanvasRaw)
+    }
   })
 
   it('enforces LF, 2-space indent, single trailing newline, and integer canvas coordinates', () => {

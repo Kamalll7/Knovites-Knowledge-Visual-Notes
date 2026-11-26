@@ -7,14 +7,20 @@ export {
 } from '@/domain/schema/schemas'
 export { sanitizeTipTapDoc } from '@/domain/schema/tiptap'
 export {
+  ASSETS_DIR,
   ASSET_PATH_REGEX,
+  CANVAS_FILE,
   CURRENT_SCHEMA_VERSION,
   ELEMENT_ID_REGEX,
   HEX_COLOR_REGEX,
+  KNOVITES_META_FILE,
+  NODE_META_FILE,
   ORDER_INDEX_REGEX,
   TAG_REGEX,
   ULID_REGEX,
+  VIRTUAL_ROOT_ID,
   isPlainObject,
+  isVirtualRootId,
   type CanvasElement,
   type CanvasImageElement,
   type CanvasJson,
@@ -32,4 +38,5 @@ export {
   type TipTapMarkType,
   type TipTapNode,
   type TipTapNodeType,
+  type VirtualRootId,
 } from '@/domain/schema/types'

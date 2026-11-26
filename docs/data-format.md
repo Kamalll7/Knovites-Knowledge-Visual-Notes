@@ -11,7 +11,10 @@ Spesifikasi ini adalah kontrak. Perubahan format wajib memperbarui file ini, men
 ```
 knowledge-repo/
 ├── knovites.json
-├── README.md                 # opsional, diabaikan aplikasi
+├── canvas.json               # opsional, halaman home root virtual (__root__), dibuat malas saat pertama kali diedit
+├── assets/                   # opsional, aset gambar halaman home root virtual (__root__)
+│   └── 7ab1c2d3e4f50987.webp
+├── README.md                 # opsional, file akar pengguna (rootExtraFiles), diabaikan aplikasi
 └── pwn/
     ├── node.json
     ├── canvas.json
@@ -23,11 +26,13 @@ knowledge-repo/
         └── assets/
 ```
 
-- Folder adalah node **jika dan hanya jika** berisi `node.json`. Folder `assets/` bukan node.
-- Root repo adalah **root virtual** (judul dari `knovites.json`), tanpa halaman atau kanvas. Node tingkat atas adalah child-nya.
+- Folder adalah node **jika dan hanya jika** berisi `node.json`. Folder `assets/` bukan node (baik di dalam folder node maupun di akar repo untuk halaman home).
+- Root repo adalah **root virtual** dengan ID kanonik internal **`__root__`** (judul dari `knovites.json`), **tanpa `node.json` di akar repo**. Root virtual memiliki halaman home opsional (`canvas.json` dan `assets/` langsung di akar repo, memakai format `canvas.json` `schema: 1` yang sama) yang **dibuat malas (*lazy*)** saat pertama kali diedit. Repo v1 yang belum memiliki `canvas.json` di akar otomatis dianggap halaman home kosong (perubahan ini bersifat aditif pada `schema: 1` dengan 0 *breaking change*). Node tingkat atas adalah child-nya.
+- Root virtual `'__root__'` tidak dapat dihapus, dipindah, diubah nama foldernya (`rename`), atau di-reorder lewat operasi pohon.
 - Parent dan children **tidak disimpan**: diturunkan dari struktur folder.
-- File dan folder yang tidak dikenal aplikasi **tidak boleh diubah atau dihapus**.
-- Slug folder yang dilarang: `assets`, `.git`, `.github`, `node_modules`.
+- File dan folder yang tidak dikenal aplikasi **tidak boleh diubah atau dihapus**. Pada akar repo, berkas tak dikenal milik pengguna (mis. `README.md`, `.gitignore`, `LICENSE`) dipisahkan sebagai `rootExtraFiles` dan aset gambar halaman home di `assets/` dipisahkan sebagai `rootAssets`, terpisah dari `extraFiles` node anak.
+- **Kontrak path file repo (Git Data API):** seluruh path file relatif terhadap akar repo **tanpa leading slash (`'/'`)** — untuk `'__root__'` selalu `'canvas.json'` dan `'assets/<hash16>.<ext>'` (BUKAN `'/canvas.json'` atau `'/assets/...'`); untuk node biasa selalu `'<nodePath>/node.json'`, `'<nodePath>/canvas.json'`, dan `'<nodePath>/assets/<hash16>.<ext>'`.
+- Slug folder yang dilarang: `assets`, `.git`, `.github`, `node_modules` (termasuk pada anak langsung root agar tidak bertabrakan dengan folder `assets/` milik `'__root__'`). Folder eksternal di akar repo yang bernama persis `knovites.json` atau `canvas.json` juga diabaikan aman.
 
 ### 5.2 knovites.json
 
@@ -133,14 +138,16 @@ Harus deterministik supaya diff Git bersih:
 
 Index pencarian, backlink, daftar children, posisi node di peta, viewport, token, dan setting perangkat. Semuanya dihitung ulang atau disimpan lokal.
 
-### 5.9 Skema database lokal (Dexie v2)
+### 5.9 Skema database lokal (Dexie v3)
 
-- `nodes`: `id` (PK), `path` (indeks), `basePath` (path folder saat sync terakhir atau `null`), `parentId` (indeks), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` bila aktif atau epoch ms saat menunggu jendela Undo 10 detik, indeks), `meta` (isi `node.json` hasil parse atau fallback read-only), `rawNodeJson` (teks mentah file agar node `corrupt` / `newer-schema` tidak pernah ditimpa), `baseBlobSha`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `extraFiles` (daftar file tak dikenal di folder node), `hasCanvas`.
-- `canvases`: `nodeId` (PK), `path` (indeks), `basePath` (path folder node saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `doc`, `rawJson` (teks mentah bila `corrupt` / `newer-schema`), `baseBlobSha`, `loaded`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional).
-- `assets`: `[nodeId+path]` (PK), `nodeId`, `path` (relatif terhadap folder node, mis. `assets/<hash16>.<ext>`), `basePath` (path lengkap relatif repo saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `blob`, `sha`.
-- `pendingDeletes`: `path` (PK), `baseBlobSha`, `deletedAt` — path file yang harus dihapus pada commit berikutnya.
+- `nodes`: `id` (PK), `path` (indeks), `basePath` (path folder saat sync terakhir atau `null`), `parentId` (indeks), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` bila aktif atau epoch ms saat menunggu jendela Undo 10 detik, indeks), `meta` (isi `node.json` hasil parse atau fallback read-only), `rawNodeJson` (teks mentah file agar node `corrupt` / `newer-schema` tidak pernah ditimpa), `baseBlobSha`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional), `extraFiles` (daftar file tak dikenal di folder node), `hasCanvas`. **Root virtual `'__root__'` tidak memiliki baris di tabel `nodes`.**
+- `canvases`: `nodeId` (PK), `path` (indeks), `basePath` (path folder node saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `doc`, `rawJson` (teks mentah bila `corrupt` / `newer-schema`), `baseBlobSha`, `loaded`, `corrupt`, `corruptErrors` (opsional), `newerSchemaVersion` (opsional). Mendukung halaman home root virtual dengan `nodeId = '__root__'`, `path = ''`, dan `basePath = '' | null` (tanpa baris di `nodes`; path file repo selalu `'canvas.json'` tanpa leading slash; dibuat malas saat pertama kali diedit).
+- `assets`: `[nodeId+path]` (PK), `nodeId`, `path` (relatif terhadap folder pemilik, mis. `assets/<hash16>.<ext>`), `basePath` (path lengkap relatif repo saat sync terakhir atau `null`), `dirty` (`0 | 1`, indeks), `deletedAt` (`0` atau epoch ms, indeks), `blob`, `sha`. Mendukung aset halaman home root virtual dengan `nodeId = '__root__'`, `path = 'assets/<hash16>.<ext>'`, dan `basePath = 'assets/<hash16>.<ext>' | null` (tanpa baris di `nodes`; path file repo tanpa leading slash).
+- `pendingDeletes`: `path` (PK, selalu relatif repo tanpa leading slash), `baseBlobSha`, `deletedAt` — path file yang harus dihapus pada commit berikutnya.
 - `syncState`: `id` (`'singleton'`, PK), `repo`, `branch`, `baseCommitSha`, `lastSyncedAt`, `pendingMerge`.
-- `settings`: `key` (PK), `value`, `updatedAt`.
+- `settings`: `key` (PK), `value`, `updatedAt` — termasuk metadata lokal ringan seperti daftar `rootExtraFiles` (`key = 'workspace.rootExtraFiles'`) agar file akar pengguna tetap terlindungi lintas reload.
 - `errorLog`: `++id` (PK), `timestamp`, `level`, `code`, `message`, `context` — dipangkas otomatis maksimal 100 entri terbaru.
+
+Migrasi Dexie `v2 -> v3` bersifat non-destruktif: seluruh tabel, indeks, dan data M2 yang sudah ada dipertahankan utuh, sambil menormalkan kontrak record `nodeId = '__root__'` agar bebas leading slash.
 
 Isi versi dasar (base) untuk three-way merge tidak disimpan lokal. Ia diambil ulang dari GitHub lewat `baseBlobSha` saat merge dibutuhkan (blob Git tidak pernah berubah).

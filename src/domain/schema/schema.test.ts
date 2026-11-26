@@ -4,6 +4,8 @@ import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import {
   CURRENT_SCHEMA_VERSION,
+  VIRTUAL_ROOT_ID,
+  isVirtualRootId,
   parseCanvasJson,
   parseKnovitesJson,
   parseNodeJson,
@@ -97,6 +99,25 @@ describe('schema parsers and fixtures [T1.1]', () => {
       expect(canvas.issues).toEqual([])
       expect(Object.keys(canvas.data.elements)).toEqual(['e_8f2a1c0d', 'e_91bc40aa'])
     }
+
+    const rootCanvas = parseCanvasJson(readFixture('root-canvas.json'))
+    expect(rootCanvas.status).toBe('ok')
+    if (rootCanvas.status === 'ok') {
+      expect(rootCanvas.issues).toEqual([])
+      expect(rootCanvas.data.schema).toBe(CURRENT_SCHEMA_VERSION)
+      expect(Object.keys(rootCanvas.data.elements)).toEqual(['e_home0001', 'e_home0002'])
+    }
+  })
+
+  it('defines canonical VIRTUAL_ROOT_ID ("__root__") and rejects it as a node.json ID [M3-HomeRoot]', () => {
+    expect(VIRTUAL_ROOT_ID).toBe('__root__')
+    expect(isVirtualRootId('__root__')).toBe(true)
+    expect(isVirtualRootId(VALID_ULID)).toBe(false)
+    expect(isVirtualRootId('root')).toBe(false)
+    expect(isVirtualRootId(null)).toBe(false)
+    expect(isVirtualRootId(undefined)).toBe(false)
+
+    expect(parseNodeJson(makeValidNode({ id: VIRTUAL_ROOT_ID })).status).toBe('corrupt')
   })
 
   it('parses invalid fixtures into the expected discriminated outcomes without throwing', () => {

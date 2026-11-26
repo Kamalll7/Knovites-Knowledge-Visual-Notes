@@ -1,10 +1,27 @@
-import { ULID_REGEX, type NodeJson } from '@/domain/schema'
+import {
+  ASSETS_DIR,
+  CANVAS_FILE,
+  KNOVITES_META_FILE,
+  ULID_REGEX,
+  type NodeJson,
+  type SchemaIssue,
+} from '@/domain/schema'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
 import { compareLexicographical, compareSiblings, generateOrderBetween } from '@/domain/tree/order'
+import {
+  normalizeRepoRelativePath,
+  resolveAssetFilePath,
+  resolveCanvasFilePath,
+  resolveExtraFilePath,
+  resolveNodeFilePath,
+} from '@/domain/tree/paths'
 import { deriveNodePath, normalizeFolderPath, resolveUniqueSlug, slugify } from '@/domain/tree/slug'
 import {
   EMPTY_CHANGESET,
   FORBIDDEN_SLUGS,
+  ROOT_RESERVED_NAMES,
+  VIRTUAL_ROOT_ID,
+  isVirtualRootId,
   type BuildTreeOptions,
   type BuildTreeResult,
   type Changeset,
@@ -63,6 +80,29 @@ function fail(
     state,
     changeset: EMPTY_CHANGESET,
   }
+}
+
+function preserveRootFields(
+  state: TreeState,
+  nodes: Record<string, TreeNode>,
+  rootIds: string[],
+): TreeState {
+  const next: TreeState = { nodes, rootIds }
+  if (state.rootHasCanvas !== undefined) next.rootHasCanvas = state.rootHasCanvas
+  if (state.rootAssets !== undefined) next.rootAssets = state.rootAssets
+  if (state.rootExtraFiles !== undefined) next.rootExtraFiles = state.rootExtraFiles
+  if (state.rootCanvasCorrupt !== undefined) next.rootCanvasCorrupt = state.rootCanvasCorrupt
+  if (state.rootCanvasCorruptErrors !== undefined) {
+    next.rootCanvasCorruptErrors = state.rootCanvasCorruptErrors
+  }
+  if (state.rootCanvasNewerSchemaVersion !== undefined) {
+    next.rootCanvasNewerSchemaVersion = state.rootCanvasNewerSchemaVersion
+  }
+  return next
+}
+
+function normalizeParentId(parentId: string | null): string | null {
+  return parentId === null || isVirtualRootId(parentId) ? null : parentId
 }
 
 function cloneStateWithNodes(state: TreeState): {
@@ -153,7 +193,7 @@ function failReadOnlyNode(
 }
 
 function cleanRelativeFilePath(raw: string): string {
-  return raw.replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, '')
+  return normalizeRepoRelativePath(raw)
 }
 
 function normalizeNodeFiles(
@@ -166,8 +206,8 @@ function normalizeNodeFiles(
   if (rawAssets) {
     for (const raw of rawAssets) {
       const clean = cleanRelativeFilePath(raw)
-      if (clean.length === 0 || clean === 'assets') continue
-      assetSet.add(clean.startsWith('assets/') ? clean : `assets/${clean}`)
+      if (clean.length === 0 || clean === ASSETS_DIR) continue
+      assetSet.add(clean.startsWith(`${ASSETS_DIR}/`) ? clean : `${ASSETS_DIR}/${clean}`)
     }
   }
 
@@ -177,12 +217,12 @@ function normalizeNodeFiles(
       if (
         clean.length === 0 ||
         clean === 'node.json' ||
-        clean === 'canvas.json' ||
-        clean === 'assets'
+        clean === CANVAS_FILE ||
+        clean === ASSETS_DIR
       ) {
         continue
       }
-      if (clean.startsWith('assets/')) {
+      if (clean.startsWith(`${ASSETS_DIR}/`)) {
         assetSet.add(clean)
       } else {
         extraSet.add(clean)
@@ -193,6 +233,101 @@ function normalizeNodeFiles(
   return {
     assets: [...assetSet].sort(compareLexicographical),
     extraFiles: [...extraSet].sort(compareLexicographical),
+  }
+}
+
+function collectRootFiles(
+  rootEntries: readonly TreeBuildEntry[],
+  options: BuildTreeOptions,
+  issues: TreeIssue[],
+): {
+  rootHasCanvas: boolean
+  rootAssets: string[]
+  rootExtraFiles: string[]
+  rootCanvasCorrupt: boolean
+  rootCanvasCorruptErrors?: SchemaIssue[]
+  rootCanvasNewerSchemaVersion?: number
+} {
+  let rootHasCanvas = Boolean(options.root?.hasCanvas)
+  const assetSet = new Set<string>()
+  const extraSet = new Set<string>()
+  let rootCanvasCorrupt = Boolean(options.root?.corrupt)
+  let rootCanvasCorruptErrors = options.root?.corruptErrors
+  let rootCanvasNewerSchemaVersion = options.root?.newerSchemaVersion
+
+  const addAsset = (raw: string) => {
+    const clean = cleanRelativeFilePath(raw)
+    if (clean.length === 0 || clean === ASSETS_DIR) return
+    assetSet.add(clean.startsWith(`${ASSETS_DIR}/`) ? clean : `${ASSETS_DIR}/${clean}`)
+  }
+
+  const classifyRootFile = (raw: string) => {
+    const clean = cleanRelativeFilePath(raw)
+    if (clean.length === 0 || clean === KNOVITES_META_FILE || clean === ASSETS_DIR) {
+      return
+    }
+    if (clean === CANVAS_FILE) {
+      rootHasCanvas = true
+      return
+    }
+    if (clean.startsWith(`${ASSETS_DIR}/`)) {
+      assetSet.add(clean)
+      return
+    }
+    extraSet.add(clean)
+  }
+
+  if (options.root?.assets) {
+    for (const raw of options.root.assets) addAsset(raw)
+  }
+  if (options.root?.extraFiles) {
+    for (const raw of options.root.extraFiles) classifyRootFile(raw)
+  }
+  if (options.rootFiles) {
+    for (const raw of options.rootFiles) classifyRootFile(raw)
+  }
+
+  for (const entry of rootEntries) {
+    if (entry.hasCanvas) rootHasCanvas = true
+    if (entry.assets) {
+      for (const raw of entry.assets) addAsset(raw)
+    }
+    if (entry.extraFiles) {
+      for (const raw of entry.extraFiles) classifyRootFile(raw)
+    }
+    if (entry.newerSchemaVersion !== undefined) {
+      rootCanvasCorrupt = true
+      rootCanvasNewerSchemaVersion = entry.newerSchemaVersion
+    } else if (entry.corrupt) {
+      rootCanvasCorrupt = true
+      if (entry.corruptErrors) {
+        rootCanvasCorruptErrors = entry.corruptErrors
+      }
+    }
+  }
+
+  if (rootCanvasNewerSchemaVersion !== undefined) {
+    rootCanvasCorrupt = true
+    issues.push({
+      path: CANVAS_FILE,
+      code: 'newer_schema_root_canvas',
+      message: `Root home canvas "${CANVAS_FILE}" uses newer schema version ${rootCanvasNewerSchemaVersion} and is read-only.`,
+    })
+  } else if (rootCanvasCorrupt) {
+    issues.push({
+      path: CANVAS_FILE,
+      code: 'corrupt_root_canvas',
+      message: `Root home canvas "${CANVAS_FILE}" is corrupt and marked read-only.`,
+    })
+  }
+
+  return {
+    rootHasCanvas,
+    rootAssets: [...assetSet].sort(compareLexicographical),
+    rootExtraFiles: [...extraSet].sort(compareLexicographical),
+    rootCanvasCorrupt,
+    ...(rootCanvasCorruptErrors ? { rootCanvasCorruptErrors } : {}),
+    ...(rootCanvasNewerSchemaVersion !== undefined ? { rootCanvasNewerSchemaVersion } : {}),
   }
 }
 
@@ -207,7 +342,19 @@ export function buildTree(
   const issues: TreeIssue[] = []
   const upserts: Changeset['upserts'] = []
 
-  const normalizedEntries = entries
+  const virtualRootEntries: TreeBuildEntry[] = []
+  const regularEntries: TreeBuildEntry[] = []
+  for (const entry of entries) {
+    if (entry.isVirtualRoot) {
+      virtualRootEntries.push(entry)
+    } else {
+      regularEntries.push(entry)
+    }
+  }
+
+  const rootMeta = collectRootFiles(virtualRootEntries, options, issues)
+
+  const normalizedEntries = regularEntries
     .map((entry) => ({
       entry,
       path: normalizeFolderPath(entry.path),
@@ -228,11 +375,15 @@ export function buildTree(
 
   for (const { entry, path } of normalizedEntries) {
     const segments = path.split('/')
-    if (path.length === 0 || segments.some((seg) => seg.length === 0 || FORBIDDEN_SLUGS.has(seg))) {
+    if (
+      path.length === 0 ||
+      ROOT_RESERVED_NAMES.has(segments[0]!) ||
+      segments.some((seg) => seg.length === 0 || FORBIDDEN_SLUGS.has(seg))
+    ) {
       issues.push({
         path,
         code: 'forbidden_folder_ignored',
-        message: `Ignored folder "${path}" because it uses an empty or forbidden segment.`,
+        message: `Ignored folder "${path}" because it uses an empty, reserved, or forbidden segment.`,
       })
       continue
     }
@@ -358,7 +509,7 @@ export function buildTree(
         newId: nodeId,
       })
       upserts.push({
-        path: `${item.path}/node.json`,
+        path: resolveNodeFilePath(item.path),
         content: serializeNodeJson(meta),
       })
     } else {
@@ -433,11 +584,26 @@ export function buildTree(
     node.childrenIds = sortSiblingIds(nodes, node.childrenIds)
   }
 
+  const state: TreeState = {
+    nodes,
+    rootIds: sortedRootIds,
+    rootHasCanvas: rootMeta.rootHasCanvas,
+    rootAssets: rootMeta.rootAssets,
+    rootExtraFiles: rootMeta.rootExtraFiles,
+    ...(rootMeta.rootCanvasCorrupt ? { rootCanvasCorrupt: true } : {}),
+    ...(rootMeta.rootCanvasCorruptErrors
+      ? { rootCanvasCorruptErrors: rootMeta.rootCanvasCorruptErrors }
+      : {}),
+    ...(rootMeta.rootCanvasNewerSchemaVersion !== undefined
+      ? { rootCanvasNewerSchemaVersion: rootMeta.rootCanvasNewerSchemaVersion }
+      : {}),
+  }
+
   return {
-    state: {
-      nodes,
-      rootIds: sortedRootIds,
-    },
+    state,
+    rootHasCanvas: rootMeta.rootHasCanvas,
+    rootAssets: rootMeta.rootAssets,
+    rootExtraFiles: rootMeta.rootExtraFiles,
     issues,
     changeset: {
       upserts,
@@ -455,11 +621,12 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
     return fail(state, 'invalid_timestamp', 'Timestamp must be a valid ISO 8601 UTC string.')
   }
 
+  const effectiveParentId = normalizeParentId(input.parentId)
   let parentPath: string | null = null
-  if (input.parentId !== null) {
-    const parent = state.nodes[input.parentId]
+  if (effectiveParentId !== null) {
+    const parent = state.nodes[effectiveParentId]
     if (!parent) {
-      return fail(state, 'parent_not_found', `Parent node "${input.parentId}" does not exist.`)
+      return fail(state, 'parent_not_found', `Parent node "${effectiveParentId}" does not exist.`)
     }
     if (parent.corrupt || parent.newerSchemaVersion !== undefined) {
       return failReadOnlyNode(state, 'create child inside', parent, parent)
@@ -468,11 +635,11 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
   }
 
   const id = input.generateId()
-  if (!ULID_REGEX.test(id) || id in state.nodes) {
+  if (isVirtualRootId(id) || !ULID_REGEX.test(id) || id in state.nodes) {
     return fail(state, 'invalid_id', 'Generated node ID must be a unique valid ULID.')
   }
 
-  const siblingIds = getSiblingIds(state, input.parentId)
+  const siblingIds = getSiblingIds(state, effectiveParentId)
   const siblingSlugs = siblingIds.map((sid) => state.nodes[sid]!.slug)
   const slug = resolveUniqueSlug(slugify(input.title), siblingSlugs)
   const path = deriveNodePath(parentPath, slug)
@@ -498,7 +665,7 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
     id,
     slug,
     path,
-    parentId: input.parentId,
+    parentId: effectiveParentId,
     meta,
     corrupt: false,
     childrenIds: [],
@@ -511,11 +678,11 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
   nodes[id] = newNode
 
   let nextRootIds = rootIds
-  if (input.parentId === null) {
+  if (effectiveParentId === null) {
     nextRootIds = sortSiblingIds(nodes, [...rootIds, id])
   } else {
-    const parent = nodes[input.parentId]!
-    nodes[input.parentId] = {
+    const parent = nodes[effectiveParentId]!
+    nodes[effectiveParentId] = {
       ...parent,
       childrenIds: sortSiblingIds(nodes, [...parent.childrenIds, id]),
     }
@@ -525,11 +692,11 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
   return {
     ok: true,
     nodeId: id,
-    state: { nodes, rootIds: nextRootIds },
+    state: preserveRootFields(state, nodes, nextRootIds),
     changeset: {
       upserts: [
-        { path: `${path}/node.json`, content: serializeNodeJson(meta) },
-        { path: `${path}/canvas.json`, content: emptyCanvas },
+        { path: resolveNodeFilePath(path), content: serializeNodeJson(meta) },
+        { path: resolveCanvasFilePath(path), content: emptyCanvas },
       ],
       moves: [],
       deletes: [],
@@ -538,6 +705,9 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
 }
 
 export function renameNode(state: TreeState, input: RenameNodeInput): TreeOperationResult {
+  if (isVirtualRootId(input.nodeId)) {
+    return fail(state, 'cannot_mutate_root', `Cannot rename virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
   const existing = state.nodes[input.nodeId]
   if (!existing) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
@@ -567,9 +737,11 @@ export function renameNode(state: TreeState, input: RenameNodeInput): TreeOperat
   return {
     ok: true,
     nodeId: input.nodeId,
-    state: { nodes, rootIds },
+    state: preserveRootFields(state, nodes, rootIds),
     changeset: {
-      upserts: [{ path: `${existing.path}/node.json`, content: serializeNodeJson(updatedMeta) }],
+      upserts: [
+        { path: resolveNodeFilePath(existing.path), content: serializeNodeJson(updatedMeta) },
+      ],
       moves: [],
       deletes: [],
     },
@@ -577,6 +749,9 @@ export function renameNode(state: TreeState, input: RenameNodeInput): TreeOperat
 }
 
 export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationResult {
+  if (isVirtualRootId(input.nodeId)) {
+    return fail(state, 'cannot_mutate_root', `Cannot move virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
   const target = state.nodes[input.nodeId]
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
@@ -589,25 +764,30 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
     return fail(state, 'invalid_timestamp', 'Timestamp must be a valid ISO 8601 UTC string.')
   }
 
+  const effectiveNewParentId = normalizeParentId(input.newParentId)
   let newParentPath: string | null = null
-  if (input.newParentId !== null) {
-    const newParent = state.nodes[input.newParentId]
+  if (effectiveNewParentId !== null) {
+    const newParent = state.nodes[effectiveNewParentId]
     if (!newParent) {
-      return fail(state, 'parent_not_found', `Destination parent "${input.newParentId}" not found.`)
+      return fail(
+        state,
+        'parent_not_found',
+        `Destination parent "${effectiveNewParentId}" not found.`,
+      )
     }
     if (newParent.corrupt || newParent.newerSchemaVersion !== undefined) {
       return failReadOnlyNode(state, 'move into', newParent, newParent)
     }
     if (
-      input.newParentId === input.nodeId ||
-      isDescendant(state, input.nodeId, input.newParentId)
+      effectiveNewParentId === input.nodeId ||
+      isDescendant(state, input.nodeId, effectiveNewParentId)
     ) {
       return fail(state, 'cycle_detected', 'Cannot move a node into itself or its own descendant.')
     }
     newParentPath = newParent.path
   }
 
-  if (target.parentId === input.newParentId) {
+  if (target.parentId === effectiveNewParentId) {
     return {
       ok: true,
       nodeId: input.nodeId,
@@ -616,7 +796,7 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
     }
   }
 
-  const destSiblingIds = getSiblingIds(state, input.newParentId)
+  const destSiblingIds = getSiblingIds(state, effectiveNewParentId)
   const destSiblingSlugs = destSiblingIds.map((id) => state.nodes[id]!.slug)
   const newSlug = resolveUniqueSlug(target.slug, destSiblingSlugs)
   const newPath = deriveNodePath(newParentPath, newSlug)
@@ -648,18 +828,18 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
   // Update target node
   nodes[input.nodeId] = {
     ...target,
-    parentId: input.newParentId,
+    parentId: effectiveNewParentId,
     slug: newSlug,
     path: newPath,
     meta: updatedMeta,
   }
 
   // Attach to new parent
-  if (input.newParentId === null) {
+  if (effectiveNewParentId === null) {
     nextRootIds = sortSiblingIds(nodes, [...nextRootIds, input.nodeId])
   } else {
-    const newParent = nodes[input.newParentId]!
-    nodes[input.newParentId] = {
+    const newParent = nodes[effectiveNewParentId]!
+    nodes[effectiveNewParentId] = {
       ...newParent,
       childrenIds: sortSiblingIds(nodes, [...newParent.childrenIds, input.nodeId]),
     }
@@ -679,25 +859,25 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
     const currNode = nodes[curr.id]!
     if (curr.oldPath !== curr.newPath) {
       moves.push({
-        from: `${curr.oldPath}/node.json`,
-        to: `${curr.newPath}/node.json`,
+        from: resolveNodeFilePath(curr.oldPath),
+        to: resolveNodeFilePath(curr.newPath),
       })
       if (currNode.hasCanvas) {
         moves.push({
-          from: `${curr.oldPath}/canvas.json`,
-          to: `${curr.newPath}/canvas.json`,
+          from: resolveCanvasFilePath(curr.oldPath),
+          to: resolveCanvasFilePath(curr.newPath),
         })
       }
       for (const asset of currNode.assets) {
         moves.push({
-          from: `${curr.oldPath}/${asset}`,
-          to: `${curr.newPath}/${asset}`,
+          from: resolveAssetFilePath(curr.oldPath, asset),
+          to: resolveAssetFilePath(curr.newPath, asset),
         })
       }
       for (const extraFile of currNode.extraFiles) {
         moves.push({
-          from: `${curr.oldPath}/${extraFile}`,
-          to: `${curr.newPath}/${extraFile}`,
+          from: resolveExtraFilePath(curr.oldPath, extraFile),
+          to: resolveExtraFilePath(curr.newPath, extraFile),
         })
       }
     }
@@ -717,9 +897,9 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
   return {
     ok: true,
     nodeId: input.nodeId,
-    state: { nodes, rootIds: nextRootIds },
+    state: preserveRootFields(state, nodes, nextRootIds),
     changeset: {
-      upserts: [{ path: `${newPath}/node.json`, content: serializeNodeJson(updatedMeta) }],
+      upserts: [{ path: resolveNodeFilePath(newPath), content: serializeNodeJson(updatedMeta) }],
       moves,
       deletes: [],
     },
@@ -727,6 +907,9 @@ export function moveNode(state: TreeState, input: MoveNodeInput): TreeOperationR
 }
 
 export function reorderNode(state: TreeState, input: ReorderNodeInput): TreeOperationResult {
+  if (isVirtualRootId(input.nodeId)) {
+    return fail(state, 'cannot_mutate_root', `Cannot reorder virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
   const target = state.nodes[input.nodeId]
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
@@ -818,9 +1001,11 @@ export function reorderNode(state: TreeState, input: ReorderNodeInput): TreeOper
   return {
     ok: true,
     nodeId: input.nodeId,
-    state: { nodes, rootIds: nextRootIds },
+    state: preserveRootFields(state, nodes, nextRootIds),
     changeset: {
-      upserts: [{ path: `${target.path}/node.json`, content: serializeNodeJson(updatedMeta) }],
+      upserts: [
+        { path: resolveNodeFilePath(target.path), content: serializeNodeJson(updatedMeta) },
+      ],
       moves: [],
       deletes: [],
     },
@@ -828,6 +1013,9 @@ export function reorderNode(state: TreeState, input: ReorderNodeInput): TreeOper
 }
 
 export function deleteNode(state: TreeState, input: DeleteNodeInput): TreeOperationResult {
+  if (isVirtualRootId(input.nodeId)) {
+    return fail(state, 'cannot_mutate_root', `Cannot delete virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
   const target = state.nodes[input.nodeId]
   if (!target) {
     return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
@@ -841,15 +1029,15 @@ export function deleteNode(state: TreeState, input: DeleteNodeInput): TreeOperat
   const deletes: string[] = []
   for (const id of subtreeIds) {
     const node = state.nodes[id]!
-    deletes.push(`${node.path}/node.json`)
+    deletes.push(resolveNodeFilePath(node.path))
     if (node.hasCanvas) {
-      deletes.push(`${node.path}/canvas.json`)
+      deletes.push(resolveCanvasFilePath(node.path))
     }
     for (const asset of node.assets) {
-      deletes.push(`${node.path}/${asset}`)
+      deletes.push(resolveAssetFilePath(node.path, asset))
     }
     for (const extraFile of node.extraFiles) {
-      deletes.push(`${node.path}/${extraFile}`)
+      deletes.push(resolveExtraFilePath(node.path, extraFile))
     }
   }
   deletes.sort(compareLexicographical)
@@ -873,7 +1061,7 @@ export function deleteNode(state: TreeState, input: DeleteNodeInput): TreeOperat
   return {
     ok: true,
     nodeId: input.nodeId,
-    state: { nodes, rootIds: nextRootIds },
+    state: preserveRootFields(state, nodes, nextRootIds),
     changeset: {
       upserts: [],
       moves: [],

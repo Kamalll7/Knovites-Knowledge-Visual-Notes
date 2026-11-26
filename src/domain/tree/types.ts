@@ -1,6 +1,20 @@
-import type { NodeJson, NodeStatus, NodeType, ParseResult, SchemaIssue } from '@/domain/schema'
+import {
+  CANVAS_FILE,
+  KNOVITES_META_FILE,
+  VIRTUAL_ROOT_ID,
+  isVirtualRootId,
+  type NodeJson,
+  type NodeStatus,
+  type NodeType,
+  type ParseResult,
+  type SchemaIssue,
+  type VirtualRootId,
+} from '@/domain/schema'
+
+export { VIRTUAL_ROOT_ID, isVirtualRootId, type VirtualRootId }
 
 export const FORBIDDEN_SLUGS = new Set(['assets', '.git', '.github', 'node_modules'])
+export const ROOT_RESERVED_NAMES = new Set<string>([KNOVITES_META_FILE, CANVAS_FILE])
 
 export interface FileUpsert {
   path: string
@@ -46,6 +60,8 @@ export interface TreeIssue {
     | 'duplicate_id_repaired'
     | 'corrupt_node'
     | 'newer_schema_node'
+    | 'corrupt_root_canvas'
+    | 'newer_schema_root_canvas'
     | 'forbidden_folder_ignored'
     | 'missing_parent_ignored'
     | 'duplicate_path_ignored'
@@ -74,28 +90,56 @@ export interface TreeNode {
 export interface TreeState {
   nodes: Record<string, TreeNode>
   rootIds: string[]
+  /** Whether optional root `canvas.json` exists for virtual root `'__root__'` (lazy creation). */
+  rootHasCanvas?: boolean
+  /** Normalized root-level assets under `assets/` belonging to `'__root__'`. */
+  rootAssets?: string[]
+  /** Unknown/user files at repo root (e.g. `README.md`, `.gitignore`) preserved untouched. */
+  rootExtraFiles?: string[]
+  /** Read-only status when root `canvas.json` is corrupt or uses a newer schema version. */
+  rootCanvasCorrupt?: boolean
+  rootCanvasCorruptErrors?: SchemaIssue[]
+  rootCanvasNewerSchemaVersion?: number
 }
 
 export interface TreeBuildEntry {
   path: string
+  /** Set true ONLY for the virtual root (`'__root__'`) home entry (`path: ''`), never for a regular node folder. */
+  isVirtualRoot?: boolean
   node?: NodeJson
   parseResult?: ParseResult<NodeJson>
   corrupt?: boolean
   corruptErrors?: SchemaIssue[]
   newerSchemaVersion?: number
-  /** Files under `<nodePath>/assets/` supplied by the repository scanner (including orphan assets). */
+  /** Files under `<nodePath>/assets/` (or root `assets/`) supplied by the repository scanner. */
   assets?: string[]
-  /** Other unknown files directly or nested under `<nodePath>/` supplied by the repository scanner. */
+  /** Other unknown files directly or nested under `<nodePath>/` (or repo root) supplied by the scanner. */
   extraFiles?: string[]
   hasCanvas?: boolean
 }
 
+export interface RootBuildInput {
+  hasCanvas?: boolean
+  assets?: readonly string[]
+  extraFiles?: readonly string[]
+  corrupt?: boolean
+  corruptErrors?: SchemaIssue[]
+  newerSchemaVersion?: number
+}
+
 export interface BuildTreeOptions {
   generateId?: () => string
+  /** Optional structured root metadata (`canvas.json`, `assets/`, unknown user root files). */
+  root?: RootBuildInput
+  /** Optional raw repo-root file paths (e.g. `['knovites.json', 'canvas.json', 'assets/...', 'README.md']`). */
+  rootFiles?: readonly string[]
 }
 
 export interface BuildTreeResult {
   state: TreeState
+  rootHasCanvas: boolean
+  rootAssets: string[]
+  rootExtraFiles: string[]
   issues: TreeIssue[]
   changeset: Changeset
 }
@@ -110,6 +154,7 @@ export type TreeOperationErrorReason =
   | 'invalid_title'
   | 'invalid_timestamp'
   | 'invalid_id'
+  | 'cannot_mutate_root'
 
 export type TreeOperationResult =
   | {

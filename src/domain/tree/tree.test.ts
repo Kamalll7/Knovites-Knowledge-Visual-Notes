@@ -3,16 +3,27 @@ import { describe, expect, it } from 'vitest'
 import { parseNodeJson, type NodeJson } from '@/domain/schema'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
 import {
+  EMPTY_CHANGESET,
   FORBIDDEN_SLUGS,
+  VIRTUAL_ROOT_ID,
   buildTree,
   compareSiblings,
   createNode,
   deleteNode,
   deriveNodePath,
   generateOrderBetween,
+  isRootAssetFilePath,
+  isValidRepoFilePath,
   moveNode,
+  normalizeRepoRelativePath,
+  parseCanvasFilePath,
+  parseNodeFilePath,
   renameNode,
   reorderNode,
+  resolveAssetFilePath,
+  resolveCanvasFilePath,
+  resolveExtraFilePath,
+  resolveNodeFilePath,
   resolveUniqueSlug,
   slugify,
   type Changeset,
@@ -881,6 +892,426 @@ describe('domain/tree [T1.3]', () => {
             }
           }
         }),
+        { numRuns: 100 },
+      )
+    })
+  })
+
+  describe('home root ("__root__") paths, rootExtraFiles/rootAssets, and root mutation guards [M3-HomeRoot]', () => {
+    it('resolves slash-free repo file paths for both virtual root and regular nodes', () => {
+      expect(normalizeRepoRelativePath('/canvas.json')).toBe('canvas.json')
+      expect(normalizeRepoRelativePath('./assets/7ab1c2d3e4f50987.webp')).toBe(
+        'assets/7ab1c2d3e4f50987.webp',
+      )
+
+      expect(resolveCanvasFilePath('')).toBe('canvas.json')
+      expect(resolveCanvasFilePath('/')).toBe('canvas.json')
+      expect(resolveCanvasFilePath('pwn')).toBe('pwn/canvas.json')
+      expect(resolveCanvasFilePath('/pwn/rop/')).toBe('pwn/rop/canvas.json')
+
+      expect(resolveAssetFilePath('', 'assets/7ab1c2d3e4f50987.webp')).toBe(
+        'assets/7ab1c2d3e4f50987.webp',
+      )
+      expect(resolveAssetFilePath('', '/assets/7ab1c2d3e4f50987.webp')).toBe(
+        'assets/7ab1c2d3e4f50987.webp',
+      )
+      expect(resolveAssetFilePath('', '7ab1c2d3e4f50987.webp')).toBe('assets/7ab1c2d3e4f50987.webp')
+      expect(resolveAssetFilePath('pwn/rop', 'assets/3fa9c1d2e4b5a671.webp')).toBe(
+        'pwn/rop/assets/3fa9c1d2e4b5a671.webp',
+      )
+      expect(resolveAssetFilePath('/pwn/', '3fa9c1d2e4b5a671.webp')).toBe(
+        'pwn/assets/3fa9c1d2e4b5a671.webp',
+      )
+
+      expect(resolveExtraFilePath('', 'README.md')).toBe('README.md')
+      expect(resolveExtraFilePath('', '/.gitignore')).toBe('.gitignore')
+      expect(resolveExtraFilePath('pwn', 'exploit.py')).toBe('pwn/exploit.py')
+
+      expect(resolveNodeFilePath('pwn/rop')).toBe('pwn/rop/node.json')
+      expect(() => resolveNodeFilePath('')).toThrow()
+      expect(() => resolveNodeFilePath('/')).toThrow()
+
+      expect(parseCanvasFilePath('canvas.json')).toEqual({ isRoot: true, ownerPath: '' })
+      expect(parseCanvasFilePath('pwn/canvas.json')).toEqual({ isRoot: false, ownerPath: 'pwn' })
+      expect(parseCanvasFilePath('pwn/rop/canvas.json')).toEqual({
+        isRoot: false,
+        ownerPath: 'pwn/rop',
+      })
+      expect(parseCanvasFilePath('/canvas.json')).toBeNull()
+      expect(parseCanvasFilePath('/pwn/canvas.json')).toBeNull()
+      expect(parseCanvasFilePath('pwn/node.json')).toBeNull()
+
+      expect(parseNodeFilePath('pwn/node.json')).toBe('pwn')
+      expect(parseNodeFilePath('node.json')).toBeNull()
+      expect(parseNodeFilePath('/pwn/node.json')).toBeNull()
+
+      expect(isRootAssetFilePath('assets/7ab1c2d3e4f50987.webp')).toBe(true)
+      expect(isRootAssetFilePath('/assets/7ab1c2d3e4f50987.webp')).toBe(false)
+      expect(isRootAssetFilePath('pwn/assets/7ab1c2d3e4f50987.webp')).toBe(false)
+      expect(isRootAssetFilePath('assets/')).toBe(false)
+      expect(isRootAssetFilePath('assets/../secret.txt')).toBe(false)
+
+      expect(isValidRepoFilePath('canvas.json')).toBe(true)
+      expect(isValidRepoFilePath('assets/7ab1c2d3e4f50987.webp')).toBe(true)
+      expect(isValidRepoFilePath('/canvas.json')).toBe(false)
+      expect(isValidRepoFilePath('pwn//canvas.json')).toBe(false)
+      expect(isValidRepoFilePath('')).toBe(false)
+    })
+
+    it('separates rootExtraFiles and rootAssets, detects optional root canvas.json, and preserves missing_parent_ignored in buildTree', () => {
+      const idPwn = makeUlid(1)
+      const idOrphanChild = makeUlid(2)
+      const idAssetsNode = makeUlid(3)
+      const idReservedCanvas = makeUlid(4)
+
+      const built = buildTree(
+        [
+          {
+            path: 'pwn',
+            node: makeNodeMeta(idPwn, 'PWN', 'a0'),
+            hasCanvas: true,
+            assets: ['assets/3fa9c1d2e4b5a671.webp'],
+            extraFiles: ['notes.local.md'],
+          },
+          {
+            path: 'ghost-dir/orphan-child',
+            node: makeNodeMeta(idOrphanChild, 'Orphan', 'a0'),
+            hasCanvas: true,
+          },
+          {
+            path: 'assets',
+            node: makeNodeMeta(idAssetsNode, 'Assets Folder', 'a1'),
+            hasCanvas: true,
+          },
+          {
+            path: 'canvas.json',
+            node: makeNodeMeta(idReservedCanvas, 'Fake Canvas Folder', 'a2'),
+            hasCanvas: false,
+          },
+          {
+            path: '',
+            node: makeNodeMeta(makeUlid(5), 'Illegal Root NodeJson', 'a3'),
+          },
+        ],
+        {
+          rootFiles: [
+            'knovites.json',
+            'canvas.json',
+            'assets/7ab1c2d3e4f50987.webp',
+            'assets/1122334455667788.png',
+            'README.md',
+            '.gitignore',
+            'LICENSE',
+          ],
+        },
+      )
+
+      expect(built.rootHasCanvas).toBe(true)
+      expect(built.state.rootHasCanvas).toBe(true)
+      expect(built.rootAssets).toEqual([
+        'assets/1122334455667788.png',
+        'assets/7ab1c2d3e4f50987.webp',
+      ])
+      expect(built.state.rootAssets).toEqual([
+        'assets/1122334455667788.png',
+        'assets/7ab1c2d3e4f50987.webp',
+      ])
+      expect(built.rootExtraFiles).toEqual(['.gitignore', 'LICENSE', 'README.md'])
+      expect(built.state.rootExtraFiles).toEqual(['.gitignore', 'LICENSE', 'README.md'])
+
+      // Virtual root must NOT become a TreeNode in state.nodes or rootIds
+      expect(built.state.nodes[VIRTUAL_ROOT_ID]).toBeUndefined()
+      expect(built.state.rootIds).toEqual([idPwn])
+      expect(Object.keys(built.state.nodes)).toEqual([idPwn])
+      expect(built.state.nodes[idPwn]?.extraFiles).toEqual(['notes.local.md'])
+
+      // missing_parent_ignored & forbidden_folder_ignored must remain intact
+      expect(
+        built.issues.some(
+          (i) => i.code === 'missing_parent_ignored' && i.path === 'ghost-dir/orphan-child',
+        ),
+      ).toBe(true)
+      expect(
+        built.issues.some((i) => i.code === 'forbidden_folder_ignored' && i.path === 'assets'),
+      ).toBe(true)
+      expect(
+        built.issues.some((i) => i.code === 'forbidden_folder_ignored' && i.path === 'canvas.json'),
+      ).toBe(true)
+      expect(built.issues.some((i) => i.code === 'forbidden_folder_ignored' && i.path === '')).toBe(
+        true,
+      )
+      assertTreeInvariants(built.state)
+    })
+
+    it('accepts virtual-root TreeBuildEntry (including lazy absent canvas and corrupt root canvas)', () => {
+      const idA = makeUlid(10)
+
+      // Lazy workspace without root canvas
+      const lazyBuilt = buildTree([{ path: 'pwn', node: makeNodeMeta(idA, 'PWN', 'a0') }])
+      expect(lazyBuilt.rootHasCanvas).toBe(false)
+      expect(lazyBuilt.rootAssets).toEqual([])
+      expect(lazyBuilt.rootExtraFiles).toEqual([])
+      expect(lazyBuilt.state.rootCanvasCorrupt).toBeFalsy()
+
+      // Virtual root entry supplied by storage/loadTreeBuildEntries
+      const withRootEntry = buildTree([
+        {
+          path: '',
+          isVirtualRoot: true,
+          hasCanvas: true,
+          assets: ['assets/7ab1c2d3e4f50987.webp'],
+          extraFiles: ['README.md', '.gitignore'],
+          corrupt: true,
+          corruptErrors: [{ path: 'elements', code: 'invalid_type', message: 'Bad root canvas' }],
+        },
+        { path: 'pwn', node: makeNodeMeta(idA, 'PWN', 'a0') },
+      ])
+
+      expect(withRootEntry.rootHasCanvas).toBe(true)
+      expect(withRootEntry.rootAssets).toEqual(['assets/7ab1c2d3e4f50987.webp'])
+      expect(withRootEntry.rootExtraFiles).toEqual(['.gitignore', 'README.md'])
+      expect(withRootEntry.state.rootCanvasCorrupt).toBe(true)
+      expect(withRootEntry.state.nodes[VIRTUAL_ROOT_ID]).toBeUndefined()
+      expect(withRootEntry.issues.some((i) => i.code === 'corrupt_root_canvas')).toBe(true)
+      assertTreeInvariants(withRootEntry.state)
+    })
+
+    it('rejects deleteNode, renameNode, moveNode, and reorderNode targeting VIRTUAL_ROOT_ID ("__root__")', () => {
+      const idA = makeUlid(1)
+      const idB = makeUlid(2)
+      const built = buildTree(
+        [
+          { path: 'pwn', node: makeNodeMeta(idA, 'PWN', 'a0'), hasCanvas: true },
+          { path: 're', node: makeNodeMeta(idB, 'RE', 'a1'), hasCanvas: true },
+        ],
+        {
+          rootFiles: ['knovites.json', 'canvas.json', 'assets/7ab1c2d3e4f50987.webp', 'README.md'],
+        },
+      )
+      const now = '2026-11-26T10:00:00Z'
+
+      const delRoot = deleteNode(built.state, { nodeId: VIRTUAL_ROOT_ID })
+      expect(delRoot.ok).toBe(false)
+      if (!delRoot.ok) expect(delRoot.reason).toBe('cannot_mutate_root')
+      expect(delRoot.state).toBe(built.state)
+      expect(delRoot.changeset).toEqual(EMPTY_CHANGESET)
+
+      const renameRoot = renameNode(built.state, {
+        nodeId: VIRTUAL_ROOT_ID,
+        title: 'Hacked Root',
+        now,
+      })
+      expect(renameRoot.ok).toBe(false)
+      if (!renameRoot.ok) expect(renameRoot.reason).toBe('cannot_mutate_root')
+      expect(renameRoot.state).toBe(built.state)
+      expect(renameRoot.changeset).toEqual(EMPTY_CHANGESET)
+
+      const moveRootToChild = moveNode(built.state, {
+        nodeId: VIRTUAL_ROOT_ID,
+        newParentId: idA,
+        now,
+      })
+      expect(moveRootToChild.ok).toBe(false)
+      if (!moveRootToChild.ok) expect(moveRootToChild.reason).toBe('cannot_mutate_root')
+      expect(moveRootToChild.state).toBe(built.state)
+      expect(moveRootToChild.changeset).toEqual(EMPTY_CHANGESET)
+
+      const moveRootToNull = moveNode(built.state, {
+        nodeId: VIRTUAL_ROOT_ID,
+        newParentId: null,
+        now,
+      })
+      expect(moveRootToNull.ok).toBe(false)
+      if (!moveRootToNull.ok) expect(moveRootToNull.reason).toBe('cannot_mutate_root')
+
+      const reorderRoot = reorderNode(built.state, {
+        nodeId: VIRTUAL_ROOT_ID,
+        direction: 'earlier',
+        now,
+      })
+      expect(reorderRoot.ok).toBe(false)
+      if (!reorderRoot.ok) expect(reorderRoot.reason).toBe('cannot_mutate_root')
+      expect(reorderRoot.state).toBe(built.state)
+      expect(reorderRoot.changeset).toEqual(EMPTY_CHANGESET)
+
+      // Even if a caller artificially injects __root__ into state.nodes, mutations MUST still be rejected
+      const poisonedState: TreeState = {
+        ...built.state,
+        nodes: {
+          ...built.state.nodes,
+          [VIRTUAL_ROOT_ID]: {
+            id: VIRTUAL_ROOT_ID,
+            slug: 'root',
+            path: '',
+            parentId: null,
+            meta: makeNodeMeta(VIRTUAL_ROOT_ID, 'Root', 'a0'),
+            corrupt: false,
+            childrenIds: [],
+            assets: [],
+            extraFiles: [],
+            hasCanvas: true,
+          },
+        },
+      }
+      for (const res of [
+        deleteNode(poisonedState, { nodeId: VIRTUAL_ROOT_ID }),
+        renameNode(poisonedState, { nodeId: VIRTUAL_ROOT_ID, title: 'X', now }),
+        moveNode(poisonedState, { nodeId: VIRTUAL_ROOT_ID, newParentId: idA, now }),
+        reorderNode(poisonedState, { nodeId: VIRTUAL_ROOT_ID, direction: 'later', now }),
+      ]) {
+        expect(res.ok).toBe(false)
+        if (!res.ok) expect(res.reason).toBe('cannot_mutate_root')
+        expect(res.state).toBe(poisonedState)
+        expect(res.changeset).toEqual(EMPTY_CHANGESET)
+      }
+    })
+
+    it('forbids slug "assets" on direct root children and preserves root home metadata across child operations', () => {
+      const gen = makeIdGenerator(1)
+      const now = '2026-11-26T10:00:00Z'
+      const built = buildTree([], {
+        rootFiles: ['knovites.json', 'canvas.json', 'assets/7ab1c2d3e4f50987.webp', 'README.md'],
+      })
+
+      // Direct child titled "assets" under null or VIRTUAL_ROOT_ID must NOT get slug "assets"
+      const c1 = createNode(built.state, {
+        title: 'assets',
+        parentId: null,
+        now,
+        generateId: gen,
+      })
+      expect(c1.ok).toBe(true)
+      if (!c1.ok) return
+      expect(c1.state.nodes[c1.nodeId]?.slug).toBe('node')
+      expect(c1.state.nodes[c1.nodeId]?.path).toBe('node')
+      expect(c1.state.nodes[c1.nodeId]?.parentId).toBeNull()
+      expect(c1.state.rootHasCanvas).toBe(true)
+      expect(c1.state.rootAssets).toEqual(['assets/7ab1c2d3e4f50987.webp'])
+      expect(c1.state.rootExtraFiles).toEqual(['README.md'])
+
+      const c2 = createNode(c1.state, {
+        title: 'ASSETS',
+        parentId: VIRTUAL_ROOT_ID,
+        now,
+        generateId: gen,
+      })
+      expect(c2.ok).toBe(true)
+      if (!c2.ok) return
+      expect(c2.state.nodes[c2.nodeId]?.slug).toBe('node-2')
+      expect(c2.state.nodes[c2.nodeId]?.parentId).toBeNull()
+
+      const child = createNode(c2.state, {
+        title: 'Nested',
+        parentId: c1.nodeId,
+        now,
+        generateId: gen,
+      })
+      expect(child.ok).toBe(true)
+      if (!child.ok) return
+
+      // Move child to VIRTUAL_ROOT_ID promotes to top-level (parentId: null) while keeping root metadata
+      const promoted = moveNode(child.state, {
+        nodeId: child.nodeId,
+        newParentId: VIRTUAL_ROOT_ID,
+        now: '2026-11-26T10:01:00Z',
+      })
+      expect(promoted.ok).toBe(true)
+      expect(promoted.state.nodes[child.nodeId]?.parentId).toBeNull()
+      expect(promoted.state.nodes[child.nodeId]?.path).toBe('nested')
+      expect(promoted.state.rootHasCanvas).toBe(true)
+      expect(promoted.state.rootExtraFiles).toEqual(['README.md'])
+
+      // Deleting a top-level node must NOT delete root canvas.json, root assets, or rootExtraFiles
+      const deleted = deleteNode(promoted.state, { nodeId: c1.nodeId })
+      expect(deleted.ok).toBe(true)
+      expect(deleted.changeset.deletes).not.toContain('canvas.json')
+      expect(deleted.changeset.deletes).not.toContain('README.md')
+      expect(deleted.changeset.deletes).not.toContain('assets/7ab1c2d3e4f50987.webp')
+      expect(deleted.state.rootHasCanvas).toBe(true)
+      expect(deleted.state.rootAssets).toEqual(['assets/7ab1c2d3e4f50987.webp'])
+      expect(deleted.state.rootExtraFiles).toEqual(['README.md'])
+      assertTreeInvariants(deleted.state)
+    })
+
+    it('property (fast-check): slash-free path helpers and rootExtraFiles/rootAssets separation hold for arbitrary inputs', () => {
+      const slugSegArb = fc
+        .stringMatching(/^[a-z0-9][a-z0-9-]{0,12}$/)
+        .filter((s) => !FORBIDDEN_SLUGS.has(s))
+      const ownerPathArb = fc.oneof(
+        fc.constant(''),
+        fc.constant('/'),
+        fc.array(slugSegArb, { minLength: 1, maxLength: 3 }).map((segs) => segs.join('/')),
+      )
+      const hex16Arb = fc.stringMatching(/^[0-9a-f]{16}$/)
+      const extArb = fc.constantFrom('png', 'jpg', 'jpeg', 'webp', 'gif')
+      const assetRelArb = fc
+        .tuple(fc.boolean(), hex16Arb, extArb)
+        .map(([withPrefix, hex, ext]) => (withPrefix ? `assets/${hex}.${ext}` : `${hex}.${ext}`))
+      const extraNameArb = fc.constantFrom(
+        'README.md',
+        '.gitignore',
+        'LICENSE',
+        'notes/todo.txt',
+        'CONTRIBUTING.md',
+      )
+
+      fc.assert(
+        fc.property(
+          ownerPathArb,
+          assetRelArb,
+          extraNameArb,
+          fc.boolean(),
+          fc.uniqueArray(extraNameArb, { maxLength: 5 }),
+          fc.uniqueArray(
+            fc.tuple(hex16Arb, extArb).map(([h, e]) => `assets/${h}.${e}`),
+            { maxLength: 4 },
+          ),
+          (ownerPath, assetRel, extraName, includeRootCanvas, userRootExtras, rootAssetsInput) => {
+            const canvasPath = resolveCanvasFilePath(ownerPath)
+            const assetPath = resolveAssetFilePath(ownerPath, assetRel)
+            const extraPath = resolveExtraFilePath(ownerPath, extraName)
+
+            for (const p of [canvasPath, assetPath, extraPath]) {
+              expect(p.startsWith('/')).toBe(false)
+              expect(p.includes('//')).toBe(false)
+              expect(isValidRepoFilePath(p)).toBe(true)
+            }
+            if (ownerPath === '' || ownerPath === '/') {
+              expect(canvasPath).toBe('canvas.json')
+              expect(assetPath.startsWith('assets/')).toBe(true)
+              expect(parseCanvasFilePath(canvasPath)).toEqual({ isRoot: true, ownerPath: '' })
+              expect(isRootAssetFilePath(assetPath)).toBe(true)
+            } else {
+              expect(parseCanvasFilePath(canvasPath)).toEqual({ isRoot: false, ownerPath })
+            }
+
+            const rootFiles = [
+              'knovites.json',
+              ...(includeRootCanvas ? ['canvas.json'] : []),
+              ...rootAssetsInput,
+              ...userRootExtras,
+            ]
+            const built = buildTree(
+              [
+                { path: 'assets', node: makeNodeMeta(makeUlid(50), 'assets', 'a0') },
+                { path: 'missing-parent/child', node: makeNodeMeta(makeUlid(51), 'child', 'a0') },
+              ],
+              { rootFiles },
+            )
+
+            expect(built.rootHasCanvas).toBe(includeRootCanvas)
+            expect(built.rootAssets).toEqual([...rootAssetsInput].sort())
+            expect(built.rootExtraFiles).toEqual([...userRootExtras].sort())
+            expect(built.rootExtraFiles).not.toContain('knovites.json')
+            expect(built.rootExtraFiles).not.toContain('canvas.json')
+            for (const extra of built.rootExtraFiles) {
+              expect(extra.startsWith('assets/')).toBe(false)
+            }
+            expect(built.state.rootIds).toEqual([])
+            expect(built.issues.some((i) => i.code === 'forbidden_folder_ignored')).toBe(true)
+            expect(built.issues.some((i) => i.code === 'missing_parent_ignored')).toBe(true)
+          },
+        ),
         { numRuns: 100 },
       )
     })
