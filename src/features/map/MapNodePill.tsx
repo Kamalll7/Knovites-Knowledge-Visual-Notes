@@ -30,6 +30,7 @@ export interface MapNodePillProps {
   readonly theme: MapThemeMode
   readonly measureText?: TextMeasurerFn
   readonly isHovered?: boolean
+  readonly isKeyboardFocused?: boolean
   readonly onSelect?: (nodeId: string) => void
   readonly onOpen?: (nodeId: string) => void
   readonly onHoverStart?: (nodeId: string) => void
@@ -106,6 +107,7 @@ export function MapNodePill({
   colors,
   theme,
   isHovered = false,
+  isKeyboardFocused = false,
   onSelect,
   onOpen,
   onHoverStart,
@@ -166,6 +168,18 @@ export function MapNodePill({
               strokeWidth={FOCUS_HALO_STROKE_WIDTH_PX}
               opacity={FOCUS_HALO_OPACITY}
               data-testid="map-node-focus-halo"
+            />
+          ) : null}
+          {isKeyboardFocused ? (
+            <circle
+              cx={0}
+              cy={0}
+              r={r + FOCUS_HALO_STROKE_EXPAND_PX + 3}
+              fill="none"
+              stroke={palette.accent}
+              strokeWidth={2.5}
+              strokeDasharray="6 3"
+              data-testid="map-node-keyboard-ring"
             />
           ) : null}
           <circle
@@ -261,6 +275,20 @@ export function MapNodePill({
             strokeWidth={FOCUS_HALO_STROKE_WIDTH_PX}
             opacity={FOCUS_HALO_OPACITY}
             data-testid="map-node-focus-halo"
+          />
+        ) : null}
+        {isKeyboardFocused ? (
+          <rect
+            x={-halfW - FOCUS_HALO_STROKE_EXPAND_PX - 3}
+            y={-halfH - FOCUS_HALO_STROKE_EXPAND_PX - 3}
+            width={layoutNode.width + (FOCUS_HALO_STROKE_EXPAND_PX + 3) * 2}
+            height={layoutNode.height + (FOCUS_HALO_STROKE_EXPAND_PX + 3) * 2}
+            rx={CAPSULE_CORNER_RADIUS_PX + FOCUS_HALO_STROKE_EXPAND_PX + 3}
+            fill="none"
+            stroke={palette.accent}
+            strokeWidth={2.5}
+            strokeDasharray="6 3"
+            data-testid="map-node-keyboard-ring"
           />
         ) : null}
         <rect

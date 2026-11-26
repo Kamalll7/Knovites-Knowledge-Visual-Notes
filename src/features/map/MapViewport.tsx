@@ -36,6 +36,7 @@ export interface MapViewportProps {
   readonly theme: MapThemeMode
   readonly measureText?: TextMeasurerFn
   readonly hudInsets?: CameraHudInsets
+  readonly keyboardFocusActive?: boolean
   readonly onSelectNode?: (nodeId: string) => void
   readonly onOpenNode?: (nodeId: string) => void
   readonly onCreateFirstNode?: () => void
@@ -56,6 +57,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     theme,
     measureText,
     hudInsets,
+    keyboardFocusActive = false,
     onSelectNode,
     onOpenNode,
     onCreateFirstNode,
@@ -137,10 +139,13 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   return (
     <div
       ref={containerRef}
+      tabIndex={0}
+      aria-label={en.map.title}
       data-testid="map-viewport"
       data-orientation={orientation}
       data-tier={layout.tier}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      data-keyboard-focus={keyboardFocusActive ? 'true' : 'false'}
+      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
     >
       <h1 className="sr-only">{en.map.title}</h1>
       <svg
@@ -173,6 +178,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
                   theme={theme}
                   measureText={measureText}
                   isHovered={hoveredNodeId === id}
+                  isKeyboardFocused={keyboardFocusActive && visibleNode.isFocus}
                   onSelect={onSelectNode}
                   onOpen={onOpenNode}
                   onHoverStart={setHoveredNodeId}
