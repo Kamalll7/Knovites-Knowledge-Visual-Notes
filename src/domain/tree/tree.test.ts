@@ -26,6 +26,7 @@ import {
   resolveNodeFilePath,
   resolveUniqueSlug,
   slugify,
+  updateNodeMeta,
   type Changeset,
   type TreeBuildEntry,
   type TreeNode,
@@ -1314,6 +1315,100 @@ describe('domain/tree [T1.3]', () => {
         ),
         { numRuns: 100 },
       )
+    })
+  })
+
+  describe('updateNodeMeta [T3.7, FR-NODE-06]', () => {
+    it('updates type, status, color (incl. reset to null), and tags with strict validation and __root__ protection', () => {
+      const idA = makeUlid(301)
+      const built = buildTree([
+        { path: 'pwn', node: makeNodeMeta(idA, 'PWN', 'a0'), hasCanvas: true },
+        {
+          path: 'broken',
+          corrupt: true,
+          corruptErrors: [{ path: 'schema', code: 'invalid_schema', message: 'corrupt' }],
+        },
+        {
+          path: 'future',
+          newerSchemaVersion: 2,
+        },
+      ])
+
+      const now = '2026-11-26T12:00:00Z'
+      const updated = updateNodeMeta(built.state, {
+        nodeId: idA,
+        now,
+        type: 'technique',
+        status: 'practiced',
+        color: '#7c9cff',
+        tags: ['pwn', 'rop_chain', 'pwn'],
+      })
+      expect(updated.ok).toBe(true)
+      if (!updated.ok) throw new Error(updated.message)
+      expect(updated.state.nodes[idA]?.meta.type).toBe('technique')
+      expect(updated.state.nodes[idA]?.meta.status).toBe('practiced')
+      expect(updated.state.nodes[idA]?.meta.color).toBe('#7c9cff')
+      expect(updated.state.nodes[idA]?.meta.tags).toEqual(['pwn', 'rop_chain'])
+      expect(updated.state.nodes[idA]?.meta.updatedAt).toBe(now)
+      expect(updated.changeset.upserts).toHaveLength(1)
+      expect(updated.changeset.upserts[0]?.path).toBe('pwn/node.json')
+      expect(parseNodeJson(updated.changeset.upserts[0]!.content).status).toBe('ok')
+
+      // Reset color back to Auto (null)
+      const resetColor = updateNodeMeta(updated.state, {
+        nodeId: idA,
+        now: '2026-11-26T12:01:00Z',
+        color: null,
+      })
+      expect(resetColor.ok).toBe(true)
+      if (resetColor.ok) {
+        expect(resetColor.state.nodes[idA]?.meta.color).toBeNull()
+      }
+
+      // Rejects virtual root __root__
+      const rootAttempt = updateNodeMeta(built.state, {
+        nodeId: VIRTUAL_ROOT_ID,
+        now,
+        status: 'mastered',
+      })
+      expect(rootAttempt.ok).toBe(false)
+      if (!rootAttempt.ok) expect(rootAttempt.reason).toBe('cannot_mutate_root')
+
+      // Rejects invalid hex color & invalid tags & >20 tags
+      const badColor = updateNodeMeta(built.state, { nodeId: idA, now, color: 'red' })
+      expect(badColor.ok).toBe(false)
+      if (!badColor.ok) expect(badColor.reason).toBe('invalid_meta')
+
+      const badTag = updateNodeMeta(built.state, { nodeId: idA, now, tags: ['BAD TAG!'] })
+      expect(badTag.ok).toBe(false)
+      if (!badTag.ok) expect(badTag.reason).toBe('invalid_meta')
+
+      const tooManyTags = updateNodeMeta(built.state, {
+        nodeId: idA,
+        now,
+        tags: Array.from({ length: 21 }, (_, idx) => `tag${idx}`),
+      })
+      expect(tooManyTags.ok).toBe(false)
+      if (!tooManyTags.ok) expect(tooManyTags.reason).toBe('invalid_meta')
+
+      // Rejects corrupt and newer-schema nodes
+      const corruptNodeId = Object.keys(built.state.nodes).find((k) => k.includes('broken'))!
+      const newerNodeId = Object.keys(built.state.nodes).find((k) => k.includes('future'))!
+      const corruptAttempt = updateNodeMeta(built.state, {
+        nodeId: corruptNodeId,
+        now,
+        status: 'learning',
+      })
+      expect(corruptAttempt.ok).toBe(false)
+      if (!corruptAttempt.ok) expect(corruptAttempt.reason).toBe('corrupt_node')
+
+      const newerAttempt = updateNodeMeta(built.state, {
+        nodeId: newerNodeId,
+        now,
+        status: 'learning',
+      })
+      expect(newerAttempt.ok).toBe(false)
+      if (!newerAttempt.ok) expect(newerAttempt.reason).toBe('newer_schema_node')
     })
   })
 })

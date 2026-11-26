@@ -1275,5 +1275,50 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
       store.getState().dispose()
       db.close()
     })
+
+    it('persists updateNodeMeta (type, status, color, tags) to Dexie and blocks __root__ [T3.7, FR-NODE-06]', async () => {
+      const indexedDB = new IDBFactory()
+      const db = createKnovitesDatabase('store-update-meta-test', { indexedDB, IDBKeyRange })
+      const store = createWorkspaceStore({
+        storage: createDexieWorkspaceAdapter(db),
+        now: () => '2026-11-26T12:00:00Z',
+      })
+      await store.getState().hydrate()
+
+      const created = await store.getState().createNode({ title: 'ROP', parentId: null })
+      if (!created.ok) throw new Error(created.message)
+
+      const updated = await store.getState().updateNodeMeta({
+        nodeId: created.nodeId,
+        type: 'technique',
+        status: 'mastered',
+        color: '#5eead4',
+        tags: ['pwn', 'stack'],
+      })
+      expect(updated.ok).toBe(true)
+
+      const rootBlocked = await store.getState().updateNodeMeta({
+        nodeId: VIRTUAL_ROOT_ID,
+        status: 'learning',
+      })
+      expect(rootBlocked.ok).toBe(false)
+      if (!rootBlocked.ok) expect(rootBlocked.reason).toBe('cannot_mutate_root')
+
+      store.getState().dispose()
+
+      const store2 = createWorkspaceStore({
+        storage: createDexieWorkspaceAdapter(db),
+        now: () => '2026-11-26T12:05:00Z',
+      })
+      await store2.getState().hydrate()
+      const persisted = store2.getState().tree.nodes[created.nodeId]
+      expect(persisted?.meta.type).toBe('technique')
+      expect(persisted?.meta.status).toBe('mastered')
+      expect(persisted?.meta.color).toBe('#5eead4')
+      expect(persisted?.meta.tags).toEqual(['pwn', 'stack'])
+
+      store2.getState().dispose()
+      db.close()
+    })
   })
 })

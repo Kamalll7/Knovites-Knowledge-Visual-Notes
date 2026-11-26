@@ -5,6 +5,7 @@ export {
   moveNode,
   renameNode,
   reorderNode,
+  updateNodeMeta,
 } from '@/domain/tree/operations'
 export {
   compareLexicographical,
@@ -48,5 +49,6 @@ export {
   type TreeOperationErrorReason,
   type TreeOperationResult,
   type TreeState,
+  type UpdateNodeMetaInput,
   type VirtualRootId,
 } from '@/domain/tree/types'

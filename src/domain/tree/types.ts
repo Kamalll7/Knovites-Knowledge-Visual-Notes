@@ -152,6 +152,7 @@ export type TreeOperationErrorReason =
   | 'cycle_detected'
   | 'order_collision'
   | 'invalid_title'
+  | 'invalid_meta'
   | 'invalid_timestamp'
   | 'invalid_id'
   | 'cannot_mutate_root'
@@ -186,6 +187,15 @@ export interface RenameNodeInput {
   nodeId: string
   title: string
   now: string
+}
+
+export interface UpdateNodeMetaInput {
+  nodeId: string
+  now: string
+  type?: NodeType
+  status?: NodeStatus
+  color?: string | null
+  tags?: readonly string[]
 }
 
 export interface MoveNodeInput {

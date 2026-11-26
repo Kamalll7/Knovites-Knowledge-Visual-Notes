@@ -14,6 +14,7 @@ import {
   renameNode as domainRenameNode,
   reorderNode as domainReorderNode,
   resolveCanvasFilePath,
+  updateNodeMeta as domainUpdateNodeMeta,
   type Changeset,
   type ReorderNodeInput,
   type TreeBuildEntry,
@@ -168,6 +169,13 @@ export interface WorkspaceStoreState {
     color?: string | null
   }) => Promise<StoreOperationResult>
   renameNode: (input: { nodeId: string; title: string }) => Promise<StoreOperationResult>
+  updateNodeMeta: (input: {
+    nodeId: string
+    type?: NodeType
+    status?: NodeStatus
+    color?: string | null
+    tags?: readonly string[]
+  }) => Promise<StoreOperationResult>
   moveNode: (input: { nodeId: string; newParentId: string | null }) => Promise<StoreOperationResult>
   reorderNode: (
     input:
@@ -285,7 +293,7 @@ function buildRootHomeState(tree: TreeState): RootHomeState {
 
 function guardNotVirtualRoot(
   nodeId: string,
-  action: 'delete' | 'rename' | 'move' | 'reorder',
+  action: 'delete' | 'rename' | 'update' | 'move' | 'reorder',
 ): StoreOperationResult | null {
   if (isVirtualRootId(nodeId)) {
     return {
@@ -584,6 +592,17 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
           if (rootBlocked) return rootBlocked
           return executeTreeMutation((tree, now) =>
             domainRenameNode(tree, {
+              ...input,
+              now,
+            }),
+          )
+        },
+
+        updateNodeMeta: async (input) => {
+          const rootBlocked = guardNotVirtualRoot(input.nodeId, 'update')
+          if (rootBlocked) return rootBlocked
+          return executeTreeMutation((tree, now) =>
+            domainUpdateNodeMeta(tree, {
               ...input,
               now,
             }),

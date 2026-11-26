@@ -1,9 +1,13 @@
 import {
   ASSETS_DIR,
   CANVAS_FILE,
+  HEX_COLOR_REGEX,
   KNOVITES_META_FILE,
+  TAG_REGEX,
   ULID_REGEX,
   type NodeJson,
+  type NodeStatus,
+  type NodeType,
   type SchemaIssue,
 } from '@/domain/schema'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
@@ -37,7 +41,12 @@ import {
   type TreeOperationErrorReason,
   type TreeOperationResult,
   type TreeState,
+  type UpdateNodeMetaInput,
 } from '@/domain/tree/types'
+
+const VALID_NODE_TYPES = new Set<NodeType>(['category', 'concept', 'technique', 'challenge', 'lab'])
+const VALID_NODE_STATUSES = new Set<NodeStatus>(['none', 'learning', 'practiced', 'mastered'])
+const MAX_NODE_TAGS = 20
 
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
@@ -175,7 +184,7 @@ function findBlockingNodeInSubtree(state: TreeState, rootId: string): TreeNode |
 
 function failReadOnlyNode(
   state: TreeState,
-  action: 'create child inside' | 'rename' | 'move' | 'move into' | 'reorder' | 'delete',
+  action: 'create child inside' | 'rename' | 'update' | 'move' | 'move into' | 'reorder' | 'delete',
   target: TreeNode,
   blocker: TreeNode,
 ): TreeOperationResult {
@@ -725,6 +734,93 @@ export function renameNode(state: TreeState, input: RenameNodeInput): TreeOperat
   const updatedMeta: NodeJson = {
     ...existing.meta,
     title: input.title,
+    updatedAt: input.now,
+  }
+
+  const { nodes, rootIds } = cloneStateWithNodes(state)
+  nodes[input.nodeId] = {
+    ...existing,
+    meta: updatedMeta,
+  }
+
+  return {
+    ok: true,
+    nodeId: input.nodeId,
+    state: preserveRootFields(state, nodes, rootIds),
+    changeset: {
+      upserts: [
+        { path: resolveNodeFilePath(existing.path), content: serializeNodeJson(updatedMeta) },
+      ],
+      moves: [],
+      deletes: [],
+    },
+  }
+}
+
+export function updateNodeMeta(state: TreeState, input: UpdateNodeMetaInput): TreeOperationResult {
+  if (isVirtualRootId(input.nodeId)) {
+    return fail(state, 'cannot_mutate_root', `Cannot update virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
+  const existing = state.nodes[input.nodeId]
+  if (!existing) {
+    return fail(state, 'not_found', `Node "${input.nodeId}" does not exist.`)
+  }
+  if (existing.corrupt || existing.newerSchemaVersion !== undefined) {
+    return failReadOnlyNode(state, 'update', existing, existing)
+  }
+  if (!isValidTimestamp(input.now)) {
+    return fail(state, 'invalid_timestamp', 'Timestamp must be a valid ISO 8601 UTC string.')
+  }
+
+  let nextType = existing.meta.type
+  if (input.type !== undefined) {
+    if (!VALID_NODE_TYPES.has(input.type)) {
+      return fail(state, 'invalid_meta', `Unsupported node type "${String(input.type)}".`)
+    }
+    nextType = input.type
+  }
+
+  let nextStatus = existing.meta.status
+  if (input.status !== undefined) {
+    if (!VALID_NODE_STATUSES.has(input.status)) {
+      return fail(state, 'invalid_meta', `Unsupported node status "${String(input.status)}".`)
+    }
+    nextStatus = input.status
+  }
+
+  let nextColor = existing.meta.color
+  if (input.color !== undefined) {
+    if (input.color !== null && !HEX_COLOR_REGEX.test(input.color)) {
+      return fail(state, 'invalid_meta', 'Node color must be null or a valid #rrggbb hex string.')
+    }
+    nextColor = input.color
+  }
+
+  let nextTags = existing.meta.tags
+  if (input.tags !== undefined) {
+    const deduped: string[] = []
+    const seen = new Set<string>()
+    for (const raw of input.tags) {
+      if (!TAG_REGEX.test(raw)) {
+        return fail(state, 'invalid_meta', `Tag "${raw}" must match [a-z0-9_-]{1,32}.`)
+      }
+      if (!seen.has(raw)) {
+        seen.add(raw)
+        deduped.push(raw)
+      }
+    }
+    if (deduped.length > MAX_NODE_TAGS) {
+      return fail(state, 'invalid_meta', `A node can have at most ${MAX_NODE_TAGS} tags.`)
+    }
+    nextTags = deduped
+  }
+
+  const updatedMeta: NodeJson = {
+    ...existing.meta,
+    type: nextType,
+    status: nextStatus,
+    color: nextColor,
+    tags: [...nextTags],
     updatedAt: input.now,
   }
 
