@@ -14,7 +14,9 @@ import {
 
 export class KnovitesDatabase extends Dexie {
   declare nodes: EntityTable<StoredNodeRecord, 'id'>
+  /** Stores node canvases (`nodeId` = ULID) and the lazy home canvas (`nodeId = '__root__'`, `path = ''`). */
   declare canvases: EntityTable<StoredCanvasRecord, 'nodeId'>
+  /** Stores node assets and home root assets (`nodeId = '__root__'`, `path = 'assets/...'`) without requiring a `nodes` row. */
   declare assets: Table<StoredAssetRecord, [string, string]>
   declare pendingDeletes: EntityTable<PendingDeleteRecord, 'path'>
   declare syncState: EntityTable<SyncStateRecord, 'id'>

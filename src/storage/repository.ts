@@ -1,7 +1,27 @@
-import { parseCanvasJson, parseNodeJson, type NodeJson } from '@/domain/schema'
 import {
+  ASSETS_DIR,
+  CANVAS_FILE,
+  KNOVITES_META_FILE,
+  NODE_META_FILE,
+  parseCanvasJson,
+  parseNodeJson,
+  type NodeJson,
+} from '@/domain/schema'
+import {
+  VIRTUAL_ROOT_ID,
   compareLexicographical,
   deriveNodePath,
+  isRootAssetFilePath,
+  isValidRepoFilePath,
+  isVirtualRootId,
+  normalizeAssetRelativePath,
+  normalizeRepoRelativePath,
+  parseCanvasFilePath,
+  parseNodeFilePath,
+  resolveAssetFilePath,
+  resolveCanvasFilePath,
+  resolveExtraFilePath,
+  resolveNodeFilePath,
   resolveUniqueSlug,
   type Changeset,
   type TreeBuildEntry,
@@ -9,10 +29,12 @@ import {
 import type { KnovitesDatabase } from '@/storage/db'
 import {
   MAX_ERROR_LOG_ENTRIES,
+  ROOT_EXTRA_FILES_SETTING_KEY,
   type ApplyChangesetOptions,
   type CollectedDirtyFiles,
   type ErrorLogRecord,
   type InvalidNodeInput,
+  type InvalidRootCanvasInput,
   type PendingDeleteRecord,
   type RestoreSoftDeleteResult,
   type SoftDeleteInput,
@@ -113,10 +135,39 @@ function assertWritableCanvas(canvas: StoredCanvasRecord | undefined, targetPath
   }
 }
 
+function parseStoredRootExtraFiles(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const extras = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const clean = normalizeRepoRelativePath(item)
+    if (
+      clean.length === 0 ||
+      clean === KNOVITES_META_FILE ||
+      clean === CANVAS_FILE ||
+      clean === ASSETS_DIR ||
+      clean.startsWith(`${ASSETS_DIR}/`)
+    ) {
+      continue
+    }
+    extras.add(clean)
+  }
+  return [...extras].sort(compareLexicographical)
+}
+
+function assertValidChangesetPath(filePath: string): void {
+  if (!isValidRepoFilePath(filePath)) {
+    throw new Error(
+      `Invalid repository file path "${filePath}" (leading/trailing slashes and traversal segments are forbidden).`,
+    )
+  }
+}
+
 /**
  * Applies a `Changeset` from `domain/tree` in a SINGLE atomic Dexie transaction.
  * Execution order strictly follows `Changeset` semantics: `deletes` -> `moves` -> `upserts`.
- * Refuses to modify or delete `corrupt` / `newer-schema` nodes.
+ * Refuses to modify or delete `corrupt` / `newer-schema` nodes or canvases.
+ * Supports virtual root (`'__root__'`) `'canvas.json'` and `'assets/...'` without a row in `db.nodes`.
  */
 export async function applyChangeset(
   db: KnovitesDatabase,
@@ -148,46 +199,76 @@ export async function applyChangeset(
 
     for (const canvas of allCanvases) {
       if (canvas.deletedAt === 0) {
-        canvasByPath.set(canvas.path, { ...canvas })
+        const keyPath = isVirtualRootId(canvas.nodeId) ? '' : canvas.path
+        canvasByPath.set(keyPath, { ...canvas, path: keyPath })
       }
     }
 
     for (const asset of allAssets) {
       if (asset.deletedAt !== 0) continue
+      if (isVirtualRootId(asset.nodeId)) {
+        assetByFullPath.set(resolveAssetFilePath('', asset.path), { ...asset })
+        continue
+      }
       const owner = initialNodeById.get(asset.nodeId)
       if (owner && owner.deletedAt === 0) {
-        assetByFullPath.set(`${owner.path}/${asset.path}`, { ...asset })
+        assetByFullPath.set(resolveAssetFilePath(owner.path, asset.path), { ...asset })
       }
     }
 
     // 1. DELETES
     for (const filePath of changeset.deletes) {
-      if (filePath.endsWith('/node.json')) {
-        const nodePath = filePath.slice(0, -'/node.json'.length)
-        const existing = nodeByPath.get(nodePath)
+      assertValidChangesetPath(filePath)
+
+      if (filePath === NODE_META_FILE) {
+        throw new Error(
+          `Refusing to delete ${NODE_META_FILE} at virtual root "${VIRTUAL_ROOT_ID}".`,
+        )
+      }
+
+      const deletedNodePath = parseNodeFilePath(filePath)
+      if (deletedNodePath !== null) {
+        const existing = nodeByPath.get(deletedNodePath)
         assertWritableNode(existing, filePath)
         await db.pendingDeletes.put({
           path: filePath,
           baseBlobSha: existing?.baseBlobSha ?? null,
           deletedAt: now,
         })
-        if (existing?.basePath && existing.basePath !== nodePath) {
+        if (existing?.basePath && existing.basePath !== deletedNodePath) {
           await db.pendingDeletes.put({
-            path: `${existing.basePath}/node.json`,
+            path: resolveNodeFilePath(existing.basePath),
             baseBlobSha: existing.baseBlobSha,
             deletedAt: now,
           })
         }
         if (existing) {
           await db.nodes.delete(existing.id)
-          nodeByPath.delete(nodePath)
+          nodeByPath.delete(deletedNodePath)
           nodeById.delete(existing.id)
         }
         continue
       }
 
-      if (filePath.endsWith('/canvas.json')) {
-        const nodePath = filePath.slice(0, -'/canvas.json'.length)
+      const parsedCanvas = parseCanvasFilePath(filePath)
+      if (parsedCanvas !== null) {
+        if (parsedCanvas.isRoot) {
+          const existingRootCanvas =
+            canvasByPath.get('') ?? (await db.canvases.get(VIRTUAL_ROOT_ID))
+          assertWritableCanvas(existingRootCanvas, filePath)
+          await db.pendingDeletes.put({
+            path: resolveCanvasFilePath(''),
+            baseBlobSha: existingRootCanvas?.baseBlobSha ?? null,
+            deletedAt: now,
+          })
+          if (existingRootCanvas) {
+            await db.canvases.delete(VIRTUAL_ROOT_ID)
+            canvasByPath.delete('')
+          }
+          continue
+        }
+
+        const nodePath = parsedCanvas.ownerPath
         const ownerNode = nodeByPath.get(nodePath) ?? initialNodeByPath.get(nodePath)
         const existingCanvas = canvasByPath.get(nodePath)
         assertWritableNode(ownerNode, filePath)
@@ -199,7 +280,7 @@ export async function applyChangeset(
         })
         if (existingCanvas?.basePath && existingCanvas.basePath !== nodePath) {
           await db.pendingDeletes.put({
-            path: `${existingCanvas.basePath}/canvas.json`,
+            path: resolveCanvasFilePath(existingCanvas.basePath),
             baseBlobSha: existingCanvas.baseBlobSha,
             deletedAt: now,
           })
@@ -216,6 +297,33 @@ export async function applyChangeset(
       }
 
       const assetRec = assetByFullPath.get(filePath)
+      if (assetRec && isVirtualRootId(assetRec.nodeId)) {
+        await db.pendingDeletes.put({
+          path: filePath,
+          baseBlobSha: assetRec.sha ?? null,
+          deletedAt: now,
+        })
+        if (assetRec.basePath && assetRec.basePath !== filePath) {
+          await db.pendingDeletes.put({
+            path: assetRec.basePath,
+            baseBlobSha: assetRec.sha,
+            deletedAt: now,
+          })
+        }
+        await db.assets.delete([VIRTUAL_ROOT_ID, assetRec.path])
+        assetByFullPath.delete(filePath)
+        continue
+      }
+
+      if (!assetRec && isRootAssetFilePath(filePath)) {
+        await db.pendingDeletes.put({
+          path: filePath,
+          baseBlobSha: null,
+          deletedAt: now,
+        })
+        continue
+      }
+
       const ownerInfo =
         findOwnerByFilePath(filePath, initialNodeByPath) ??
         findOwnerByFilePath(filePath, nodeByPath)
@@ -238,7 +346,7 @@ export async function applyChangeset(
         ownerInfo.owner.basePath !== ownerInfo.owner.path
       ) {
         await db.pendingDeletes.put({
-          path: `${ownerInfo.owner.basePath}/${ownerInfo.relativePath}`,
+          path: resolveExtraFilePath(ownerInfo.owner.basePath, ownerInfo.relativePath),
           baseBlobSha: null,
           deletedAt: now,
         })
@@ -277,17 +385,19 @@ export async function applyChangeset(
 
       const oldToNewNodePath = new Map<string, string>()
       for (const mv of changeset.moves) {
-        if (mv.from.endsWith('/node.json') && mv.to.endsWith('/node.json')) {
-          const oldNodePath = mv.from.slice(0, -'/node.json'.length)
-          const newNodePath = mv.to.slice(0, -'/node.json'.length)
+        assertValidChangesetPath(mv.from)
+        assertValidChangesetPath(mv.to)
+        const oldNodePath = parseNodeFilePath(mv.from)
+        const newNodePath = parseNodeFilePath(mv.to)
+        if (oldNodePath !== null && newNodePath !== null) {
           oldToNewNodePath.set(oldNodePath, newNodePath)
         }
       }
 
       for (const mv of changeset.moves) {
-        if (mv.from.endsWith('/node.json') && mv.to.endsWith('/node.json')) {
-          const oldNodePath = mv.from.slice(0, -'/node.json'.length)
-          const newNodePath = mv.to.slice(0, -'/node.json'.length)
+        const oldNodePath = parseNodeFilePath(mv.from)
+        const newNodePath = parseNodeFilePath(mv.to)
+        if (oldNodePath !== null && newNodePath !== null) {
           const source = nodeByPath.get(oldNodePath)
           assertWritableNode(source, mv.from)
           assertWritableNode(nodeByPath.get(newNodePath), mv.to)
@@ -296,7 +406,7 @@ export async function applyChangeset(
             if (source.baseBlobSha !== null || source.basePath !== null) {
               const remoteOldPath = source.basePath ?? oldNodePath
               pendingMoveDeletes.push({
-                path: `${remoteOldPath}/node.json`,
+                path: resolveNodeFilePath(remoteOldPath),
                 baseBlobSha: source.baseBlobSha,
                 deletedAt: now,
               })
@@ -315,28 +425,30 @@ export async function applyChangeset(
           continue
         }
 
-        if (mv.from.endsWith('/canvas.json') && mv.to.endsWith('/canvas.json')) {
-          const oldNodePath = mv.from.slice(0, -'/canvas.json'.length)
-          const newNodePath = mv.to.slice(0, -'/canvas.json'.length)
-          const source = canvasByPath.get(oldNodePath)
+        const fromCanvas = parseCanvasFilePath(mv.from)
+        const toCanvas = parseCanvasFilePath(mv.to)
+        if (fromCanvas !== null && toCanvas !== null && !fromCanvas.isRoot && !toCanvas.isRoot) {
+          const oldPath = fromCanvas.ownerPath
+          const newPath = toCanvas.ownerPath
+          const source = canvasByPath.get(oldPath)
           assertWritableCanvas(source, mv.from)
-          assertWritableCanvas(canvasByPath.get(newNodePath), mv.to)
+          assertWritableCanvas(canvasByPath.get(newPath), mv.to)
 
           if (source) {
             if (source.baseBlobSha !== null || source.basePath !== null) {
-              const remoteOldPath = source.basePath ?? oldNodePath
+              const remoteOldPath = source.basePath ?? oldPath
               pendingMoveDeletes.push({
-                path: `${remoteOldPath}/canvas.json`,
+                path: resolveCanvasFilePath(remoteOldPath),
                 baseBlobSha: source.baseBlobSha,
                 deletedAt: now,
               })
             }
             movedCanvases.push({
-              oldPath: oldNodePath,
-              newPath: newNodePath,
+              oldPath,
+              newPath,
               record: {
                 ...source,
-                path: newNodePath,
+                path: newPath,
                 basePath: source.basePath,
                 dirty: 1,
               },
@@ -346,7 +458,7 @@ export async function applyChangeset(
         }
 
         const assetSource = assetByFullPath.get(mv.from)
-        if (assetSource) {
+        if (assetSource && !isVirtualRootId(assetSource.nodeId)) {
           const oldOwner = nodeById.get(assetSource.nodeId)
           assertWritableNode(oldOwner, mv.from)
           if (assetSource.sha !== null || assetSource.basePath !== null) {
@@ -385,7 +497,7 @@ export async function applyChangeset(
         ) {
           const remoteBaseDir = extraOwnerInfo.owner.basePath ?? extraOwnerInfo.owner.path
           pendingMoveDeletes.push({
-            path: `${remoteBaseDir}/${extraOwnerInfo.relativePath}`,
+            path: resolveExtraFilePath(remoteBaseDir, extraOwnerInfo.relativePath),
             baseBlobSha: null,
             deletedAt: now,
           })
@@ -444,9 +556,15 @@ export async function applyChangeset(
 
     // 3. UPSERTS
     for (const upsert of changeset.upserts) {
-      if (upsert.path.endsWith('/node.json')) {
-        const nodePath = upsert.path.slice(0, -'/node.json'.length)
-        const existingAtPath = nodeByPath.get(nodePath)
+      assertValidChangesetPath(upsert.path)
+
+      if (upsert.path === NODE_META_FILE) {
+        throw new Error(`Refusing to store ${NODE_META_FILE} at virtual root "${VIRTUAL_ROOT_ID}".`)
+      }
+
+      const upsertedNodePath = parseNodeFilePath(upsert.path)
+      if (upsertedNodePath !== null) {
+        const existingAtPath = nodeByPath.get(upsertedNodePath)
         assertWritableNode(existingAtPath, upsert.path)
 
         const parsed = parseNodeJson(upsert.content)
@@ -457,12 +575,12 @@ export async function applyChangeset(
         const existingById = nodeById.get(parsed.data.id)
         assertWritableNode(existingById, upsert.path)
 
-        const parentPath = resolveParentPath(nodePath)
+        const parentPath = resolveParentPath(upsertedNodePath)
         const parentId = parentPath === null ? null : (nodeByPath.get(parentPath)?.id ?? null)
 
         const nextRecord: StoredNodeRecord = {
           id: parsed.data.id,
-          path: nodePath,
+          path: upsertedNodePath,
           basePath: existingById?.basePath ?? null,
           parentId,
           meta: parsed.data,
@@ -475,14 +593,43 @@ export async function applyChangeset(
           deletedAt: 0,
         }
 
-        nodeByPath.set(nodePath, nextRecord)
+        nodeByPath.set(upsertedNodePath, nextRecord)
         nodeById.set(nextRecord.id, nextRecord)
         await db.nodes.put(nextRecord)
         continue
       }
 
-      if (upsert.path.endsWith('/canvas.json')) {
-        const nodePath = upsert.path.slice(0, -'/canvas.json'.length)
+      const parsedCanvas = parseCanvasFilePath(upsert.path)
+      if (parsedCanvas !== null) {
+        if (parsedCanvas.isRoot) {
+          const existingRootCanvas =
+            canvasByPath.get('') ?? (await db.canvases.get(VIRTUAL_ROOT_ID))
+          assertWritableCanvas(existingRootCanvas, upsert.path)
+
+          const parsed = parseCanvasJson(upsert.content)
+          if (parsed.status !== 'ok') {
+            throw new Error(`Invalid canvas.json upsert at "${upsert.path}".`)
+          }
+
+          const nextRootCanvas: StoredCanvasRecord = {
+            nodeId: VIRTUAL_ROOT_ID,
+            path: '',
+            basePath: existingRootCanvas?.basePath ?? null,
+            doc: parsed.data,
+            rawJson: upsert.content,
+            baseBlobSha: existingRootCanvas?.baseBlobSha ?? null,
+            dirty: 1,
+            loaded: true,
+            corrupt: false,
+            deletedAt: 0,
+          }
+
+          canvasByPath.set('', nextRootCanvas)
+          await db.canvases.put(nextRootCanvas)
+          continue
+        }
+
+        const nodePath = parsedCanvas.ownerPath
         const ownerNode = nodeByPath.get(nodePath)
         const existingCanvas = canvasByPath.get(nodePath)
         assertWritableNode(ownerNode, upsert.path)
@@ -573,8 +720,72 @@ export async function saveInvalidNode(
   })
 }
 
+export async function getCanvasRecord(
+  db: KnovitesDatabase,
+  nodeId: string,
+): Promise<StoredCanvasRecord | undefined> {
+  return db.canvases.get(nodeId)
+}
+
+/**
+ * Persists a corrupt or newer-schema root `canvas.json` intact (`nodeId = '__root__'`, `path = ''`)
+ * without creating any fake row in `db.nodes`.
+ */
+export async function saveInvalidRootCanvas(
+  db: KnovitesDatabase,
+  input: InvalidRootCanvasInput,
+): Promise<StoredCanvasRecord> {
+  return db.transaction('rw', db.canvases, async () => {
+    const existing = await db.canvases.get(VIRTUAL_ROOT_ID)
+    const record: StoredCanvasRecord = {
+      nodeId: VIRTUAL_ROOT_ID,
+      path: '',
+      basePath: input.baseBlobSha ? '' : (existing?.basePath ?? null),
+      doc: null,
+      rawJson: input.rawJson,
+      baseBlobSha: input.baseBlobSha ?? existing?.baseBlobSha ?? null,
+      dirty: 0,
+      loaded: true,
+      corrupt: true,
+      ...(input.corruptErrors ? { corruptErrors: input.corruptErrors } : {}),
+      ...(input.newerSchemaVersion !== undefined
+        ? { newerSchemaVersion: input.newerSchemaVersion }
+        : {}),
+      deletedAt: 0,
+    }
+    await db.canvases.put(record)
+    return record
+  })
+}
+
+export async function saveRootExtraFiles(
+  db: KnovitesDatabase,
+  extraFiles: readonly string[],
+  now: string = new Date().toISOString(),
+): Promise<string[]> {
+  const normalized = parseStoredRootExtraFiles(extraFiles)
+  await db.settings.put({
+    key: ROOT_EXTRA_FILES_SETTING_KEY,
+    value: normalized,
+    updatedAt: now,
+  })
+  return normalized
+}
+
+export async function loadRootExtraFiles(db: KnovitesDatabase): Promise<string[]> {
+  const setting = await db.settings.get(ROOT_EXTRA_FILES_SETTING_KEY)
+  return parseStoredRootExtraFiles(setting?.value)
+}
+
 export async function saveAsset(db: KnovitesDatabase, asset: StoredAssetRecord): Promise<void> {
-  await db.assets.put(asset)
+  const normalizedPath = normalizeAssetRelativePath(asset.path)
+  const normalizedBasePath =
+    asset.basePath !== null ? normalizeRepoRelativePath(asset.basePath) : null
+  await db.assets.put({
+    ...asset,
+    path: normalizedPath,
+    basePath: normalizedBasePath,
+  })
 }
 
 /**
@@ -582,11 +793,15 @@ export async function saveAsset(db: KnovitesDatabase, asset: StoredAssetRecord):
  * ready for `domain/tree.buildTree()`.
  * Uses primary-store `nodes.toArray()` plus `node.hasCanvas` (maintained on canvas
  * upsert/delete and backfilled during v1->v2 migration) to avoid redundant canvas scans.
+ * Only emits a virtual root entry (`isVirtualRoot: true`) when root canvas, root assets,
+ * or `rootExtraFiles` actually exist (preserving lazy creation on empty workspaces).
  */
 export async function loadTreeBuildEntries(db: KnovitesDatabase): Promise<TreeBuildEntry[]> {
-  const [nodes, assets] = await Promise.all([
+  const [nodes, assets, rootCanvas, rootExtraSetting] = await Promise.all([
     db.nodes.toArray(),
     db.assets.where('deletedAt').equals(0).toArray(),
+    db.canvases.get(VIRTUAL_ROOT_ID),
+    db.settings.get(ROOT_EXTRA_FILES_SETTING_KEY),
   ])
 
   const assetsByNodeId = new Map<string, string[]>()
@@ -596,52 +811,76 @@ export async function loadTreeBuildEntries(db: KnovitesDatabase): Promise<TreeBu
     assetsByNodeId.set(asset.nodeId, list)
   }
 
-  return nodes
+  const entries: TreeBuildEntry[] = []
+
+  const activeRootCanvas = rootCanvas && rootCanvas.deletedAt === 0 ? rootCanvas : undefined
+  const rootAssets = assetsByNodeId.get(VIRTUAL_ROOT_ID) ?? []
+  const rootExtraFiles = parseStoredRootExtraFiles(rootExtraSetting?.value)
+  if (activeRootCanvas !== undefined || rootAssets.length > 0 || rootExtraFiles.length > 0) {
+    entries.push({
+      path: '',
+      isVirtualRoot: true,
+      hasCanvas: activeRootCanvas !== undefined,
+      assets: rootAssets,
+      extraFiles: rootExtraFiles,
+      ...(activeRootCanvas?.corrupt ? { corrupt: true } : {}),
+      ...(activeRootCanvas?.corruptErrors ? { corruptErrors: activeRootCanvas.corruptErrors } : {}),
+      ...(activeRootCanvas?.newerSchemaVersion !== undefined
+        ? { newerSchemaVersion: activeRootCanvas.newerSchemaVersion }
+        : {}),
+    })
+  }
+
+  for (const node of nodes
     .filter((node) => node.deletedAt === 0)
-    .sort((a, b) => compareLexicographical(a.path, b.path))
-    .map((node): TreeBuildEntry => {
-      const nodeAssets = assetsByNodeId.get(node.id) ?? []
-      const hasCanvas = node.hasCanvas
+    .sort((a, b) => compareLexicographical(a.path, b.path))) {
+    const nodeAssets = assetsByNodeId.get(node.id) ?? []
+    const hasCanvas = node.hasCanvas
 
-      if (node.newerSchemaVersion !== undefined) {
-        return {
-          path: node.path,
-          parseResult: {
-            status: 'newer-schema',
-            schemaVersion: node.newerSchemaVersion,
-          },
-          assets: nodeAssets,
-          extraFiles: [...node.extraFiles],
-          hasCanvas,
-        }
-      }
-
-      if (node.corrupt) {
-        return {
-          path: node.path,
-          parseResult: {
-            status: 'corrupt',
-            errors: node.corruptErrors ?? [],
-          },
-          assets: nodeAssets,
-          extraFiles: [...node.extraFiles],
-          hasCanvas,
-        }
-      }
-
-      return {
+    if (node.newerSchemaVersion !== undefined) {
+      entries.push({
         path: node.path,
-        node: node.meta,
+        parseResult: {
+          status: 'newer-schema',
+          schemaVersion: node.newerSchemaVersion,
+        },
         assets: nodeAssets,
         extraFiles: [...node.extraFiles],
         hasCanvas,
-      }
+      })
+      continue
+    }
+
+    if (node.corrupt) {
+      entries.push({
+        path: node.path,
+        parseResult: {
+          status: 'corrupt',
+          errors: node.corruptErrors ?? [],
+        },
+        assets: nodeAssets,
+        extraFiles: [...node.extraFiles],
+        hasCanvas,
+      })
+      continue
+    }
+
+    entries.push({
+      path: node.path,
+      node: node.meta,
+      assets: nodeAssets,
+      extraFiles: [...node.extraFiles],
+      hasCanvas,
     })
+  }
+
+  return entries
 }
 
 /**
  * Marks a subtree (`nodes`, `canvases`, `assets`) as soft-deleted in a single transaction
  * for the 10-second Undo window without losing any local or remote SHA data.
+ * Rejects attempts to soft-delete virtual root `'__root__'`.
  */
 export async function softDeleteSubtree(
   db: KnovitesDatabase,
@@ -649,6 +888,9 @@ export async function softDeleteSubtree(
 ): Promise<void> {
   const targetIds = new Set(input.nodeIds)
   if (targetIds.size === 0) return
+  if (targetIds.has(VIRTUAL_ROOT_ID)) {
+    throw new Error(`Refusing to soft-delete virtual root "${VIRTUAL_ROOT_ID}".`)
+  }
 
   const deletedAtMs = toEpochMs(input.deletedAt)
 
@@ -932,41 +1174,43 @@ export async function finalizeSoftDeletes(
 
     for (const node of nodesToFinalize) {
       const deletedAt = toIsoUtc(node.deletedAt, now)
-      pendingMap.set(`${node.path}/node.json`, {
-        path: `${node.path}/node.json`,
+      pendingMap.set(resolveNodeFilePath(node.path), {
+        path: resolveNodeFilePath(node.path),
         baseBlobSha: node.baseBlobSha,
         deletedAt,
       })
       if (node.hasCanvas) {
-        pendingMap.set(`${node.path}/canvas.json`, {
-          path: `${node.path}/canvas.json`,
+        pendingMap.set(resolveCanvasFilePath(node.path), {
+          path: resolveCanvasFilePath(node.path),
           baseBlobSha: null,
           deletedAt,
         })
       }
       for (const extraFile of node.extraFiles) {
-        pendingMap.set(`${node.path}/${extraFile}`, {
-          path: `${node.path}/${extraFile}`,
+        const extraPath = resolveExtraFilePath(node.path, extraFile)
+        pendingMap.set(extraPath, {
+          path: extraPath,
           baseBlobSha: null,
           deletedAt,
         })
       }
       if (node.basePath !== null && node.basePath !== node.path) {
-        pendingMap.set(`${node.basePath}/node.json`, {
-          path: `${node.basePath}/node.json`,
+        pendingMap.set(resolveNodeFilePath(node.basePath), {
+          path: resolveNodeFilePath(node.basePath),
           baseBlobSha: node.baseBlobSha,
           deletedAt,
         })
         if (node.hasCanvas) {
-          pendingMap.set(`${node.basePath}/canvas.json`, {
-            path: `${node.basePath}/canvas.json`,
+          pendingMap.set(resolveCanvasFilePath(node.basePath), {
+            path: resolveCanvasFilePath(node.basePath),
             baseBlobSha: null,
             deletedAt,
           })
         }
         for (const extraFile of node.extraFiles) {
-          pendingMap.set(`${node.basePath}/${extraFile}`, {
-            path: `${node.basePath}/${extraFile}`,
+          const extraPath = resolveExtraFilePath(node.basePath, extraFile)
+          pendingMap.set(extraPath, {
+            path: extraPath,
             baseBlobSha: null,
             deletedAt,
           })
@@ -976,14 +1220,17 @@ export async function finalizeSoftDeletes(
 
     for (const canvas of canvasesToFinalize) {
       const deletedAt = toIsoUtc(canvas.deletedAt, now)
-      pendingMap.set(`${canvas.path}/canvas.json`, {
-        path: `${canvas.path}/canvas.json`,
+      const canvasOwnerPath = isVirtualRootId(canvas.nodeId) ? '' : canvas.path
+      const canvasFilePath = resolveCanvasFilePath(canvasOwnerPath)
+      pendingMap.set(canvasFilePath, {
+        path: canvasFilePath,
         baseBlobSha: canvas.baseBlobSha,
         deletedAt,
       })
-      if (canvas.basePath !== null && canvas.basePath !== canvas.path) {
-        pendingMap.set(`${canvas.basePath}/canvas.json`, {
-          path: `${canvas.basePath}/canvas.json`,
+      if (canvas.basePath !== null && canvas.basePath !== canvasOwnerPath) {
+        const baseCanvasPath = resolveCanvasFilePath(canvas.basePath)
+        pendingMap.set(baseCanvasPath, {
+          path: baseCanvasPath,
           baseBlobSha: canvas.baseBlobSha,
           deletedAt,
         })
@@ -991,9 +1238,9 @@ export async function finalizeSoftDeletes(
     }
 
     for (const asset of assetsToFinalize) {
-      const owner = nodeById.get(asset.nodeId)
-      if (!owner) continue
-      const fullPath = `${owner.path}/${asset.path}`
+      const ownerPath = isVirtualRootId(asset.nodeId) ? '' : nodeById.get(asset.nodeId)?.path
+      if (ownerPath === undefined) continue
+      const fullPath = resolveAssetFilePath(ownerPath, asset.path)
       const deletedAt = toIsoUtc(asset.deletedAt, now)
       pendingMap.set(fullPath, {
         path: fullPath,
@@ -1040,10 +1287,11 @@ async function loadActiveStateForDiff(db: KnovitesDatabase): Promise<{
   activeNodeById: Map<string, StoredNodeRecord>
   activePaths: Set<string>
 }> {
-  const [nodes, canvases, assets] = await Promise.all([
+  const [nodes, canvases, assets, rootExtraSetting] = await Promise.all([
     db.nodes.toArray(),
     db.canvases.toArray(),
     db.assets.where('deletedAt').equals(0).toArray(),
+    db.settings.get(ROOT_EXTRA_FILES_SETTING_KEY),
   ])
 
   const activePaths = new Set<string>()
@@ -1052,25 +1300,33 @@ async function loadActiveStateForDiff(db: KnovitesDatabase): Promise<{
   for (const node of nodes) {
     if (node.deletedAt !== 0) continue
     activeNodeById.set(node.id, node)
-    activePaths.add(`${node.path}/node.json`)
+    activePaths.add(resolveNodeFilePath(node.path))
     if (node.hasCanvas) {
-      activePaths.add(`${node.path}/canvas.json`)
+      activePaths.add(resolveCanvasFilePath(node.path))
     }
     for (const extraFile of node.extraFiles) {
-      activePaths.add(`${node.path}/${extraFile}`)
+      activePaths.add(resolveExtraFilePath(node.path, extraFile))
     }
   }
 
   for (const canvas of canvases) {
     if (canvas.deletedAt !== 0) continue
-    activePaths.add(`${canvas.path}/canvas.json`)
+    activePaths.add(resolveCanvasFilePath(isVirtualRootId(canvas.nodeId) ? '' : canvas.path))
   }
 
   for (const asset of assets) {
+    if (isVirtualRootId(asset.nodeId)) {
+      activePaths.add(resolveAssetFilePath('', asset.path))
+      continue
+    }
     const owner = activeNodeById.get(asset.nodeId)
     if (owner) {
-      activePaths.add(`${owner.path}/${asset.path}`)
+      activePaths.add(resolveAssetFilePath(owner.path, asset.path))
     }
+  }
+
+  for (const rootExtra of parseStoredRootExtraFiles(rootExtraSetting?.value)) {
+    activePaths.add(resolveExtraFilePath('', rootExtra))
   }
 
   return { nodes, canvases, assets, activeNodeById, activePaths }
@@ -1105,25 +1361,27 @@ export async function getMovedBasePaths(db: KnovitesDatabase): Promise<string[]>
 
   for (const node of nodes) {
     if (node.deletedAt !== 0 || node.basePath === null || node.basePath === node.path) continue
-    const nodeJsonPath = `${node.basePath}/node.json`
+    const nodeJsonPath = resolveNodeFilePath(node.basePath)
     if (!activePaths.has(nodeJsonPath)) movedPaths.add(nodeJsonPath)
     for (const extraFile of node.extraFiles) {
-      const extraPath = `${node.basePath}/${extraFile}`
+      const extraPath = resolveExtraFilePath(node.basePath, extraFile)
       if (!activePaths.has(extraPath)) movedPaths.add(extraPath)
     }
   }
 
   for (const canvas of canvases) {
-    if (canvas.deletedAt !== 0 || canvas.basePath === null || canvas.basePath === canvas.path)
-      continue
-    const canvasPath = `${canvas.basePath}/canvas.json`
+    if (canvas.deletedAt !== 0 || canvas.basePath === null) continue
+    const currentOwnerPath = isVirtualRootId(canvas.nodeId) ? '' : canvas.path
+    if (canvas.basePath === currentOwnerPath) continue
+    const canvasPath = resolveCanvasFilePath(canvas.basePath)
     if (!activePaths.has(canvasPath)) movedPaths.add(canvasPath)
   }
 
   for (const asset of assets) {
-    const owner = activeNodeById.get(asset.nodeId)
-    if (!owner || asset.basePath === null) continue
-    const currentFullPath = `${owner.path}/${asset.path}`
+    if (asset.basePath === null) continue
+    const ownerPath = isVirtualRootId(asset.nodeId) ? '' : activeNodeById.get(asset.nodeId)?.path
+    if (ownerPath === undefined) continue
+    const currentFullPath = resolveAssetFilePath(ownerPath, asset.path)
     if (asset.basePath !== currentFullPath && !activePaths.has(asset.basePath)) {
       movedPaths.add(asset.basePath)
     }
@@ -1135,6 +1393,8 @@ export async function getMovedBasePaths(db: KnovitesDatabase): Promise<string[]>
 /**
  * Collects all dirty active local records (`dirty === 1 && deletedAt === 0`)
  * plus effective remote deletions (`getEffectiveDeletes`) ready for sync.
+ * Supports virtual root (`'__root__'`) canvases (`'canvas.json'`) and assets (`'assets/<file>'`)
+ * without requiring a `db.nodes` row and never emitting a leading slash.
  */
 export async function collectDirtyFiles(db: KnovitesDatabase): Promise<CollectedDirtyFiles> {
   const [dirtyNodeRows, dirtyCanvasRows, dirtyAssetRows, pendingDeletes] = await Promise.all([
@@ -1149,7 +1409,7 @@ export async function collectDirtyFiles(db: KnovitesDatabase): Promise<Collected
     if (node.deletedAt !== 0 || node.corrupt || node.newerSchemaVersion !== undefined) continue
     dirtyNodes.push({
       nodeId: node.id,
-      path: `${node.path}/node.json`,
+      path: resolveNodeFilePath(node.path),
       rawNodeJson: node.rawNodeJson,
       baseBlobSha: node.baseBlobSha,
     })
@@ -1161,7 +1421,7 @@ export async function collectDirtyFiles(db: KnovitesDatabase): Promise<Collected
       continue
     dirtyCanvases.push({
       nodeId: canvas.nodeId,
-      path: `${canvas.path}/canvas.json`,
+      path: resolveCanvasFilePath(isVirtualRootId(canvas.nodeId) ? '' : canvas.path),
       rawJson: canvas.rawJson,
       baseBlobSha: canvas.baseBlobSha,
     })
@@ -1170,8 +1430,10 @@ export async function collectDirtyFiles(db: KnovitesDatabase): Promise<Collected
   const dirtyAssets: CollectedDirtyFiles['assets'] = []
   if (dirtyAssetRows.length > 0) {
     const activeDirtyAssets = dirtyAssetRows.filter((a) => a.deletedAt === 0)
-    const ownerIds = [...new Set(activeDirtyAssets.map((a) => a.nodeId))]
-    const owners = ownerIds.length > 0 ? await db.nodes.bulkGet(ownerIds) : []
+    const nonRootOwnerIds = [
+      ...new Set(activeDirtyAssets.filter((a) => !isVirtualRootId(a.nodeId)).map((a) => a.nodeId)),
+    ]
+    const owners = nonRootOwnerIds.length > 0 ? await db.nodes.bulkGet(nonRootOwnerIds) : []
     const ownerById = new Map<string, StoredNodeRecord>()
     for (const owner of owners) {
       if (
@@ -1184,11 +1446,20 @@ export async function collectDirtyFiles(db: KnovitesDatabase): Promise<Collected
       }
     }
     for (const asset of activeDirtyAssets) {
+      if (isVirtualRootId(asset.nodeId)) {
+        dirtyAssets.push({
+          nodeId: asset.nodeId,
+          path: resolveAssetFilePath('', asset.path),
+          blob: asset.blob,
+          sha: asset.sha,
+        })
+        continue
+      }
       const owner = ownerById.get(asset.nodeId)
       if (!owner) continue
       dirtyAssets.push({
         nodeId: asset.nodeId,
-        path: `${owner.path}/${asset.path}`,
+        path: resolveAssetFilePath(owner.path, asset.path),
         blob: asset.blob,
         sha: asset.sha,
       })

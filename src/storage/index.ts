@@ -1,24 +1,34 @@
 export { KnovitesDatabase, createKnovitesDatabase } from '@/storage/db'
-export { DB_V1_STORES, DB_V2_STORES, applyDatabaseMigrations } from '@/storage/migrations'
+export {
+  DB_V1_STORES,
+  DB_V2_STORES,
+  DB_V3_STORES,
+  applyDatabaseMigrations,
+} from '@/storage/migrations'
 export {
   appendErrorLog,
   applyChangeset,
   collectDirtyFiles,
   finalizeSoftDeletes,
+  getCanvasRecord,
   getEffectiveDeletes,
   getErrorLogs,
   getMovedBasePaths,
   getPendingDeletes,
+  loadRootExtraFiles,
   loadTreeBuildEntries,
   restoreSoftDeletedSubtree,
   saveAsset,
   saveInvalidNode,
+  saveInvalidRootCanvas,
+  saveRootExtraFiles,
   softDeleteSubtree,
 } from '@/storage/repository'
 export {
   CURRENT_DB_SCHEMA_VERSION,
   DEFAULT_DB_NAME,
   MAX_ERROR_LOG_ENTRIES,
+  ROOT_EXTRA_FILES_SETTING_KEY,
   type ApplyChangesetOptions,
   type CollectedDirtyFiles,
   type DirtyAssetFile,
@@ -28,6 +38,7 @@ export {
   type ErrorLogRecord,
   type IndexedFlag,
   type InvalidNodeInput,
+  type InvalidRootCanvasInput,
   type PendingDeleteRecord,
   type RestoreSoftDeleteResult,
   type SettingRecord,

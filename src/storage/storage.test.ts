@@ -3,6 +3,7 @@ import Dexie from 'dexie'
 import { describe, expect, it } from 'vitest'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
 import {
+  VIRTUAL_ROOT_ID,
   buildTree,
   createNode,
   deleteNode,
@@ -11,6 +12,8 @@ import {
   type Changeset,
 } from '@/domain/tree'
 import {
+  CURRENT_DB_SCHEMA_VERSION,
+  DB_V2_STORES,
   MAX_ERROR_LOG_ENTRIES,
   appendErrorLog,
   applyChangeset,
@@ -18,12 +21,17 @@ import {
   collectDirtyFiles,
   createKnovitesDatabase,
   finalizeSoftDeletes,
+  getCanvasRecord,
+  getEffectiveDeletes,
   getErrorLogs,
+  getMovedBasePaths,
   getPendingDeletes,
   loadTreeBuildEntries,
   restoreSoftDeletedSubtree,
   saveAsset,
   saveInvalidNode,
+  saveInvalidRootCanvas,
+  saveRootExtraFiles,
   softDeleteSubtree,
   type ErrorLogRecord,
 } from '@/storage'
@@ -553,5 +561,407 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     expect(hydrateMs).toBeLessThan(500)
     expect(dirtyMs).toBeLessThan(500)
     await db.close()
+  })
+
+  describe('virtual root ("__root__") home canvas, assets, lazy creation, and M2->v3 migration [M3-HomeRoot]', () => {
+    it('keeps root canvas.json lazy on empty workspace and supports __root__ canvas & assets without any db.nodes row', async () => {
+      const { db } = makeTestDb('knovites-root-lazy-test')
+      const now = '2026-11-26T10:00:00Z'
+
+      // 1. Lazy creation: empty workspace has no __root__ canvas row and empty entries/dirty files
+      expect(await getCanvasRecord(db, VIRTUAL_ROOT_ID)).toBeUndefined()
+      expect(await loadTreeBuildEntries(db)).toEqual([])
+      expect(await collectDirtyFiles(db)).toEqual({
+        nodes: [],
+        canvases: [],
+        assets: [],
+        pendingDeletes: [],
+      })
+
+      // Creating a regular node must NOT eagerly create a __root__ canvas
+      const cPwn = createNode(buildTree([]).state, {
+        title: 'PWN',
+        parentId: null,
+        now,
+        generateId: () => makeUlid(1),
+      })
+      expect(cPwn.ok).toBe(true)
+      await applyChangeset(db, cPwn.changeset, { now })
+      expect(await getCanvasRecord(db, VIRTUAL_ROOT_ID)).toBeUndefined()
+      expect(await db.nodes.get(VIRTUAL_ROOT_ID)).toBeUndefined()
+
+      // 2. First edit on home root: upsert 'canvas.json' + save root asset + save rootExtraFiles
+      const rootCanvasJson = serializeCanvasJson({
+        schema: 1,
+        elements: {
+          e_home0001: {
+            type: 'text',
+            x: 24,
+            y: 36,
+            w: 320,
+            z: 'a0',
+            style: { bg: null, border: null },
+            content: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Home note' }] }],
+            },
+            updatedAt: now,
+          },
+        },
+      })
+
+      await applyChangeset(
+        db,
+        {
+          upserts: [{ path: 'canvas.json', content: rootCanvasJson }],
+          moves: [],
+          deletes: [],
+        },
+        { now },
+      )
+      await saveAsset(db, {
+        nodeId: VIRTUAL_ROOT_ID,
+        path: 'assets/7ab1c2d3e4f50987.webp',
+        basePath: null,
+        blob: new Uint8Array([82, 73, 70, 70]),
+        sha: null,
+        dirty: 1,
+        deletedAt: 0,
+      })
+      await saveRootExtraFiles(db, ['README.md', '.gitignore'], now)
+
+      // No fake row in db.nodes for __root__
+      expect(await db.nodes.get(VIRTUAL_ROOT_ID)).toBeUndefined()
+      expect((await db.nodes.toArray()).map((n) => n.id)).toEqual([makeUlid(1)])
+
+      const storedRootCanvas = await getCanvasRecord(db, VIRTUAL_ROOT_ID)
+      expect(storedRootCanvas?.nodeId).toBe(VIRTUAL_ROOT_ID)
+      expect(storedRootCanvas?.path).toBe('')
+      expect(storedRootCanvas?.rawJson).toBe(rootCanvasJson)
+      expect(storedRootCanvas?.dirty).toBe(1)
+
+      // 3. loadTreeBuildEntries -> buildTree restores root home metadata + regular nodes cleanly
+      const entries = await loadTreeBuildEntries(db)
+      const built = buildTree(entries)
+      expect(built.issues).toEqual([])
+      expect(built.rootHasCanvas).toBe(true)
+      expect(built.rootAssets).toEqual(['assets/7ab1c2d3e4f50987.webp'])
+      expect(built.rootExtraFiles).toEqual(['.gitignore', 'README.md'])
+      expect(built.state.nodes[VIRTUAL_ROOT_ID]).toBeUndefined()
+      expect(built.state.rootIds).toEqual([makeUlid(1)])
+
+      // 4. collectDirtyFiles produces slash-free 'canvas.json' and 'assets/<file>' for __root__
+      const dirty = await collectDirtyFiles(db)
+      expect(dirty.canvases.map((c) => ({ nodeId: c.nodeId, path: c.path }))).toEqual([
+        { nodeId: VIRTUAL_ROOT_ID, path: 'canvas.json' },
+        { nodeId: makeUlid(1), path: 'pwn/canvas.json' },
+      ])
+      expect(dirty.assets.map((a) => ({ nodeId: a.nodeId, path: a.path }))).toEqual([
+        { nodeId: VIRTUAL_ROOT_ID, path: 'assets/7ab1c2d3e4f50987.webp' },
+      ])
+      for (const p of [
+        ...dirty.nodes.map((x) => x.path),
+        ...dirty.canvases.map((x) => x.path),
+        ...dirty.assets.map((x) => x.path),
+        ...dirty.pendingDeletes.map((x) => x.path),
+      ]) {
+        expect(p.startsWith('/')).toBe(false)
+      }
+
+      await db.close()
+    })
+
+    it('handles applyChangeset deletes, getEffectiveDeletes, getMovedBasePaths, and read-only guards for __root__', async () => {
+      const { db } = makeTestDb('knovites-root-diff-test')
+      const now = '2026-11-26T10:00:00Z'
+      const rootCanvasJson = serializeCanvasJson({ schema: 1, elements: {} })
+
+      // Seed synced __root__ canvas, asset, and rootExtraFiles
+      await applyChangeset(
+        db,
+        { upserts: [{ path: 'canvas.json', content: rootCanvasJson }], moves: [], deletes: [] },
+        { now },
+      )
+      await db.canvases.update(VIRTUAL_ROOT_ID, {
+        baseBlobSha: 'rootcanvassha',
+        basePath: '',
+        dirty: 0,
+      })
+      await saveAsset(db, {
+        nodeId: VIRTUAL_ROOT_ID,
+        path: 'assets/7ab1c2d3e4f50987.webp',
+        basePath: 'assets/7ab1c2d3e4f50987.webp',
+        blob: new Uint8Array([1, 2, 3]),
+        sha: 'rootassetsha',
+        dirty: 0,
+        deletedAt: 0,
+      })
+      await saveRootExtraFiles(db, ['README.md'], now)
+
+      // Unmoved synced root canvas & asset must report ZERO moved base paths (never '/canvas.json')
+      expect(await getMovedBasePaths(db)).toEqual([])
+
+      // Root asset whose basePath differs from active path must be reported by getMovedBasePaths
+      await db.assets.update([VIRTUAL_ROOT_ID, 'assets/7ab1c2d3e4f50987.webp'], {
+        basePath: 'assets/0000111122223333.png',
+      })
+      expect(await getMovedBasePaths(db)).toEqual(['assets/0000111122223333.png'])
+      await db.assets.update([VIRTUAL_ROOT_ID, 'assets/7ab1c2d3e4f50987.webp'], {
+        basePath: 'assets/7ab1c2d3e4f50987.webp',
+      })
+
+      // Deleting 'canvas.json' & root asset via applyChangeset records slash-free pendingDeletes
+      await applyChangeset(
+        db,
+        {
+          deletes: ['canvas.json', 'assets/7ab1c2d3e4f50987.webp'],
+          moves: [],
+          upserts: [],
+        },
+        { now: '2026-11-26T10:05:00Z' },
+      )
+      expect(await getCanvasRecord(db, VIRTUAL_ROOT_ID)).toBeUndefined()
+      expect(await db.assets.get([VIRTUAL_ROOT_ID, 'assets/7ab1c2d3e4f50987.webp'])).toBeUndefined()
+      expect((await getEffectiveDeletes(db)).map((d) => d.path)).toEqual([
+        'assets/7ab1c2d3e4f50987.webp',
+        'canvas.json',
+      ])
+
+      // Re-creating active 'canvas.json' & root asset filters them out of getEffectiveDeletes;
+      // user rootExtraFiles ('README.md') is also never returned as an effective delete.
+      await db.pendingDeletes.put({
+        path: 'README.md',
+        baseBlobSha: 'readmesha',
+        deletedAt: '2026-11-26T10:05:00Z',
+      })
+      await applyChangeset(
+        db,
+        { upserts: [{ path: 'canvas.json', content: rootCanvasJson }], moves: [], deletes: [] },
+        { now: '2026-11-26T10:06:00Z' },
+      )
+      await saveAsset(db, {
+        nodeId: VIRTUAL_ROOT_ID,
+        path: 'assets/7ab1c2d3e4f50987.webp',
+        basePath: null,
+        blob: new Uint8Array([4, 5, 6]),
+        sha: null,
+        dirty: 1,
+        deletedAt: 0,
+      })
+      expect(await getEffectiveDeletes(db)).toEqual([])
+
+      // Guard: softDeleteSubtree refuses VIRTUAL_ROOT_ID and applyChangeset refuses root node.json
+      await expect(
+        softDeleteSubtree(db, { nodeIds: [VIRTUAL_ROOT_ID], deletedAt: now }),
+      ).rejects.toThrow(/__root__/i)
+      await expect(
+        applyChangeset(db, {
+          upserts: [{ path: 'node.json', content: '{}' }],
+          moves: [],
+          deletes: [],
+        }),
+      ).rejects.toThrow(/root|node\.json/i)
+      await expect(
+        applyChangeset(db, {
+          upserts: [{ path: '/canvas.json', content: rootCanvasJson }],
+          moves: [],
+          deletes: [],
+        }),
+      ).rejects.toThrow(/leading|invalid/i)
+
+      // Corrupt root canvas is preserved read-only and refuses overwrite or delete
+      await db.canvases.delete(VIRTUAL_ROOT_ID)
+      const rawBrokenRoot = '{"schema":1,"elements":"bad"}\n'
+      await saveInvalidRootCanvas(db, {
+        rawJson: rawBrokenRoot,
+        corrupt: true,
+        corruptErrors: [{ path: 'elements', code: 'invalid_type', message: 'Expected object' }],
+        baseBlobSha: 'brokenrootsha',
+      })
+      const corruptBuilt = buildTree(await loadTreeBuildEntries(db))
+      expect(corruptBuilt.issues.some((i) => i.code === 'corrupt_root_canvas')).toBe(true)
+      expect(corruptBuilt.state.rootCanvasCorrupt).toBe(true)
+      await expect(
+        applyChangeset(db, {
+          upserts: [{ path: 'canvas.json', content: rootCanvasJson }],
+          moves: [],
+          deletes: [],
+        }),
+      ).rejects.toThrow(/corrupt/i)
+      await expect(
+        applyChangeset(db, {
+          upserts: [],
+          moves: [],
+          deletes: ['canvas.json'],
+        }),
+      ).rejects.toThrow(/corrupt/i)
+      expect((await getCanvasRecord(db, VIRTUAL_ROOT_ID))?.rawJson).toBe(rawBrokenRoot)
+
+      await db.close()
+    })
+
+    it('migration M2 (v2) -> v3 preserves all existing M2 records intact and normalizes __root__ paths without leading slash', async () => {
+      const dbName = 'knovites-m2-to-v3-migration-test'
+      const indexedDB = new IDBFactory()
+      const nodeId = makeUlid(20)
+      const now = '2026-11-20T09:00:00Z'
+
+      const existingMeta = {
+        schema: 1 as const,
+        id: nodeId,
+        title: 'M2 Existing Note',
+        type: 'technique' as const,
+        status: 'practiced' as const,
+        tags: ['pwn'],
+        order: 'a0',
+        color: '#7c9cff',
+        links: [],
+        createdAt: now,
+        updatedAt: now,
+      }
+      const existingCanvas = { schema: 1 as const, elements: {} }
+      const rawNode = serializeNodeJson(existingMeta)
+      const rawCanvas = serializeCanvasJson(existingCanvas)
+
+      // 1. Seed a genuine M2 v2 database
+      const m2Db = new Dexie(dbName, { indexedDB, IDBKeyRange })
+      m2Db.version(1).stores({
+        nodes: 'id, path, parentId',
+        canvases: 'nodeId, path',
+        assets: '[nodeId+path], nodeId, path',
+        pendingDeletes: 'path, deletedAt',
+        syncState: 'id',
+        settings: 'key',
+        errorLog: '++id, timestamp, level, code',
+      })
+      m2Db.version(2).stores(DB_V2_STORES)
+      await m2Db.open()
+      await m2Db.table('nodes').put({
+        id: nodeId,
+        path: 'pwn',
+        basePath: 'pwn',
+        parentId: null,
+        meta: existingMeta,
+        rawNodeJson: rawNode,
+        baseBlobSha: 'm2nodesha',
+        dirty: 0,
+        corrupt: false,
+        extraFiles: ['exploit.py'],
+        hasCanvas: true,
+        deletedAt: 0,
+      })
+      await m2Db.table('canvases').put({
+        nodeId,
+        path: 'pwn',
+        basePath: 'pwn',
+        doc: existingCanvas,
+        rawJson: rawCanvas,
+        baseBlobSha: 'm2canvassha',
+        dirty: 0,
+        loaded: true,
+        corrupt: false,
+        deletedAt: 0,
+      })
+      await m2Db.table('assets').put({
+        nodeId,
+        path: 'assets/1122334455667788.png',
+        basePath: 'pwn/assets/1122334455667788.png',
+        blob: new Uint8Array([9, 8, 7]),
+        sha: 'm2assetsha',
+        dirty: 0,
+        deletedAt: 0,
+      })
+      // Also seed legacy pre-normalized __root__ rows to verify v2->v3 normalization
+      await m2Db.table('canvases').put({
+        nodeId: VIRTUAL_ROOT_ID,
+        path: '/canvas.json',
+        basePath: '/canvas.json',
+        doc: existingCanvas,
+        rawJson: rawCanvas,
+        baseBlobSha: 'm2rootcanvassha',
+        dirty: 1,
+        loaded: true,
+        corrupt: false,
+        deletedAt: 0,
+      })
+      await m2Db.table('assets').put({
+        nodeId: VIRTUAL_ROOT_ID,
+        path: '/assets/aabbccddeeff0011.webp',
+        basePath: null,
+        blob: new Uint8Array([1, 3, 3, 7]),
+        sha: 'm2rootassetsha',
+        dirty: 1,
+        deletedAt: 0,
+      })
+      await m2Db.table('pendingDeletes').put({
+        path: 'old/node.json',
+        baseBlobSha: 'oldsha',
+        deletedAt: now,
+      })
+      await m2Db.table('syncState').put({
+        id: 'singleton',
+        repo: 'owner/repo',
+        branch: 'main',
+        baseCommitSha: 'commitsha',
+        lastSyncedAt: now,
+        pendingMerge: null,
+      })
+      await m2Db.table('settings').put({
+        key: 'mapLayout',
+        value: 'radial',
+        updatedAt: now,
+      })
+      await m2Db.table('errorLog').add({
+        timestamp: now,
+        level: 'info',
+        code: 'M2_BOOT',
+        message: 'M2 initialized',
+      })
+      m2Db.close()
+
+      // 2. Open with current KnovitesDatabase (CURRENT_DB_SCHEMA_VERSION = 3)
+      const upgradedDb = createKnovitesDatabase(dbName, { indexedDB, IDBKeyRange })
+      await upgradedDb.open()
+      expect(upgradedDb.verno).toBe(CURRENT_DB_SCHEMA_VERSION)
+      expect(CURRENT_DB_SCHEMA_VERSION).toBe(3)
+
+      // All M2 rows must survive completely intact
+      const nodeAfter = await upgradedDb.nodes.get(nodeId)
+      expect(nodeAfter?.meta).toEqual(existingMeta)
+      expect(nodeAfter?.extraFiles).toEqual(['exploit.py'])
+      expect(nodeAfter?.baseBlobSha).toBe('m2nodesha')
+      expect(await upgradedDb.canvases.get(nodeId)).toMatchObject({
+        path: 'pwn',
+        basePath: 'pwn',
+        baseBlobSha: 'm2canvassha',
+      })
+      expect(await upgradedDb.assets.get([nodeId, 'assets/1122334455667788.png'])).toMatchObject({
+        basePath: 'pwn/assets/1122334455667788.png',
+        sha: 'm2assetsha',
+      })
+      expect((await upgradedDb.pendingDeletes.get('old/node.json'))?.baseBlobSha).toBe('oldsha')
+      expect((await upgradedDb.syncState.get('singleton'))?.repo).toBe('owner/repo')
+      expect((await upgradedDb.settings.get('mapLayout'))?.value).toBe('radial')
+      expect((await upgradedDb.errorLog.toArray()).map((e) => e.code)).toEqual(['M2_BOOT'])
+
+      // Legacy __root__ rows normalized cleanly without leading slash
+      const rootCanvasAfter = await upgradedDb.canvases.get(VIRTUAL_ROOT_ID)
+      expect(rootCanvasAfter?.path).toBe('')
+      expect(rootCanvasAfter?.basePath).toBe('')
+      expect(rootCanvasAfter?.baseBlobSha).toBe('m2rootcanvassha')
+
+      const rootAssetAfter = await upgradedDb.assets.get([
+        VIRTUAL_ROOT_ID,
+        'assets/aabbccddeeff0011.webp',
+      ])
+      expect(rootAssetAfter?.path).toBe('assets/aabbccddeeff0011.webp')
+      expect(rootAssetAfter?.basePath).toBe('assets/aabbccddeeff0011.webp')
+
+      const dirtyAfterUpgrade = await collectDirtyFiles(upgradedDb)
+      expect(dirtyAfterUpgrade.canvases.map((c) => c.path)).toEqual(['canvas.json'])
+      expect(dirtyAfterUpgrade.assets.map((a) => a.path)).toEqual(['assets/aabbccddeeff0011.webp'])
+
+      upgradedDb.close()
+    })
   })
 })

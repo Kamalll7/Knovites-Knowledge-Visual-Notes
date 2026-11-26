@@ -1,8 +1,9 @@
 import type { CanvasJson, NodeJson, SchemaIssue } from '@/domain/schema'
 
-export const CURRENT_DB_SCHEMA_VERSION = 2
+export const CURRENT_DB_SCHEMA_VERSION = 3
 export const DEFAULT_DB_NAME = 'knovites-local'
 export const MAX_ERROR_LOG_ENTRIES = 100
+export const ROOT_EXTRA_FILES_SETTING_KEY = 'workspace.rootExtraFiles' as const
 
 /** Numeric flag stored in IndexedDB because W3C IndexedDB forbids booleans as index keys. */
 export type IndexedFlag = 0 | 1
@@ -27,9 +28,11 @@ export interface StoredNodeRecord {
 }
 
 export interface StoredCanvasRecord {
+  /** Node ULID, or `VIRTUAL_ROOT_ID` (`'__root__'`) for the optional home canvas at repo root. */
   nodeId: string
+  /** Node folder path, or `''` when `nodeId === '__root__'` (repo file `'canvas.json'`). */
   path: string
-  /** Last synced node folder path (`null` if never synced to remote). */
+  /** Last synced node folder path (`''` for synced `'__root__'`, `null` if never synced). */
   basePath: string | null
   doc: CanvasJson | null
   rawJson: string
@@ -44,10 +47,11 @@ export interface StoredCanvasRecord {
 }
 
 export interface StoredAssetRecord {
+  /** Node ULID, or `VIRTUAL_ROOT_ID` (`'__root__'`) for home root assets under `assets/`. */
   nodeId: string
-  /** Relative to the node folder, e.g. `assets/3fa9c1d2e4b5a671.webp` */
+  /** Relative to the owner folder (without leading slash), e.g. `assets/3fa9c1d2e4b5a671.webp` */
   path: string
-  /** Full repo-relative asset path at last sync (`null` if never synced). */
+  /** Full repo-relative asset path at last sync (without leading slash), or `null` if never synced. */
   basePath: string | null
   blob: Uint8Array | Blob
   sha: string | null
@@ -103,6 +107,14 @@ export interface InvalidNodeInput {
   baseBlobSha?: string | null
   extraFiles?: string[]
   hasCanvas?: boolean
+}
+
+export interface InvalidRootCanvasInput {
+  rawJson: string
+  corrupt: boolean
+  corruptErrors?: SchemaIssue[]
+  newerSchemaVersion?: number
+  baseBlobSha?: string | null
 }
 
 export interface SoftDeleteInput {

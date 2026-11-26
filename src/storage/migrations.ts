@@ -1,6 +1,13 @@
 import type Dexie from 'dexie'
 import type { Transaction } from 'dexie'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
+import {
+  VIRTUAL_ROOT_ID,
+  isVirtualRootId,
+  normalizeAssetRelativePath,
+  normalizeRepoRelativePath,
+  resolveAssetFilePath,
+} from '@/domain/tree'
 import { CURRENT_DB_SCHEMA_VERSION } from '@/storage/types'
 
 export const DB_V1_STORES: Record<string, string> = {
@@ -21,6 +28,14 @@ export const DB_V2_STORES: Record<string, string> = {
   syncState: 'id',
   settings: 'key',
   errorLog: '++id, timestamp, level, code',
+}
+
+/**
+ * Dexie v3 keeps all 7 M2 tables and indexes intact (non-destructive upgrade)
+ * while normalizing virtual root (`'__root__'`) canvas/asset contracts without leading slashes.
+ */
+export const DB_V3_STORES: Record<string, string> = {
+  ...DB_V2_STORES,
 }
 
 function toIndexedFlag(value: unknown): 0 | 1 {
@@ -95,15 +110,65 @@ async function upgradeV1ToV2(tx: Transaction): Promise<void> {
     .toCollection()
     .modify((record: Record<string, unknown>) => {
       if (record['basePath'] === undefined) {
-        const ownerPath = nodePathById.get(record['nodeId'])
+        const nodeId = record['nodeId']
+        const ownerPath =
+          typeof nodeId === 'string' && isVirtualRootId(nodeId) ? '' : nodePathById.get(nodeId)
         record['basePath'] =
-          record['sha'] != null && ownerPath && typeof record['path'] === 'string'
-            ? `${ownerPath}/${record['path']}`
+          record['sha'] != null && ownerPath !== undefined && typeof record['path'] === 'string'
+            ? resolveAssetFilePath(ownerPath, record['path'])
             : null
       }
       record['dirty'] = toIndexedFlag(record['dirty'])
       record['deletedAt'] = toDeletedEpochMs(record['deletedAt'])
     })
+}
+
+async function upgradeV2ToV3(tx: Transaction): Promise<void> {
+  // Non-destructive normalization: only touches __root__ canvas/asset records if present;
+  // all existing M2 nodes, canvases, assets, pendingDeletes, syncState, settings, and errorLog survive intact.
+  const rootCanvas = (await tx.table('canvases').get(VIRTUAL_ROOT_ID)) as
+    Record<string, unknown> | undefined
+  if (rootCanvas) {
+    const rawBasePath = rootCanvas['basePath']
+    const normalizedBasePath =
+      typeof rawBasePath === 'string' ? '' : rootCanvas['baseBlobSha'] != null ? '' : null
+    await tx.table('canvases').put({
+      ...rootCanvas,
+      nodeId: VIRTUAL_ROOT_ID,
+      path: '',
+      basePath: normalizedBasePath,
+      deletedAt: 0,
+    })
+  }
+
+  const rootAssets = (await tx
+    .table('assets')
+    .where('nodeId')
+    .equals(VIRTUAL_ROOT_ID)
+    .toArray()) as Array<Record<string, unknown>>
+  for (const asset of rootAssets) {
+    const rawPath = asset['path']
+    if (typeof rawPath !== 'string' || rawPath.length === 0) continue
+    const normalizedPath = normalizeAssetRelativePath(rawPath)
+    const rawBasePath = asset['basePath']
+    const normalizedBasePath =
+      typeof rawBasePath === 'string' && rawBasePath.length > 0
+        ? normalizeRepoRelativePath(rawBasePath)
+        : asset['sha'] != null
+          ? resolveAssetFilePath('', normalizedPath)
+          : null
+
+    if (normalizedPath !== rawPath) {
+      await tx.table('assets').delete([VIRTUAL_ROOT_ID, rawPath])
+    }
+    await tx.table('assets').put({
+      ...asset,
+      nodeId: VIRTUAL_ROOT_ID,
+      path: normalizedPath,
+      basePath: normalizedBasePath,
+      deletedAt: 0,
+    })
+  }
 }
 
 /**
@@ -117,5 +182,9 @@ export function applyDatabaseMigrations(
 
   if (targetVersion >= 2) {
     db.version(2).stores(DB_V2_STORES).upgrade(upgradeV1ToV2)
+  }
+
+  if (targetVersion >= 3) {
+    db.version(3).stores(DB_V3_STORES).upgrade(upgradeV2ToV3)
   }
 }
