@@ -278,6 +278,8 @@ test.describe('Map keyboard navigation, breadcrumb, Home root, and CRUD E2E [T3.
 
     await undoButton.click()
     await expect(undoButton).toBeHidden()
+    // Wait for async Dexie undoDelete() restore to re-render Binary PWN before keyboard nav
+    await expect(page.locator('[data-testid="map-node"]', { hasText: 'Binary PWN' })).toBeVisible()
 
     // Navigate via keyboard into RE -> Binary PWN -> Stack -> ret2win to prove full subtree restored
     await page.getByTestId('map-viewport').focus()
@@ -294,6 +296,7 @@ test.describe('Map keyboard navigation, breadcrumb, Home root, and CRUD E2E [T3.
     // 8. Reload persistence check (IndexedDB)
     await page.reload()
     await expect(page.getByTestId('map-viewport')).toBeVisible()
+    await expect(page.locator('[data-testid="map-node"]', { hasText: 'RE' })).toBeVisible()
     await page.getByTestId('map-viewport').focus()
     await page.keyboard.press('ArrowDown')
     await expect(page.getByTestId('map-breadcrumb-item')).toHaveText(['Home', 'RE'])
