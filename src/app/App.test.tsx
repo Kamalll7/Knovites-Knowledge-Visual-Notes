@@ -1,9 +1,12 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router'
 import { App } from '@/app/App'
 import { ErrorBoundary } from '@/app/ErrorBoundary'
-import { MemoryRouter } from 'react-router'
+import { createDexieWorkspaceAdapter, createWorkspaceStore } from '@/app/store'
+import { createKnovitesDatabase } from '@/storage'
 import { Button } from '@/ui/components/button'
 
 describe('App shell, routing, theme, toast, and error boundary', () => {
@@ -78,5 +81,61 @@ describe('App shell, routing, theme, toast, and error boundary', () => {
   it('renders shadcn Button component', () => {
     render(<Button>Action</Button>)
     expect(screen.getByRole('button', { name: 'Action' })).toBeInTheDocument()
+  })
+
+  it('navigates between Map, Home ("__root__"), and real persisted Node pages via keyboard and breadcrumb without 404 [T3.7]', async () => {
+    const indexedDB = new IDBFactory()
+    const db = createKnovitesDatabase('app-home-root-route-test', { indexedDB, IDBKeyRange })
+    const store = createWorkspaceStore({
+      storage: createDexieWorkspaceAdapter(db),
+      now: () => '2026-11-26T10:00:00Z',
+    })
+    await store.getState().hydrate()
+
+    render(<App workspaceStore={store} />)
+
+    // Empty state -> create first node persisted to IndexedDB
+    fireEvent.click(screen.getByTestId('create-first-node'))
+    fireEvent.change(screen.getByTestId('create-first-node-input'), { target: { value: 'PWN' } })
+    fireEvent.click(screen.getByTestId('create-first-node-submit'))
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('map-breadcrumb-item').map((b) => b.textContent)).toEqual([
+        'Home',
+        'PWN',
+      ])
+    })
+
+    // Click Home breadcrumb -> Enter opens Home page (#/n/__root__) showing "Home"
+    fireEvent.click(screen.getAllByTestId('map-breadcrumb-item')[0]!)
+    await waitFor(() => {
+      expect(screen.getAllByTestId('map-breadcrumb-item')).toHaveLength(1)
+    })
+    fireEvent.keyDown(screen.getByTestId('map-viewport'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument()
+    })
+
+    // Back to map -> ArrowDown to PWN -> Enter opens actual PWN node page
+    fireEvent.click(screen.getByRole('link', { name: 'Back to map' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('map-viewport')).toBeInTheDocument()
+    })
+    fireEvent.keyDown(screen.getByTestId('map-viewport'), { key: 'ArrowDown' })
+    await waitFor(() => {
+      expect(screen.getAllByTestId('map-breadcrumb-item').map((b) => b.textContent)).toEqual([
+        'Home',
+        'PWN',
+      ])
+    })
+    fireEvent.keyDown(screen.getByTestId('map-viewport'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'PWN' })).toBeInTheDocument()
+    })
+
+    store.getState().dispose()
+    db.close()
   })
 })

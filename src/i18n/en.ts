@@ -39,11 +39,17 @@ export const en = {
   },
   nodePage: {
     titlePrefix: 'Node',
+    homeBadge: 'Home page',
     subtitle: 'Node canvas page placeholder. React Flow + TipTap editor arrive in M4.',
+    homeSubtitle: 'Workspace Home page (virtual root). React Flow + TipTap editor arrive in M4.',
     backToMap: 'Back to map',
     canvasPlaceholderTitle: 'Freeform Canvas',
     canvasPlaceholderBody:
       'Text boxes and images will live here in a pannable, zoomable workspace.',
+    homeCanvasLazyBody:
+      'Home canvas is currently empty and created lazily at canvas.json on first edit.',
+    homeCanvasReadyBody:
+      'Home canvas is persisted at canvas.json and ready for the M4 freeform editor.',
     sidePanelTitle: 'Connections',
     linksTab: 'Links',
     childrenTab: 'Children',

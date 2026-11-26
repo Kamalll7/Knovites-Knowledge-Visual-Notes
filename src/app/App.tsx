@@ -11,6 +11,7 @@ import {
   type WorkspaceStoreApi,
 } from '@/app/store'
 import { WorkspaceStoreContext } from '@/app/workspace-context'
+import { VIRTUAL_ROOT_ID } from '@/domain/tree'
 import { MapRoute } from '@/features/map/MapRoute'
 import { NodePagePlaceholder } from '@/features/page/NodePagePlaceholder'
 import { SettingsPlaceholder } from '@/features/settings/SettingsPlaceholder'
@@ -64,6 +65,14 @@ function AppRoutes() {
           }
         />
       ) : null}
+      <Route
+        path="/home"
+        element={
+          <ErrorBoundary resetKey={location.pathname}>
+            <NodePagePlaceholder forcedNodeId={VIRTUAL_ROOT_ID} />
+          </ErrorBoundary>
+        }
+      />
       <Route
         path="/n/:nodeId"
         element={
