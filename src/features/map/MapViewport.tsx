@@ -25,6 +25,7 @@ export interface MapViewportHandle {
   zoomOut: () => void
   fitAll: () => void
   recenterFocus: () => void
+  panToWorldPoint: (worldX: number, worldY: number, options?: { immediate?: boolean }) => void
   getTransform: () => CameraTransform
 }
 
@@ -42,6 +43,10 @@ export interface MapViewportProps {
   readonly onCreateFirstNode?: () => void
   readonly onScaleTierChange?: (scale: number, tier: ZoomTier) => void
   readonly onFrameSample?: (dtMs: number) => void
+  readonly onCameraChange?: (
+    transform: CameraTransform,
+    viewport: { width: number; height: number },
+  ) => void
 }
 
 /**
@@ -63,6 +68,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     onCreateFirstNode,
     onScaleTierChange,
     onFrameSample,
+    onCameraChange,
   },
   ref,
 ) {
@@ -100,6 +106,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     hudInsets,
     onScaleTierChange,
     onFrameSample,
+    onCameraChange,
   })
 
   useImperativeHandle(ref, () => controls, [controls])

@@ -10,6 +10,7 @@ import {
   MAP_ZOOM_MIN,
   ZERO_HUD_INSETS,
   buildTransitionStartPositions,
+  centerCameraOnWorldPoint,
   clampCameraTransform,
   computeCameraForFocus,
   interpolateCamera,
@@ -93,6 +94,10 @@ export interface UseMapViewportControllerOptions {
   readonly hudInsets?: CameraHudInsets
   readonly onScaleTierChange?: (scale: number, tier: ZoomTier) => void
   readonly onFrameSample?: (dtMs: number) => void
+  readonly onCameraChange?: (
+    transform: CameraTransform,
+    viewport: { width: number; height: number },
+  ) => void
 }
 
 /**
@@ -116,6 +121,7 @@ export function useMapViewportController({
   hudInsets = ZERO_HUD_INSETS,
   onScaleTierChange,
   onFrameSample,
+  onCameraChange,
 }: UseMapViewportControllerOptions) {
   const hasNodes = nonRootCount > 0
 
@@ -146,6 +152,8 @@ export function useMapViewportController({
   const hudInsetsRef = useRef(hudInsets)
   const onScaleTierChangeRef = useRef(onScaleTierChange)
   const onFrameSampleRef = useRef(onFrameSample)
+  const onCameraChangeRef = useRef(onCameraChange)
+  const viewportSizeRef = useRef<{ width: number; height: number }>({ width: 1280, height: 700 })
 
   useLayoutEffect(() => {
     bboxRef.current = bbox
@@ -157,14 +165,17 @@ export function useMapViewportController({
     hudInsetsRef.current = hudInsets
     onScaleTierChangeRef.current = onScaleTierChange
     onFrameSampleRef.current = onFrameSample
+    onCameraChangeRef.current = onCameraChange
   })
 
   const getViewportSize = useCallback((): { width: number; height: number } => {
     const rect = containerRef.current?.getBoundingClientRect()
-    return {
+    const size = {
       width: rect && rect.width > 0 ? rect.width : 1280,
       height: rect && rect.height > 0 ? rect.height : 700,
     }
+    viewportSizeRef.current = size
+    return size
   }, [containerRef])
 
   const applyCameraToDom = useCallback(
@@ -174,6 +185,7 @@ export function useMapViewportController({
         'transform',
         `translate(${next.x.toFixed(2)}, ${next.y.toFixed(2)}) scale(${next.k.toFixed(4)})`,
       )
+      onCameraChangeRef.current?.(next, viewportSizeRef.current)
     },
     [cameraGroupRef],
   )
@@ -527,7 +539,38 @@ export function useMapViewportController({
     )
   }, [animateCameraAndNodes, getViewportSize])
 
+  const panToWorldPoint = useCallback(
+    (worldX: number, worldY: number, options?: { immediate?: boolean }) => {
+      const { width, height } = getViewportSize()
+      const targetCam = centerCameraOnWorldPoint(
+        worldX,
+        worldY,
+        cameraRef.current.k,
+        width,
+        height,
+        bboxRef.current,
+        hudInsetsRef.current,
+      )
+      if (options?.immediate) {
+        cancelAnimation()
+        applyCameraToDom(targetCam)
+        syncZoomBehaviorTransform(targetCam)
+        notifyScaleTier(targetCam.k, true)
+        return
+      }
+      animateCameraAndNodes(targetCam, false)
+    },
+    [
+      animateCameraAndNodes,
+      applyCameraToDom,
+      cancelAnimation,
+      getViewportSize,
+      notifyScaleTier,
+      syncZoomBehaviorTransform,
+    ],
+  )
+
   const getTransform = useCallback(() => cameraRef.current, [])
 
-  return { zoomIn, zoomOut, fitAll, recenterFocus, getTransform }
+  return { zoomIn, zoomOut, fitAll, recenterFocus, panToWorldPoint, getTransform }
 }

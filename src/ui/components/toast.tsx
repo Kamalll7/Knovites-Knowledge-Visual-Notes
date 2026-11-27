@@ -34,7 +34,7 @@ export function ToastViewport({
     <RadixToast.Viewport
       aria-label={en.toast.regionLabel}
       className={cn(
-        'fixed right-4 bottom-14 z-50 flex max-h-screen w-full max-w-sm flex-col gap-2 outline-none',
+        'fixed left-4 bottom-14 z-50 flex max-h-screen w-full max-w-sm flex-col gap-2 outline-none',
         className,
       )}
       {...props}

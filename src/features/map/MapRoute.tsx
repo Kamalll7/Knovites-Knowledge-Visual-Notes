@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 import { useNavigate } from 'react-router'
 import { useMapOrientationPreference } from '@/app/map-preferences'
 import { getPageRouteForNode } from '@/app/store'
@@ -16,10 +24,13 @@ import {
 import type { NodeStatus, NodeType } from '@/domain/schema'
 import { MapBreadcrumb } from '@/features/map/MapBreadcrumb'
 import { MapHudControls } from '@/features/map/MapHudControls'
+import { MapMinimap, type MapMinimapHandle } from '@/features/map/MapMinimap'
 import { MapViewport, type MapViewportHandle } from '@/features/map/MapViewport'
 import { NodeActionToolbar } from '@/features/map/NodeActionToolbar'
 import { DeleteNodeDialog, MoveNodeDialog } from '@/features/map/NodeCrudDialogs'
+import { computeMapBoundingBox } from '@/features/map/map-bounds'
 import { buildBreadcrumbTrail } from '@/features/map/map-breadcrumb'
+import type { CameraTransform } from '@/features/map/map-camera'
 import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 import { useMapKeyboard } from '@/features/map/useMapKeyboard'
 import { Button } from '@/ui/components/button'
@@ -52,6 +63,11 @@ export function MapRoute() {
   const navigate = useNavigate()
 
   const viewportRef = useRef<MapViewportHandle | null>(null)
+  const minimapRef = useRef<MapMinimapHandle | null>(null)
+  const lastCameraRef = useRef<{
+    transform: CameraTransform
+    viewport: { width: number; height: number }
+  } | null>(null)
   const [focusId, setFocusId] = useState<string>(MAP_ROOT_ID)
   const [expandedOverflowParentIds, setExpandedOverflowParentIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -127,6 +143,32 @@ export function MapRoute() {
       config: MAP_CAPSULE_BOX_CONFIG,
     })
   }, [visible, measurer, fontVersion, orientation, zoomScale, zoomTier])
+
+  const bbox = useMemo(() => computeMapBoundingBox(layout), [layout])
+
+  const handleCameraChange = useCallback(
+    (transform: CameraTransform, viewport: { width: number; height: number }) => {
+      lastCameraRef.current = { transform, viewport }
+      minimapRef.current?.updateViewportRect(transform, viewport)
+    },
+    [],
+  )
+
+  const handleMinimapNavigate = useCallback(
+    (worldX: number, worldY: number, options?: { immediate?: boolean }) => {
+      viewportRef.current?.panToWorldPoint(worldX, worldY, options)
+    },
+    [],
+  )
+
+  useLayoutEffect(() => {
+    if (hasNodes && lastCameraRef.current) {
+      minimapRef.current?.updateViewportRect(
+        lastCameraRef.current.transform,
+        lastCameraRef.current.viewport,
+      )
+    }
+  }, [hasNodes])
 
   const handleSelectNode = useCallback((nodeId: string) => {
     if (nodeId.startsWith(OVERFLOW_NODE_PREFIX)) {
@@ -351,20 +393,33 @@ export function MapRoute() {
         </div>
       ) : null}
 
-      <MapViewport
-        ref={viewportRef}
-        layout={layout}
-        visible={visible}
-        focusId={effectiveFocusId}
-        orientation={orientation}
-        theme={resolvedTheme}
-        measureText={measurer.measure}
-        keyboardFocusActive={keyboardFocusActive}
-        onSelectNode={handleSelectNode}
-        onOpenNode={handleOpenNode}
-        onCreateFirstNode={handleOpenFirstNodeForm}
-        onScaleTierChange={handleScaleTierChange}
-      />
+      <div className="relative flex min-h-0 flex-1">
+        <MapViewport
+          ref={viewportRef}
+          layout={layout}
+          visible={visible}
+          focusId={effectiveFocusId}
+          orientation={orientation}
+          theme={resolvedTheme}
+          measureText={measurer.measure}
+          keyboardFocusActive={keyboardFocusActive}
+          onSelectNode={handleSelectNode}
+          onOpenNode={handleOpenNode}
+          onCreateFirstNode={handleOpenFirstNodeForm}
+          onScaleTierChange={handleScaleTierChange}
+          onCameraChange={handleCameraChange}
+        />
+        {hasNodes ? (
+          <MapMinimap
+            ref={minimapRef}
+            layout={layout}
+            visible={visible}
+            bbox={bbox}
+            theme={resolvedTheme}
+            onNavigateWorldPoint={handleMinimapNavigate}
+          />
+        ) : null}
+      </div>
 
       {hasNodes ? (
         <NodeActionToolbar
