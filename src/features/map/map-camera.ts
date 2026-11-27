@@ -145,6 +145,38 @@ export function clampCameraTransform(
   return { x, y, k }
 }
 
+/**
+ * Centers the camera on an arbitrary world point `(worldX, worldY)` while preserving
+ * `currentK` and clamping to reachable map pan/zoom bounds (`FR-MAP-13`).
+ */
+export function centerCameraOnWorldPoint(
+  worldX: number,
+  worldY: number,
+  currentK: number,
+  viewportW: number,
+  viewportH: number,
+  bbox: MapBoundingBox,
+  hudInsets: CameraHudInsets = ZERO_HUD_INSETS,
+): CameraTransform {
+  const safeW = Math.max(240, viewportW)
+  const safeH = Math.max(180, viewportH)
+  const usableW = Math.max(120, safeW - hudInsets.left - hudInsets.right)
+  const usableH = Math.max(100, safeH - hudInsets.top - hudInsets.bottom)
+  const centerScreenX = hudInsets.left + usableW / 2
+  const centerScreenY = hudInsets.top + usableH / 2
+  const k = Math.max(MAP_ZOOM_MIN, Math.min(MAP_ZOOM_MAX, Number.isFinite(currentK) ? currentK : 1))
+  return clampCameraTransform(
+    {
+      x: centerScreenX - worldX * k,
+      y: centerScreenY - worldY * k,
+      k,
+    },
+    bbox,
+    safeW,
+    safeH,
+  )
+}
+
 /** Zooms in or out around the viewport center by `MAP_ZOOM_STEP_FACTOR`, respecting pan/zoom bounds. */
 export function stepZoomCamera(
   current: CameraTransform,
