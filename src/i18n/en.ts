@@ -40,21 +40,39 @@ export const en = {
   nodePage: {
     titlePrefix: 'Node',
     homeBadge: 'Home page',
-    subtitle: 'Node canvas page placeholder. React Flow + TipTap editor arrive in M4.',
-    homeSubtitle: 'Workspace Home page (virtual root). React Flow + TipTap editor arrive in M4.',
+    subtitle: 'Freeform node canvas workspace.',
+    homeSubtitle: 'Workspace Home page (virtual root).',
     backToMap: 'Back to map',
     canvasPlaceholderTitle: 'Freeform Canvas',
-    canvasPlaceholderBody:
-      'Text boxes and images will live here in a pannable, zoomable workspace.',
+    canvasPlaceholderBody: 'Text boxes and images live here in a pannable, zoomable workspace.',
     homeCanvasLazyBody:
-      'Home canvas is currently empty and created lazily at canvas.json on first edit.',
-    homeCanvasReadyBody:
-      'Home canvas is persisted at canvas.json and ready for the M4 freeform editor.',
-    sidePanelTitle: 'Connections',
+      'Home canvas is empty and will be created lazily at canvas.json on first edit.',
+    homeCanvasReadyBody: 'Home canvas is persisted at canvas.json.',
+    loadingCanvas: 'Loading canvas…',
+    notFoundTitle: 'Node not found',
+    notFoundDescription: 'No node with this ID exists in the local workspace.',
+    sidePanelTitle: 'Inspector',
+    showPanel: 'Show panel',
+    hidePanel: 'Hide panel',
     linksTab: 'Links',
     childrenTab: 'Children',
     infoTab: 'Info',
+    linksEmpty: 'Links and backlinks will appear here in M5.',
+    childrenEmpty: 'Direct child nodes will appear here in M5.',
+    infoEmpty: 'Node metadata and folder details.',
     backlinksEmpty: 'No backlinks yet.',
+    readonlyCorrupt:
+      'This canvas is marked corrupt and opened read-only so existing repository data is never overwritten.',
+    readonlyNewerSchemaPrefix:
+      'This canvas uses a newer schema version and is opened read-only to prevent data loss:',
+    saveStatus: {
+      idle: 'Ready',
+      lazyEmpty: 'Empty (not yet created)',
+      saving: 'Saving…',
+      saved: 'Saved',
+      error: 'Save failed',
+      readonly: 'Read-only',
+    },
   },
   settings: {
     title: 'Settings',
