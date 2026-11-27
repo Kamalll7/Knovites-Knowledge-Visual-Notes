@@ -40,6 +40,20 @@ Ringkasan keputusan yang diambil pemilik pada 2026-11-21 (ditetapkan tanpa mengu
   2. **`rings.ts` — Ukuran radius awal 2D AABB eksak (`minClearBaseRadius`):** menggantikan perkiraan busur 1D isotropik (`minGroupArcRadius`/`sameRingPairArcNeeded`) dengan pemecah 2D AABB ber-titik-tetap (termasuk `localLabelBox` Tier 0 dan pasangan wrap-around root), sehingga menghilangkan dead-zone pembatalan Utara/Selatan dan over-estimation radius Timur/Barat.
   3. **`collision.ts` & `__reference__/collision-reference.ts` — Lompatan analitik sibling + resolusi overlap multi-induk paralel:** menggantikan langkah `+56 px` dan `if (adjusted) break` serial antar-induk dengan lompatan analitik eksak (`exactUniformSiblingClearDeltaR`, batas aman `64 × stepR`) per induk (`parentPushedPass`) sambil menjaga paritas bit-demi-bit dengan referensi O(n²) dan memperbarui golden SHA-256 radial (`GOLDEN_RADIAL_SHA256`, `GOLDEN_WORST300_SHA256`).
 
+## Keputusan pemilik (2026-11-27)
+
+Keputusan resmi pemilik yang dikunci pada 2026-11-27 (melengkapi dan menggabungkan keputusan 2026-11-21 untuk implementasi `M4-Schema` dan Milestone M4):
+
+1. **`textAlign` (`paragraph` & `heading`):** **[Diputuskan pemilik 2026-11-27]** — masuk skema `canvas.json` v2 sebagai `'left' | 'center' | 'right'` (opsional; default `'left'` tidak ditulis ke JSON; `null` dan `'justify'` ditolak/dibuang).
+2. **Warna teks & highlight TipTap:** **[Diputuskan pemilik 2026-11-27]** — memakai token tema semantik (`textStyle.color`: `'accent' | 'warning' | 'success' | 'danger' | 'violet'`; `highlight.color`: `'warning' | 'success' | 'accent' | 'danger'`). Warna hex mentah `#rrggbb` dari hasil paste dibuang ke `Auto` (atribut/mark warna dihapus dan tidak ditulis ke JSON).
+3. **Frame teks `"none"` & `style.bg` / `style.border`:** **[Diputuskan pemilik 2026-11-27]** — memakai nilai `"none"` pada `style.bg` / `style.border` tanpa menambah properti `frame` baru. Nilai sah `style.bg` dan `style.border` di `canvas.json` v2 dibatasi ketat ke token tema semantik + `"auto"` + `"none"` (`'auto' | 'none' | 'accent' | 'warning' | 'success' | 'danger' | 'violet'`, tanpa hex bebas); pada migrasi `canvas.json` v1 → v2, nilai lama `null` dan `#rrggbb` dipetakan aman ke `'auto'`.
+4. **Resize teks (`textScale`):** **[Diputuskan pemilik 2026-11-27]** — properti non-destruktif opsional pada elemen `text` berupa angka berhingga dalam rentang S2b `[0.5, 3.0]` (default `1` tidak ditulis oleh serializer kanonik). Mode resize teks di UI memakai gesture (handle sudut = `scale`, handle sisi = `reflow`).
+5. **Keputusan UI M4 tambahan:** **[Diputuskan pemilik 2026-11-27]**
+   - **Blok kode:** `white-space: pre; overflow-x: auto` (scroll horizontal).
+   - **Edit dari zoom rendah:** otomatis zoom ke minimal **`0.7`** (bukan hanya di bawah ambang LOD `0.32`).
+   - **Modifier `Shift` pada resize gambar (`FR-CVS-03`):** default mengunci rasio aspek, menahan `Shift` membuka kunci rasio.
+   - **Indikator font di toolbar:** tampilkan ukuran dasar + pengali (mis. `16px ×1.5`) hanya saat `textScale !== 1`.
+
 ## Catatan temuan agent
 
 Format entri:
@@ -76,7 +90,7 @@ Format entri:
   5. **Tes:** Tambahkan fixture v1 -> migrasi v2 (bila naik skema), tes unit `sanitizeTipTapDoc` (menerima `'left'|'center'|'right'`, menolak `'justify'`/`123`/atribut asing), dan tes properti round-trip `serialize(parse(serialize(doc))) === serialize(doc)`.
 - Keputusan sementara (opsi paling sederhana): Menjaga `src/domain/schema/` dan `data-format.md` §5.4 **tetap tidak berubah** selama Spike S2 sambil mencatat celah serta proposal ini.
 - Rekomendasi: **Opsi 1** — `textAlign` masuk skema (`enum 'left' | 'center' | 'right'`), default tidak ditulis ke JSON, dan editor dinormalisasi agar tidak menulis `attrs: { textAlign: null }`.
-- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — `textAlign` masuk schema. Tindak lanjut pada M4 (T4.2/T4.4) mengikuti proposal dampak di atas (data-format §5.4, Zod/sanitizer, serializer kanonik, dataset, tes). Perlu atau tidaknya menaikkan versi skema ditentukan saat implementasi sesuai `AGENTS.md` #4. Editor tidak boleh menulis `attrs: { textAlign: null }`, dan atribut ekstra `Link` di-strip sebelum disimpan.
+- Status: **[Diputuskan pemilik 2026-11-21 & 2026-11-27: Opsi 1]** — `textAlign` masuk skema `canvas.json` v2 pada `paragraph` & `heading` (`'left' | 'center' | 'right'`; opsional, default `'left'` tidak ditulis ke JSON, `null` dan `'justify'` ditolak/dibuang). Atribut ekstra `Link` (`target`, `rel`, `class`, `title`) di-strip sebelum disimpan.
 
 ### 2026-11-19 — Proposal warna semantik (token tema) vs hex tetap pada `mark color`/`highlight` dan frame `"none"`
 - Task: Spike S2 (butir 15) / `docs/data-format.md` §5.4, `docs/spec-canvas.md` §6.4 (`FR-CVS-05`), `docs/spec-ui-nfr.md` §7.4 & §8.1
@@ -89,7 +103,7 @@ Format entri:
   2. **Hex tetap `#rrggbb` sesuai `data-format.md` §5.4 & `FR-CVS-05`:** tidak perlu mengubah skema v1; saat memilih di palet UI, swatch memetakan warna sesuai tema aktif saat itu (mis. `--branch-1..8` versi light atau dark ke hex), dan `Auto` (`color: null`) tetap menjadi default yang mewarisi `var(--fg)`. **Konsekuensi:** dokumen yang dibuat dengan swatch hex pada satu tema akan turun kontrasnya bila dibuka di tema sebaliknya—terutama terlihat pada **frame `"none"`** (`style.bg: null`) karena latar ikut berpindah antara `#0b0e14` dan `#f6f8fc`—kecuali renderer menerapkan penyesuaian kontras saat `style.bg === null` atau hanya mempertahankan penyorot bertint transparan/pair teks gelap pada `highlight`.
 - Keputusan sementara (opsi paling sederhana): Jangan ubah `src/domain/schema` pada S2; pasangan latar+teks `Highlight` per tema sudah lulus AA (`9.57–14.63:1`) sementara keputusan **Opsi 1 vs Opsi 2 untuk warna teks (`textStyle.color`)** tetap perlu ditetapkan sebelum implementasi M4 (`FR-CVS-05` / `FR-TXT-01`).
 - Rekomendasi: **Opsi 1** — warna disimpan sebagai token semantik tema, bukan hex tetap, agar kontras WCAG AA terjaga otomatis di tema dark maupun light serta frame `"none"`.
-- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — warna teks dan highlight disimpan sebagai token semantik tema. Tindak lanjut sebelum/pada M4: tetapkan daftar nama token dan pemetaannya per tema, perluas whitelist `textStyle.color` / `highlight.color` di data-format §5.4 dan skema (naik versi atau tidak ditentukan saat implementasi), dan tentukan perlakuan warna hex hasil paste (usulan, belum diputuskan: dipetakan ke token terdekat atau dibuang ke `Auto`). **Pertanyaan lanjutan yang belum diputuskan:** apakah `style.bg` / `style.border` kartu juga menjadi token tema, atau tetap hex bebas (lihat entri frame teks di bawah). Bila tetap hex bebas, token teks bisa gagal kontras di atas kartu custom.
+- Status: **[Diputuskan pemilik 2026-11-21 & 2026-11-27: Opsi 1]** — warna teks dan highlight disimpan sebagai token semantik tema di `canvas.json` v2: `textStyle.color` ∈ `'accent' | 'warning' | 'success' | 'danger' | 'violet'` (5 token) dan `highlight.color` ∈ `'warning' | 'success' | 'accent' | 'danger'` (4 token). Warna hex mentah `#rrggbb` hasil paste dibuang ke `Auto` (atribut/mark warna dihapus dan tidak ditulis). `style.bg` / `style.border` kartu juga memakai enum token tema semantik + `'auto'` + `'none'` tanpa hex bebas (lihat entri frame teks di bawah).
 
 ### 2026-11-21 — Frame teks (`"none"`) vs `style.bg`/`style.border` di `data-format.md` §5.4
 - Task: Spike S2 / M4 (`FR-CVS-05`, `data-format.md` §5.4)
@@ -98,7 +112,7 @@ Format entri:
   1. Memakai konvensi nilai pada `style.bg` / `style.border` yang sudah ada (mis. `"none"` atau `"transparent"` selain `null | #rrggbb`) setelah dicek di `data-format.md` §5.4, tanpa menambah properti baru `frame`.
   2. Menambah properti terpisah (mis. `style.frame: "auto" | "none"`) dengan kenaikan skema v1 -> v2.
 - Rekomendasi: Cek dan perluas nilai valid `style.bg` / `style.border` (`null | #rrggbb | "none"`) lebih dulu sebelum menambah properti `frame` terpisah.
-- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — perluas nilai `style.bg` / `style.border` menjadi `null | #rrggbb | "none"`; `null` tetap berarti `Auto` (default tema), `"none"` berarti tanpa latar / tanpa border. Tidak ada properti `frame` baru. Tindak lanjut sebelum/pada M4 T4.6: ubah data-format §5.4, Zod, serializer kanonik, dataset, dan tes; toggle "kotak di belakang teks" di UI mengatur `bg` dan `border` sekaligus. Hubungan dengan token tema untuk `bg` / `border` belum diputuskan (lihat entri warna semantik).
+- Status: **[Diputuskan pemilik 2026-11-21 & 2026-11-27: Opsi 1]** — tidak ada properti `frame` baru; nilai sah `style.bg` & `style.border` di `canvas.json` v2 dibatasi ketat ke `'auto' | 'none' | 'accent' | 'warning' | 'success' | 'danger' | 'violet'` (tanpa hex bebas). `'auto'` berarti default tema (`--card` / `--border`), `'none'` berarti tanpa latar / tanpa border; toggle "kotak di belakang teks" di UI mengatur `bg` dan `border` sekaligus. Pada migrasi `canvas.json` v1 → v2, `null` dan `#rrggbb` lama dipetakan aman ke `'auto'`.
 
 ### 2026-11-21 — Pembungkusan blok kode kanvas: `pre-wrap` vs scroll horizontal
 - Task: Spike S2 / M4 (`FR-TXT-03`, `FR-TXT-08`)
@@ -116,7 +130,7 @@ Format entri:
   1. **Zoom otomatis ke tingkat terbaca** (mis. menaikkan kamera ke `>= 1.0` sambil memusatkan kotak saat masuk edit dari mode LOD).
   2. **Pertahankan zoom saat itu** dan langsung tampilkan editor penuh di `<ViewportPortal>` + toolbar ukuran layar (perilaku yang diuji pada Tes #14 Spike S2c).
 - Rekomendasi: **Opsi 1** — zoom otomatis ke tingkat terbaca saat masuk edit dari mode zoom `<` ambang LOD.
-- Status: **[Diputuskan pemilik 2026-11-21: Opsi 1]** — saat masuk edit dari zoom `<` ambang LOD, kamera otomatis zoom ke tingkat terbaca. Tindak lanjut M4 T4.4: implementasikan transisi kamera dan perbarui tes (S2b Tes #14 memverifikasi `setCenter` ke `zoom = 1.0`).
+- Status: **[Diputuskan pemilik 2026-11-21 & 2026-11-27: Opsi 1]** — saat masuk edit dari zoom rendah (`zoom < 0.7`, tidak hanya di bawah ambang LOD `0.32`), kamera otomatis zoom ke minimal **`0.7`** sambil memusatkan kotak teks agar nyaman dibaca. Tindak lanjut M4 T4.4: implementasikan transisi kamera dan perbarui tes.
 
 ### 2026-11-21 — Pemilihan mode resize teks lewat GESTURE: sudut = `scale`, sisi = `reflow` (penutup S2)
 - Task: Spike S2 / M4 (`T4.3`, `FR-CVS-03`, `FR-CVS-06`)
@@ -127,28 +141,25 @@ Format entri:
   - **Toggle `Reflow` / `Scale` per node di prototipe S2b BUKAN desain final** dan tidak dibawa ke UI M4; M4 mengimplementasikan pemisahan lewat gesture handle di atas.
 - Catatan tindak lanjut M4: tentukan apakah sisi atas/bawah pada node teks tetap disembunyikan atau bertindak netral/`reflow` vertikal bila nanti ada tinggi tetap, dan pastikan `ResizeHandles` di M4 memetakan prop `resizeMode` per handle (sudut vs sisi), bukan per node.
 
-### 2026-11-21 — Proposal dampak skema, format, FR, UI, & sinkronisasi dua perangkat dari Spike S2b (menunggu persetujuan sebelum M4)
-- Task: Spike S2b (`FR-CVS-01`, `FR-CVS-03`, `FR-CVS-04`, `FR-CVS-05`, `FR-CVS-06`, `FR-CVS-08`, `FR-TXT-01`, `FR-TXT-03`, `FR-TXT-04`, `FR-TXT-06`, `FR-TXT-08`, `FR-IMG-03`, `docs/data-format.md` §5.4)
-- Ringkasan status: **Spike S2 ditutup pada 2026-11-21 (`LOLOS BERSYARAT`)**; prototipe berada di `spikes/s2-tiptap-reactflow/`, syarat tersisa dipindahkan ke `Syarat M4` di [`docs/plan.md`](plan.md), dan **`src/domain/schema/`, `src/domain/serialize/`, serta `docs/data-format.md` belum diubah** sampai M4 dimulai dan keputusan terbuka di bawah disetujui pemilik.
-- Proposal teknis & opsi per komponen (tidak mengunci keputusan yang belum dipilih pemilik):
-  1. **`style.bg` / `style.border` (`null | #rrggbb | "none"`, tanpa properti `frame` baru):**
-     - `null` = `Auto` (`--surface` / `--border` tema aktif); `"none"` = transparan tanpa latar & tanpa border; toggle `"kotak di belakang teks"` menyetel `bg` dan `border` sekaligus.
-     - **[Belum diputuskan]:** apakah `style.bg` / `style.border` juga memakai token tema semantik (atau tetap `#rrggbb` bebas di samping `"none"`). Jika hex tetap diizinkan untuk latar kartu custom (mis. latar terang pada tema dark), token teks terang (`--text-token-*`) bisa turun kontrasnya di atas kartu custom tersebut — opsi mitigasi M4: batasi palet kartu ke token tema atau pasangan kontras adaptif.
-  2. **Geometri teks & `resizePolicy` (`width`, `height`, `heightMode`, `textScale`):**
+### 2026-11-21 — Proposal dampak skema, format, FR, UI, & sinkronisasi dua perangkat dari Spike S2b (`[Diputuskan pemilik 2026-11-27]`)
+- Task: Spike S2b / `M4-Schema` (`FR-CVS-01`, `FR-CVS-03`, `FR-CVS-04`, `FR-CVS-05`, `FR-CVS-06`, `FR-CVS-08`, `FR-TXT-01`, `FR-TXT-03`, `FR-TXT-04`, `FR-TXT-06`, `FR-TXT-08`, `FR-IMG-03`, `docs/data-format.md` §5.4)
+- Ringkasan status: **Spike S2 ditutup pada 2026-11-21 (`LOLOS BERSYARAT`)**; seluruh 5 keputusan terbuka di bawah telah dikunci oleh pemilik pada **2026-11-27** dan disinkronkan ke `docs/data-format.md` §5.4 (`canvas.json` `schema: 2` + migrasi v1 → v2), `src/domain/schema/`, dan `src/domain/serialize/`.
+- Keputusan final per komponen (**`[Diputuskan pemilik 2026-11-27]`**):
+  1. **`style.bg` / `style.border` (tanpa properti `frame` baru):**
+     - **[Diputuskan pemilik 2026-11-27]:** Nilai sah `style.bg` dan `style.border` pada `canvas.json` v2 dibatasi ke enum token tema semantik + `"auto"` + `"none"` (`'auto' | 'none' | 'accent' | 'warning' | 'success' | 'danger' | 'violet'`, tanpa hex bebas). `'auto'` = default tema (`--card` / `--border`); `'none'` = transparan tanpa latar & tanpa border; toggle `"kotak di belakang teks"` menyetel `bg` dan `border` sekaligus. Nilai v1 lama (`null` dan `#rrggbb`) dimigrasikan aman ke `'auto'`.
+  2. **Geometri teks, `textScale`, & `resizePolicy` (`width`, `height`, `textScale`):**
      - Kontrak konseptual S2b memakai `resizePolicy`: **`text`** (`minW: 160`, `maxW: 1200`, `minScale: 0.5`, `maxScale: 3.0`), **`image`** (`minW: 80`, `minH: 60`, `maxW: 2000`, `maxH: 2000`, `FR-CVS-03`), dan **`terminal`** (`minW: 320`, `maxW: 1400`, `minH: 180`, `maxH: 900`, `free`, kontrak dokumen saja — tanpa widget runtime di M4).
-     - Pemisahan `reflow` vs `scale` pada teks sudah **`[Diputuskan pemilik 2026-11-21]`** memakai **gesture** (handle sisi = `reflow`, handle sudut = `scale` via `textScale` `[0.5, 3.0]` tanpa mengubah `fontSize` dokumen; toggle di S2b hanya prototipe). Tinggi kotak tetap otomatis (`Auto`).
-     - **[Keputusan menunggu pemilik — Arah modifier `Shift` pada resize gambar (`FR-CVS-03`):**
-       - Kebiasaan aplikasi desain umum (Figma/Canva) membiarkan **sisi bebas / atau sudut kunci vs `Shift` mengunci rasio**, sedangkan `spec-canvas.md` §6.4 (`FR-CVS-03`) & prototipe S2b mengunci rasio secara default dan **`Shift` membuka kunci rasio** (`keepAspectRatio: true`, tahan `Shift` = bebas). Pemilik perlu mengonfirmasi apakah tetap `Shift` membuka kunci (PRD) atau `Shift` mengunci.
-     - **[Rekomendasi, belum diputuskan] — Batas zoom minimum saat masuk edit & tampilan ukuran font di toolbar:**
-       - *(Zoom edit):* rekomendasikan menaikkan zoom minimum masuk edit ke sekitar **`0.7`** (font dasar `16 px` baru terbaca `>= 11 px` di zoom `~0.69`), tidak hanya saat zoom di bawah ambang LOD `0.32`.
-       - *(Toolbar `textScale`):* saat kartu memiliki `textScale !== 1` (mis. `1.5x` dengan teks dokumen dasar `16 px`), tampilkan **`base` + indikator efektif `(24px)`** agar jelas bagi pengguna.
-  3. **Token warna semantik (`accent`, `warning`, `success`, `danger`, `violet`), `Highlight`, & perilaku paste hex (`[Rekomendasi]`):**
-     - Di S2b seluruh 5 token warna teks dan 4 pasangan `Highlight` (`warning`, `success`, `accent`, `danger`) terukur `>= 4.5:1` WCAG AA pada tema dark maupun light, baik pada kartu `Auto` maupun `frame: "none"`.
-     - **[Rekomendasi — belum diputuskan pemilik] Perlakuan `#rrggbb` saat paste HTML/rich-text:**
-       1. *(Rekomendasi)* **Petakan hex paste ke token semantik terdekat** bila warna berada dalam jarak perseptual tertentu (mis. ΔE terhadap palet tema aktif), dan jatuhkan warna eksotik/rendah kontras atau default ke `Auto` (`null`) sehingga konsisten lintas tema & menjaga WCAG AA. *Risiko:* koreksi warna tipis saat menempel kutipan web.
-       2. *(Alternatif)* **Buang seluruh warna `color` hex saat paste** (`null` = `Auto`), hanya izinkan warna token dari toolbar Knovites. *Pro:* paling sederhana, 0 heuristik ΔE.
+     - **[Diputuskan pemilik 2026-11-21 & 2026-11-27]:** `textScale` masuk skema sebagai properti non-destruktif opsional pada elemen `text` (angka berhingga `[0.5, 3.0]`, default `1` tidak ditulis oleh serializer kanonik). Pemisahan `reflow` vs `scale` pada UI memakai **gesture** (handle sisi = `reflow`, handle sudut = `scale` via `textScale` tanpa mengubah `fontSize` dokumen). Tinggi kotak tetap otomatis (`Auto`).
+     - **[Diputuskan pemilik 2026-11-27 — Arah modifier `Shift` pada resize gambar (`FR-CVS-03`)]:** Default **mengunci rasio aspek**, menahan **`Shift` membuka kunci rasio** (sesuai rumusan `spec-canvas.md` §6.4 & S2b).
+     - **[Diputuskan pemilik 2026-11-27 — Batas zoom minimum saat masuk edit & tampilan ukuran font di toolbar]:**
+       - *(Zoom edit):* masuk mode edit dari zoom rendah otomatis zoom ke minimal **`0.7`** (bukan hanya di bawah ambang LOD `0.32`).
+       - *(Toolbar `textScale`):* tampilkan ukuran dasar + pengali (mis. `16px ×1.5`) **hanya saat `textScale !== 1`**.
+  3. **Token warna semantik (`textStyle.color`, `highlight.color`) & perlakuan paste hex:**
+     - **[Diputuskan pemilik 2026-11-27]:** `textStyle.color` dibatasi ke 5 token (`'accent' | 'warning' | 'success' | 'danger' | 'violet'`) dan `highlight.color` ke 4 token (`'warning' | 'success' | 'accent' | 'danger'`). Hex mentah `#rrggbb` dari hasil paste **dibuang ke `Auto`** (atribut/mark warna dihapus dan tidak ditulis; alternatif pemetaan ΔE tidak dipakai).
   4. **`textAlign` di editor & skema:**
-     - Editor S2b (`NoNullTextAlign`) membatasi `'left' | 'center' | 'right'` dan menghapus `textAlign: null` (dan `attrs` kosong) langsung pada `getJSON()` sehingga paragraf polos tetap bersih tanpa memicu `disallowed_tiptap_attr`. `'justify'` ditolak baik di editor, paste, maupun sanitizer.
+     - **[Diputuskan pemilik 2026-11-21 & 2026-11-27]:** `textAlign` masuk skema pada `paragraph` & `heading` (`'left' | 'center' | 'right'`; opsional, default `'left'` tidak ditulis ke JSON; `null` dan `'justify'` ditolak/dibuang di editor, paste, sanitizer, dan serializer).
+  5. **Blok kode:**
+     - **[Diputuskan pemilik 2026-11-21 & 2026-11-27]:** `white-space: pre; overflow-x: auto` (scroll horizontal).
 - Dampak konkret bila keputusan di atas disetujui masuk M4 (urutan sesuai `AGENTS.md` §4):
   1. **`docs/data-format.md` §5.4:** Perluas `style.bg`/`style.border` ke `null | #rrggbb | "none"`; ganti/perluas `textStyle.color` & `highlight.color` untuk menerima daftar token semantik resmi (`enum` terdefinisi); tambahkan `attrs.textAlign?: 'left' | 'center' | 'right'` pada `paragraph`/`heading`; tentukan properti opsional `textScale?: number` (`[0.5, 3.0]`, dihilangkan bila `1`), `resizeMode?: 'reflow' | 'scale'` (atau cukup tersirat oleh `textScale`), dan konfirmasi apakah `h`/`heightMode` tetap dilarang pada elemen `text` yang di-`reflow`. Naikkan `schema` (`1 -> 2`) beserta aturan migrasi v1 -> v2 bila ada field baru yang tidak diabaikan aman oleh parser v1.
   2. **`src/domain/schema/` (`schemas.ts`, `tiptap.ts`, `types.ts`):** Perbarui skema Zod elemen teks, whitelist atribut mark/node TipTap, sanitizer (`textAlign`, `Link` attr stripping, token warna + fallback paste), dan fungsi migrasi v1 -> v2.

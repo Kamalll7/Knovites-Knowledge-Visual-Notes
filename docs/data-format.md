@@ -27,7 +27,7 @@ knowledge-repo/
 ```
 
 - Folder adalah node **jika dan hanya jika** berisi `node.json`. Folder `assets/` bukan node (baik di dalam folder node maupun di akar repo untuk halaman home).
-- Root repo adalah **root virtual** dengan ID kanonik internal **`__root__`** (judul dari `knovites.json`), **tanpa `node.json` di akar repo**. Root virtual memiliki halaman home opsional (`canvas.json` dan `assets/` langsung di akar repo, memakai format `canvas.json` `schema: 1` yang sama) yang **dibuat malas (*lazy*)** saat pertama kali diedit. Repo v1 yang belum memiliki `canvas.json` di akar otomatis dianggap halaman home kosong (perubahan ini bersifat aditif pada `schema: 1` dengan 0 *breaking change*). Node tingkat atas adalah child-nya.
+- Root repo adalah **root virtual** dengan ID kanonik internal **`__root__`** (judul dari `knovites.json`), **tanpa `node.json` di akar repo**. Root virtual memiliki halaman home opsional (`canvas.json` dan `assets/` langsung di akar repo, memakai format `canvas.json` `schema: 2` yang sama, dengan migrasi otomatis dari `schema: 1`) yang **dibuat malas (*lazy*)** saat pertama kali diedit. Repo lama yang belum memiliki `canvas.json` di akar otomatis dianggap halaman home kosong. Node tingkat atas adalah child-nya.
 - Root virtual `'__root__'` tidak dapat dihapus, dipindah, diubah nama foldernya (`rename`), atau di-reorder lewat operasi pohon.
 - Parent dan children **tidak disimpan**: diturunkan dari struktur folder.
 - File dan folder yang tidak dikenal aplikasi **tidak boleh diubah atau dihapus**. Pada akar repo, berkas tak dikenal milik pengguna (mis. `README.md`, `.gitignore`, `LICENSE`) dipisahkan sebagai `rootExtraFiles` dan aset gambar halaman home di `assets/` dipisahkan sebagai `rootAssets`, terpisah dari `extraFiles` node anak.
@@ -75,19 +75,33 @@ Invariant:
 - **Slug** dibuat sekali saat node dibuat, dari judul (`slugify`: huruf kecil, ASCII, karakter non-alfanumerik jadi `-`, rapikan tanda hubung berulang, maksimal 48 karakter, kosong jadi `node`). Jika bentrok dengan sibling: tambahkan `-2`, `-3`, dst. Slug **tidak berubah saat judul diganti**. Slug hanya berubah saat node dipindah dan terjadi bentrok di parent baru.
 - Urutan sibling: `order` menaik, seri dipecah oleh `id`. Menyisipkan atau memindah node hanya mengubah `node.json` node itu.
 
-### 5.4 canvas.json
+### 5.4 canvas.json (`schema: 2`)
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "elements": {
     "e_8f2a1c0d": {
       "type": "text",
       "x": 120, "y": 80, "w": 320,
       "z": "a0",
-      "style": { "bg": null, "border": null },
+      "textScale": 1.25,
+      "style": { "bg": "auto", "border": "auto" },
       "content": { "type": "doc", "content": [
-        { "type": "paragraph", "content": [{ "type": "text", "text": "Return to win" }] }
+        {
+          "type": "paragraph",
+          "attrs": { "textAlign": "center" },
+          "content": [
+            {
+              "type": "text",
+              "text": "Return to win",
+              "marks": [
+                { "type": "textStyle", "attrs": { "color": "accent" } },
+                { "type": "highlight", "attrs": { "color": "warning" } }
+              ]
+            }
+          ]
+        }
       ] },
       "updatedAt": "2026-11-16T10:05:00Z"
     },
@@ -104,12 +118,24 @@ Invariant:
 }
 ```
 
+- Versioning berlaku **per berkas** (§5.7): `canvas.json` memakai **`schema: 2`** (`CANVAS_SCHEMA_VERSION = 2`), sementara `knovites.json` dan `node.json` tetap **`schema: 1`**. Berkas `canvas.json` `schema: 1` lama dimigrasikan secara murni ke v2 saat dimuat (lihat §5.7).
 - `elements` adalah **map** `id → elemen`, bukan array. ID elemen: `e_` + 8 karakter `[a-z0-9]`. Map ini yang memungkinkan merge per elemen.
 - Tipe elemen P0: `text` dan `image`. Field umum: `type`, `x`, `y`, `w`, `z` (fractional index), `updatedAt`, dan `rotation` (opsional, default 0, UI belum memakainya).
-- `text`: `content` (dokumen ProseMirror JSON dari TipTap) dan `style` (`bg`, `border`: `null` atau `#rrggbb`). Tinggi **tidak disimpan**, otomatis mengikuti isi.
+- `text`:
+  - `content` (dokumen ProseMirror JSON dari TipTap yang telah disanitasi).
+  - `style`: `{ bg, border }` tanpa properti `frame` terpisah. Pada `schema: 2`, nilai sah `style.bg` dan `style.border` dibatasi ketat ke enum token tema semantik + `"auto"` + `"none"`: `'auto' | 'none' | 'accent' | 'warning' | 'success' | 'danger' | 'violet'` (tanpa hex bebas `#rrggbb` dan tanpa `null`). `'auto'` berarti default tema (`--card` / `--border`); `'none'` berarti transparan tanpa latar & tanpa border.
+  - `textScale` (opsional): pengali skala visual non-destruktif berupa angka berhingga pada rentang `[0.5, 3.0]`. Nilai default `1` tidak ditulis oleh serializer kanonik dan dihapus saat normalisasi.
+  - Tinggi (`h`) **tidak disimpan**, otomatis mengikuti isi (bila `h` muncul di berkas eksternal, `h` diabaikan dengan catatan isu `ignored_text_height`).
 - `image`: `asset` (path relatif `assets/<hash16>.<ext>`), `h`, `nw` dan `nh` (ukuran asli dalam piksel setelah kompresi), `alt` (opsional).
-- Semua koordinat dan ukuran dibulatkan ke integer.
-- Whitelist isi `content`. Apa pun di luar ini dibuang saat load dan dicatat ke log. Node: `doc`, `paragraph`, `heading` (level 1-3), `bulletList`, `orderedList`, `listItem`, `codeBlock` (atribut `language`), `blockquote`, `hardBreak`, `horizontalRule`, `text`. Mark: `bold`, `italic`, `underline`, `strike`, `code`, `link`, `textStyle` (`color`, `fontFamily`, `fontSize`), `highlight` (`color`). Href link hanya boleh `http`, `https`, `mailto`, atau `knovites:<nodeId>`.
+- Semua koordinat dan ukuran (`x`, `y`, `w`, `h`, `rotation`, `nw`, `nh`) dibulatkan ke integer; `textScale` tetap berupa angka desimal berhingga dalam `[0.5, 3.0]`.
+- **Whitelist isi `content` (sanitasi TipTap):** Apa pun di luar daftar ini dibuang saat load (`parseCanvasJson`) maupun saat sanitasi editor dan dicatat ke `issues`.
+  - **Node:** `doc` (hanya di root), `paragraph` (atribut opsional `textAlign`: `'left' | 'center' | 'right'`; default `'left'` dihilangkan dari JSON; `null` dan `'justify'` ditolak/dibuang), `heading` (atribut wajib `level`: `1 | 2 | 3`, opsional `textAlign`: `'left' | 'center' | 'right'`; default `'left'` dihilangkan), `bulletList`, `orderedList`, `listItem`, `codeBlock` (atribut `language`: `string | null`), `blockquote`, `hardBreak`, `horizontalRule`, `text`. Node lain (termasuk `image` / `<img src="http://...">`, `script`, `iframe`, `doc` bersarang) ditolak dan dibuang.
+  - **Mark:**
+    - Sederhana (tanpa atribut): `bold`, `italic`, `underline`, `strike`, `code`.
+    - `link`: atribut tunggal `href` dengan allowlist ketat protokol `http`, `https`, `mailto`, atau `knovites:<ULID>`. String dengan spasi awal/akhir, karakter kontrol (mis. `"java\nscript:"`), variasi huruf besar/kecil protokol berbahaya (`JaVaScRiPt:`), `data:`, `vbscript:`, atau URL tak valid ditolak dan mark `link` dihapus (teks di dalamnya tetap aman). Atribut ekstra (`target`, `rel`, `class`, `title`, `on*`) di-strip.
+    - `textStyle`: atribut `color` dibatasi ketat ke **5 token tema semantik** (`'accent' | 'warning' | 'success' | 'danger' | 'violet'`; hex mentah `#rrggbb` dan nilai tak sah dibuang ke `Auto` / tidak ditulis); `fontFamily` dan `fontSize` (string aman tanpa `url(...)`, `expression(...)`, `javascript:`, atau karakter injeksi CSS `;`/`{`/`}`).
+    - `highlight`: atribut `color` dibatasi ketat ke **4 token tema semantik** (`'warning' | 'success' | 'accent' | 'danger'`; hex mentah `#rrggbb` dan nilai tak sah dibuang).
+  - **Penolakan atribut & nilai berbahaya:** seluruh atribut event handler (`on*`), nilai gaya inline berbahaya (`background:url(...)`, `url(...)`, `expression(...)`), serta node gambar eksternal (`image` / `<img src="http://...">`) di dalam konten TipTap ditolak dan dibuang.
 - Viewport (zoom dan posisi kamera) **tidak** disimpan di repo, hanya lokal per perangkat.
 
 ### 5.5 Serialisasi kanonik
@@ -118,6 +144,7 @@ Harus deterministik supaya diff Git bersih:
 
 - UTF-8, LF, indentasi 2 spasi, newline di akhir file.
 - Semua key objek diurutkan alfabetis secara rekursif (urutan array dipertahankan). Contoh di dokumen ini ditulis dalam urutan logis agar mudah dibaca. File hasil serialisasi memakai urutan alfabetis.
+- Normalisasi default `canvas.json` v2: serializer menghilangkan `textAlign: 'left'` / `null` (serta `attrs` kosong pada `paragraph`), dan menghilangkan `textScale: 1` agar diff Git minimal.
 - Satu fungsi `serialize*` per tipe file di `domain/serialize`. Tidak ada kode lain yang boleh menulis JSON file repo.
 - Properti yang diuji: `serialize(parse(serialize(x))) === serialize(x)`.
 
@@ -128,11 +155,16 @@ Harus deterministik supaya diff Git bersih:
 - Pipeline kompresi dijelaskan di `spec-canvas.md` §6.6 (FR-IMG-03).
 - Aset yang tidak lagi direferensikan dibiarkan di P0. Pembersihan manual adalah P1.
 
-### 5.7 Versioning skema
+### 5.7 Versioning skema & migrasi
 
-- Setiap file punya `schema`. Aplikasi mendukung versi saat ini dan satu versi sebelumnya lewat fungsi migrasi murni (`migrate_vN_to_vN+1`) yang punya fixture.
-- File dengan skema **lebih baru** dari yang dikenal aplikasi: node ditandai read-only dan tidak pernah ditimpa.
-- File yang gagal validasi: node ditandai `corrupt` (read-only, tampilkan detail error) dan **tidak pernah ditimpa diam-diam**.
+- Setiap file punya `schema` sendiri (versioning per berkas): saat ini `knovites.json` = `1`, `node.json` = `1`, dan `canvas.json` = `2`. Aplikasi mendukung versi saat ini dan satu versi sebelumnya lewat fungsi migrasi murni (`migrate_vN_to_vN+1`) yang punya fixture.
+- **Migrasi `canvas.json` v1 → v2 (`migrateCanvasV1ToV2`):** dijalankan otomatis saat `parseCanvasJson` memuat berkas ber-`schema: 1`:
+  1. Memvalidasi struktur v1 (menerima `style.bg`/`style.border`: `null | #rrggbb`, dan format mark v1).
+  2. Menaikkan `schema` menjadi `2`.
+  3. Memetakan `style.bg` dan `style.border` dari `null` maupun `#rrggbb` lama ke `'auto'` secara aman (ketika `#rrggbb` diganti ke `'auto'`, dicatat sebagai `issue` non-fatal).
+  4. Membersihkan warna hex `#rrggbb` lama pada mark `textStyle.color` dan `highlight.color` ke `Auto` (atribut `color` dihapus; mark `textStyle`/`highlight` yang menjadi kosong tanpa atribut sah ikut dihapus secara aman), sementara seluruh teks, struktur blok, `link`, koordinat, dan elemen `image` beserta referensi `assets/` dipertahankan utuh.
+- File dengan skema **lebih baru** dari yang dikenal aplikasi (`schema > 1` untuk `knovites.json`/`node.json`, `schema > 2` untuk `canvas.json`): node/kanvas ditandai `newer-schema` (read-only) dan tidak pernah ditimpa.
+- File yang gagal validasi: node/kanvas ditandai `corrupt` (read-only, tampilkan detail error) dan **tidak pernah ditimpa diam-diam**.
 
 ### 5.8 Yang tidak disimpan di repo
 
