@@ -28,10 +28,7 @@ import {
 
 export interface MapMinimapHandle {
   /** Updates the minimap viewport rectangle directly via SVG DOM ref (0 React re-renders). */
-  updateViewportRect: (
-    camera: CameraTransform,
-    viewport: { width: number; height: number },
-  ) => void
+  updateViewportRect: (camera: CameraTransform, viewport: { width: number; height: number }) => void
 }
 
 export interface MapMinimapProps {
@@ -162,7 +159,13 @@ export const MapMinimap = forwardRef<MapMinimapHandle, MapMinimapProps>(function
       if (!pos || !vNode) continue
       const parentPos = vNode.parentId ? posMap.get(vNode.parentId) : undefined
       if (parentPos) {
-        lines.push({ id: `${vNode.parentId}->${id}`, x1: parentPos.x, y1: parentPos.y, x2: pos.x, y2: pos.y })
+        lines.push({
+          id: `${vNode.parentId}->${id}`,
+          x1: parentPos.x,
+          y1: parentPos.y,
+          x2: pos.x,
+          y2: pos.y,
+        })
       }
       const isOverflow = vNode.kind === 'overflow'
       dots.push({
