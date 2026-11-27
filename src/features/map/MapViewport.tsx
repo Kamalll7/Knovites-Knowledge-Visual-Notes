@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
   type ComputeVisibleResult,
@@ -6,6 +6,7 @@ import {
   type TextMeasurerFn,
   type ZoomTier,
 } from '@/domain/layout'
+import type { TreeState } from '@/domain/tree'
 import { MapEdges, type EdgeDomRefs } from '@/features/map/MapEdges'
 import { MapNodePill } from '@/features/map/MapNodePill'
 import { MapSvgView } from '@/features/map/MapSvgView'
@@ -17,6 +18,7 @@ import {
   type MapThemeMode,
 } from '@/features/map/map-colors'
 import { buildRenderedMapEdges, type MapEdgeOrientation } from '@/features/map/map-edge-path'
+import { useMapDragReparent } from '@/features/map/useMapDragReparent'
 import { useMapViewportController } from '@/features/map/useMapViewportController'
 import { en } from '@/i18n/en'
 
@@ -32,14 +34,17 @@ export interface MapViewportHandle {
 export interface MapViewportProps {
   readonly layout: MapLayoutResult
   readonly visible: ComputeVisibleResult
+  readonly tree?: TreeState
   readonly focusId: string
   readonly orientation: MapEdgeOrientation
   readonly theme: MapThemeMode
   readonly measureText?: TextMeasurerFn
   readonly hudInsets?: CameraHudInsets
   readonly keyboardFocusActive?: boolean
+  readonly writeDisabled?: boolean
   readonly onSelectNode?: (nodeId: string) => void
   readonly onOpenNode?: (nodeId: string) => void
+  readonly onReparentNode?: (nodeId: string, newParentId: string | null) => void | Promise<void>
   readonly onCreateFirstNode?: () => void
   readonly onScaleTierChange?: (scale: number, tier: ZoomTier) => void
   readonly onFrameSample?: (dtMs: number) => void
@@ -57,14 +62,17 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   {
     layout,
     visible,
+    tree,
     focusId,
     orientation,
     theme,
     measureText,
     hudInsets,
     keyboardFocusActive = false,
+    writeDisabled = false,
     onSelectNode,
     onOpenNode,
+    onReparentNode,
     onCreateFirstNode,
     onScaleTierChange,
     onFrameSample,
@@ -110,6 +118,24 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   })
 
   useImperativeHandle(ref, () => controls, [controls])
+
+  const drag = useMapDragReparent({
+    tree,
+    layout,
+    visible,
+    svgRef,
+    getCameraTransform: controls.getTransform,
+    writeDisabled,
+    onReparentNode,
+  })
+
+  const handleSelectNode = useCallback(
+    (nodeId: string) => {
+      if (drag.consumeSuppressedClick()) return
+      onSelectNode?.(nodeId)
+    },
+    [drag, onSelectNode],
+  )
 
   if (nonRootCount === 0) {
     return (
@@ -176,6 +202,15 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
               const visibleNode = visible.nodes[id]
               const colors = nodeColors.get(id)
               if (!layoutNode || !visibleNode || !colors) return null
+              const activeDrag = drag.dragState
+              const dropState =
+                activeDrag && activeDrag.evaluation.targetId === id
+                  ? activeDrag.evaluation.status === 'valid'
+                    ? 'valid'
+                    : activeDrag.evaluation.status === 'invalid'
+                      ? 'invalid'
+                      : null
+                  : null
               return (
                 <MapNodePill
                   key={id}
@@ -184,10 +219,14 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
                   colors={colors}
                   theme={theme}
                   measureText={measureText}
-                  isHovered={hoveredNodeId === id}
+                  isHovered={!activeDrag && hoveredNodeId === id}
                   isKeyboardFocused={keyboardFocusActive && visibleNode.isFocus}
-                  onSelect={onSelectNode}
+                  isDraggable={drag.isNodeDraggable(id)}
+                  isDraggedSource={activeDrag?.draggedNodeId === id}
+                  dropState={dropState}
+                  onSelect={handleSelectNode}
                   onOpen={onOpenNode}
+                  onNodePointerDown={drag.handleNodePointerDown}
                   onHoverStart={setHoveredNodeId}
                   onHoverEnd={(nodeId) =>
                     setHoveredNodeId((prev) => (prev === nodeId ? null : prev))
@@ -200,7 +239,87 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
               )
             })}
           </g>
-          {showHoverTooltip && hoveredLayoutNode ? (
+          {drag.dragState
+            ? (() => {
+                const evalState = drag.dragState.evaluation
+                const targetTitle =
+                  evalState.targetId !== null
+                    ? (visible.nodes[evalState.targetId]?.title ?? evalState.targetId)
+                    : null
+                const statusText =
+                  evalState.status === 'valid' && targetTitle
+                    ? `Drop into ${targetTitle}`
+                    : evalState.status === 'invalid'
+                      ? 'Cannot move here'
+                      : 'Drag onto a node'
+                const ghostStroke =
+                  evalState.status === 'valid'
+                    ? palette.status.mastered
+                    : evalState.status === 'invalid'
+                      ? palette.branches[6]
+                      : palette.accent
+                const ghostW = Math.max(
+                  128,
+                  Math.min(240, drag.dragState.draggedTitle.length * 8 + 36),
+                )
+                const hintW = Math.max(124, statusText.length * 6.8 + 20)
+                return (
+                  <g
+                    data-testid="map-drag-ghost"
+                    data-drop-status={evalState.status}
+                    pointerEvents="none"
+                    transform={`translate(${drag.dragState.worldX.toFixed(1)}, ${drag.dragState.worldY.toFixed(1)})`}
+                  >
+                    <rect
+                      x={-ghostW / 2}
+                      y={-18}
+                      width={ghostW}
+                      height={36}
+                      rx={14}
+                      fill={palette.surface2}
+                      fillOpacity={0.94}
+                      stroke={ghostStroke}
+                      strokeWidth={2}
+                      strokeDasharray={evalState.status === 'invalid' ? '5 3' : undefined}
+                    />
+                    <text
+                      x={0}
+                      y={0}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill={palette.fg}
+                      fontSize={13}
+                      fontWeight={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.weight}
+                      fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
+                    >
+                      {drag.dragState.draggedTitle}
+                    </text>
+                    <rect
+                      x={-hintW / 2}
+                      y={24}
+                      width={hintW}
+                      height={22}
+                      rx={6}
+                      fill={palette.surface}
+                      stroke={ghostStroke}
+                      strokeWidth={1.2}
+                    />
+                    <text
+                      x={0}
+                      y={35}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill={palette.fg}
+                      fontSize={11}
+                      fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
+                    >
+                      {statusText}
+                    </text>
+                  </g>
+                )
+              })()
+            : null}
+          {!drag.dragState && showHoverTooltip && hoveredLayoutNode ? (
             <g
               data-testid="map-hover-tooltip"
               pointerEvents="none"

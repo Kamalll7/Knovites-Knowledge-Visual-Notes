@@ -1,3 +1,4 @@
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   DEFAULT_RADIAL_LAYOUT_CONFIG,
   type MapLayoutNode,
@@ -31,10 +32,14 @@ export interface MapNodePillProps {
   readonly measureText?: TextMeasurerFn
   readonly isHovered?: boolean
   readonly isKeyboardFocused?: boolean
+  readonly isDraggable?: boolean
+  readonly isDraggedSource?: boolean
+  readonly dropState?: 'valid' | 'invalid' | null
   readonly onSelect?: (nodeId: string) => void
   readonly onOpen?: (nodeId: string) => void
   readonly onHoverStart?: (nodeId: string) => void
   readonly onHoverEnd?: (nodeId: string) => void
+  readonly onNodePointerDown?: (nodeId: string, event: ReactPointerEvent<SVGGElement>) => void
   readonly groupRef?: (el: SVGGElement | null) => void
 }
 
@@ -108,13 +113,19 @@ export function MapNodePill({
   theme,
   isHovered = false,
   isKeyboardFocused = false,
+  isDraggable = false,
+  isDraggedSource = false,
+  dropState = null,
   onSelect,
   onOpen,
   onHoverStart,
   onHoverEnd,
+  onNodePointerDown,
   groupRef,
 }: MapNodePillProps) {
   const palette = MAP_THEME_PALETTES[theme]
+  const dropValidStroke = palette.status.mastered
+  const dropInvalidStroke = palette.branches[6]
   const isOverflow = layoutNode.kind === 'overflow'
   const isRoot = layoutNode.kind === 'root'
   const isCircle = layoutNode.shape === 'circle'
@@ -150,14 +161,51 @@ export function MapNodePill({
         data-node-shape="circle"
         data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
         data-hovered={isHovered ? 'true' : 'false'}
+        data-draggable={isDraggable ? 'true' : 'false'}
+        data-drop-state={dropState ?? undefined}
         transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
+        opacity={isDraggedSource ? 0.42 : undefined}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onPointerDown={(e) => onNodePointerDown?.(layoutNode.id, e)}
         onMouseEnter={() => onHoverStart?.(layoutNode.id)}
         onMouseLeave={() => onHoverEnd?.(layoutNode.id)}
-        style={{ cursor: onSelect || onOpen ? 'pointer' : 'default' }}
+        style={{ cursor: isDraggable ? 'grab' : onSelect || onOpen ? 'pointer' : 'default' }}
       >
         <g transform={isHovered ? 'scale(1.04)' : undefined}>
+          {dropState === 'valid' ? (
+            <>
+              <circle
+                cx={0}
+                cy={0}
+                r={r + 7}
+                fill="none"
+                stroke={dropValidStroke}
+                strokeWidth={6}
+                opacity={0.26}
+              />
+              <circle
+                cx={0}
+                cy={0}
+                r={r + 4}
+                fill="none"
+                stroke={dropValidStroke}
+                strokeWidth={2.6}
+                data-testid="map-node-drop-valid"
+              />
+            </>
+          ) : dropState === 'invalid' ? (
+            <circle
+              cx={0}
+              cy={0}
+              r={r + 4}
+              fill="none"
+              stroke={dropInvalidStroke}
+              strokeWidth={2.5}
+              strokeDasharray="5 3"
+              data-testid="map-node-drop-invalid"
+            />
+          ) : null}
           {visibleNode.isFocus ? (
             <circle
               cx={0}
@@ -255,14 +303,57 @@ export function MapNodePill({
       data-node-shape="capsule"
       data-truncated={layoutNode.isTruncated ? 'true' : 'false'}
       data-hovered={isHovered ? 'true' : 'false'}
+      data-draggable={isDraggable ? 'true' : 'false'}
+      data-drop-state={dropState ?? undefined}
       transform={`translate(${layoutNode.x}, ${layoutNode.y})`}
+      opacity={isDraggedSource ? 0.42 : undefined}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onPointerDown={(e) => onNodePointerDown?.(layoutNode.id, e)}
       onMouseEnter={() => onHoverStart?.(layoutNode.id)}
       onMouseLeave={() => onHoverEnd?.(layoutNode.id)}
-      style={{ cursor: onSelect || onOpen ? 'pointer' : 'default' }}
+      style={{ cursor: isDraggable ? 'grab' : onSelect || onOpen ? 'pointer' : 'default' }}
     >
       <g transform={isHovered ? 'scale(1.04)' : undefined}>
+        {dropState === 'valid' ? (
+          <>
+            <rect
+              x={-halfW - 7}
+              y={-halfH - 7}
+              width={layoutNode.width + 14}
+              height={layoutNode.height + 14}
+              rx={CAPSULE_CORNER_RADIUS_PX + 7}
+              fill="none"
+              stroke={dropValidStroke}
+              strokeWidth={6}
+              opacity={0.26}
+            />
+            <rect
+              x={-halfW - 4}
+              y={-halfH - 4}
+              width={layoutNode.width + 8}
+              height={layoutNode.height + 8}
+              rx={CAPSULE_CORNER_RADIUS_PX + 4}
+              fill="none"
+              stroke={dropValidStroke}
+              strokeWidth={2.6}
+              data-testid="map-node-drop-valid"
+            />
+          </>
+        ) : dropState === 'invalid' ? (
+          <rect
+            x={-halfW - 4}
+            y={-halfH - 4}
+            width={layoutNode.width + 8}
+            height={layoutNode.height + 8}
+            rx={CAPSULE_CORNER_RADIUS_PX + 4}
+            fill="none"
+            stroke={dropInvalidStroke}
+            strokeWidth={2.5}
+            strokeDasharray="5 3"
+            data-testid="map-node-drop-invalid"
+          />
+        ) : null}
         {visibleNode.isFocus ? (
           <rect
             x={-halfW - FOCUS_HALO_STROKE_EXPAND_PX}

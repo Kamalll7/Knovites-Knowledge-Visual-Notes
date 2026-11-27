@@ -361,7 +361,14 @@ export function useMapViewportController({
         }
         return new ZoomTransform(clamped.k, clamped.x, clamped.y)
       })
-      .filter((event: Event) => event.type !== 'dblclick')
+      .filter((event: Event) => {
+        if (event.type === 'dblclick') return false
+        if (event.type === 'mousedown' || event.type === 'touchstart') {
+          const target = event.target instanceof Element ? event.target : null
+          if (target?.closest('[data-draggable="true"]')) return false
+        }
+        return true
+      })
       .on('start', (event: D3ZoomEvent<SVGSVGElement, unknown>) => {
         if (isSyncingZoomRef.current || !event.sourceEvent) return
         if (isTransitioningRef.current) {

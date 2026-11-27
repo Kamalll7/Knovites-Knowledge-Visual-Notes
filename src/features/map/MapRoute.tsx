@@ -281,6 +281,16 @@ export function MapRoute() {
     [effectiveFocusId, moveNode],
   )
 
+  const handleDragReparent = useCallback(
+    async (nodeId: string, newParentId: string | null) => {
+      const result = await moveNode({ nodeId, newParentId })
+      if (result.ok) {
+        setFocusId(nodeId)
+      }
+    },
+    [moveNode],
+  )
+
   const handleConfirmDelete = useCallback(async () => {
     const fallbackFocusId = focusedNode?.parentId ?? MAP_ROOT_ID
     const result = await deleteNode(effectiveFocusId)
@@ -413,13 +423,16 @@ export function MapRoute() {
             ref={viewportRef}
             layout={layout}
             visible={visible}
+            tree={tree}
             focusId={effectiveFocusId}
             orientation={orientation}
             theme={resolvedTheme}
             measureText={measurer.measure}
             keyboardFocusActive={keyboardFocusActive}
+            writeDisabled={writeDisabled}
             onSelectNode={handleSelectNode}
             onOpenNode={handleOpenNode}
+            onReparentNode={handleDragReparent}
             onCreateFirstNode={handleOpenFirstNodeForm}
             onScaleTierChange={handleScaleTierChange}
             onCameraChange={handleCameraChange}
