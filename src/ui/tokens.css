@@ -46,6 +46,37 @@
   --branch-7: #be123c;
   --branch-8: #0369a1;
 
+  /* Canvas semantic text, highlight, and card surface tokens (light theme, WCAG AA >= 4.5:1) */
+  --canvas-text-accent: #2741b8;
+  --canvas-text-warning: #854d0e;
+  --canvas-text-success: #065f46;
+  --canvas-text-danger: #991b1b;
+  --canvas-text-violet: #5b21b6;
+
+  --canvas-hl-warning-bg: #fde68a;
+  --canvas-hl-warning-fg: #0f172a;
+  --canvas-hl-success-bg: #a7f3d0;
+  --canvas-hl-success-fg: #0f172a;
+  --canvas-hl-accent-bg: #dbeafe;
+  --canvas-hl-accent-fg: #0f172a;
+  --canvas-hl-danger-bg: #fecdd3;
+  --canvas-hl-danger-fg: #0f172a;
+
+  --canvas-card-bg-auto: var(--surface);
+  --canvas-card-border-auto: var(--border);
+  --canvas-card-bg-none: transparent;
+  --canvas-card-border-none: transparent;
+  --canvas-card-bg-accent: #eff4ff;
+  --canvas-card-border-accent: #93b4ff;
+  --canvas-card-bg-warning: #fef9e7;
+  --canvas-card-border-warning: #eab308;
+  --canvas-card-bg-success: #ecfdf5;
+  --canvas-card-border-success: #34d399;
+  --canvas-card-bg-danger: #fef2f2;
+  --canvas-card-border-danger: #f87171;
+  --canvas-card-bg-violet: #f5f3ff;
+  --canvas-card-border-violet: #a78bfa;
+
   /* shadcn semantic variable mapping */
   --background: var(--bg);
   --foreground: var(--fg);
@@ -99,6 +130,37 @@
   --branch-6: #34d399;
   --branch-7: #fb7185;
   --branch-8: #38bdf8;
+
+  /* Canvas semantic text, highlight, and card surface tokens (dark theme, WCAG AA >= 4.5:1) */
+  --canvas-text-accent: #93b4ff;
+  --canvas-text-warning: #fbbf24;
+  --canvas-text-success: #34d399;
+  --canvas-text-danger: #fca5a5;
+  --canvas-text-violet: #c4b5fd;
+
+  --canvas-hl-warning-bg: #4a350a;
+  --canvas-hl-warning-fg: #fef3c7;
+  --canvas-hl-success-bg: #0d3b2e;
+  --canvas-hl-success-fg: #d1fae5;
+  --canvas-hl-accent-bg: #1e2d5a;
+  --canvas-hl-accent-fg: #dbeafe;
+  --canvas-hl-danger-bg: #4c1722;
+  --canvas-hl-danger-fg: #ffe4e6;
+
+  --canvas-card-bg-auto: var(--surface);
+  --canvas-card-border-auto: var(--border);
+  --canvas-card-bg-none: transparent;
+  --canvas-card-border-none: transparent;
+  --canvas-card-bg-accent: #131b2e;
+  --canvas-card-border-accent: #3b5bdb;
+  --canvas-card-bg-warning: #221a0c;
+  --canvas-card-border-warning: #b45309;
+  --canvas-card-bg-success: #0f211c;
+  --canvas-card-border-success: #047857;
+  --canvas-card-bg-danger: #241319;
+  --canvas-card-border-danger: #be123c;
+  --canvas-card-bg-violet: #1b162c;
+  --canvas-card-border-violet: #6d28d9;
 
   /* shadcn semantic variable mapping */
   --background: var(--bg);

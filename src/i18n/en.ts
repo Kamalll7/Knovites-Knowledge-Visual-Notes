@@ -74,6 +74,16 @@ export const en = {
       readonly: 'Read-only',
     },
   },
+  canvas: {
+    addText: 'Add text',
+    emptyTitle: 'Empty canvas',
+    emptyBody: 'Add a text box to start capturing notes on this canvas.',
+    homeEmptyBody:
+      'Your Home canvas is empty. No root canvas.json is written until you add your first note.',
+    newTextDefault: 'New note',
+    emptyNotePlaceholder: 'Empty note…',
+    imagePlaceholderTitle: 'Image asset',
+  },
   settings: {
     title: 'Settings',
     subtitle: 'Appearance, local workspace, and GitHub connection preferences.',
