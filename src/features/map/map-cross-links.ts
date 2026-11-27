@@ -113,11 +113,17 @@ export function buildCrossLinkArcGeometry(
   const dist = Math.hypot(dx, dy)
   if (dist < 1) return null
 
-  const nx = -dy / dist
-  const ny = dx / dist
-  const bend = Math.min(96, Math.max(30, dist * 0.24))
-  const cx = (sourceNode.x + targetNode.x) / 2 + nx * bend
-  const cy = (sourceNode.y + targetNode.y) / 2 + ny * bend
+  const midX = (sourceNode.x + targetNode.x) / 2
+  const midY = (sourceNode.y + targetNode.y) / 2
+  let nx = -dy / dist
+  let ny = dx / dist
+  if (midX * nx + midY * ny < 0) {
+    nx = -nx
+    ny = -ny
+  }
+  const bend = Math.min(112, Math.max(44, dist * 0.26))
+  const cx = midX + nx * bend
+  const cy = midY + ny * bend
 
   const start = clipRayToNodePerimeter(sourceNode, cx - sourceNode.x, cy - sourceNode.y)
   const end = clipRayToNodePerimeter(targetNode, cx - targetNode.x, cy - targetNode.y)

@@ -288,51 +288,54 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
                     pointerEvents="none"
                     transform={`translate(${drag.dragState.worldX.toFixed(1)}, ${drag.dragState.worldY.toFixed(1)})`}
                   >
-                    <rect
-                      x={-ghostW / 2}
-                      y={-18}
-                      width={ghostW}
-                      height={36}
-                      rx={14}
-                      fill={palette.surface2}
-                      fillOpacity={0.94}
-                      stroke={ghostStroke}
-                      strokeWidth={2}
-                      strokeDasharray={evalState.status === 'invalid' ? '5 3' : undefined}
-                    />
-                    <text
-                      x={0}
-                      y={0}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fill={palette.fg}
-                      fontSize={13}
-                      fontWeight={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.weight}
-                      fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
-                    >
-                      {drag.dragState.draggedTitle}
-                    </text>
-                    <rect
-                      x={-hintW / 2}
-                      y={24}
-                      width={hintW}
-                      height={22}
-                      rx={6}
-                      fill={palette.surface}
-                      stroke={ghostStroke}
-                      strokeWidth={1.2}
-                    />
-                    <text
-                      x={0}
-                      y={35}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fill={palette.fg}
-                      fontSize={11}
-                      fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
-                    >
-                      {statusText}
-                    </text>
+                    <circle cx={0} cy={0} r={3.5} fill={ghostStroke} opacity={0.85} />
+                    <g transform="translate(0, -66)">
+                      <rect
+                        x={-ghostW / 2}
+                        y={-18}
+                        width={ghostW}
+                        height={32}
+                        rx={12}
+                        fill={palette.surface2}
+                        fillOpacity={0.95}
+                        stroke={ghostStroke}
+                        strokeWidth={2}
+                        strokeDasharray={evalState.status === 'invalid' ? '5 3' : undefined}
+                      />
+                      <text
+                        x={0}
+                        y={-2}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill={palette.fg}
+                        fontSize={13}
+                        fontWeight={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.weight}
+                        fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
+                      >
+                        {drag.dragState.draggedTitle}
+                      </text>
+                      <rect
+                        x={-hintW / 2}
+                        y={18}
+                        width={hintW}
+                        height={22}
+                        rx={6}
+                        fill={palette.surface}
+                        stroke={ghostStroke}
+                        strokeWidth={1.2}
+                      />
+                      <text
+                        x={0}
+                        y={29}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill={palette.fg}
+                        fontSize={11}
+                        fontFamily={DEFAULT_RADIAL_LAYOUT_CONFIG.fonts.family}
+                      >
+                        {statusText}
+                      </text>
+                    </g>
                   </g>
                 )
               })()
