@@ -7,6 +7,7 @@ import {
   type ZoomTier,
 } from '@/domain/layout'
 import type { TreeState } from '@/domain/tree'
+import { MapCrossLinks } from '@/features/map/MapCrossLinks'
 import { MapEdges, type EdgeDomRefs } from '@/features/map/MapEdges'
 import { MapNodePill } from '@/features/map/MapNodePill'
 import { MapSvgView } from '@/features/map/MapSvgView'
@@ -17,6 +18,7 @@ import {
   assignMapNodeColors,
   type MapThemeMode,
 } from '@/features/map/map-colors'
+import type { CrossLinkEdge } from '@/features/map/map-cross-links'
 import { buildRenderedMapEdges, type MapEdgeOrientation } from '@/features/map/map-edge-path'
 import { useMapDragReparent } from '@/features/map/useMapDragReparent'
 import { useMapViewportController } from '@/features/map/useMapViewportController'
@@ -35,6 +37,7 @@ export interface MapViewportProps {
   readonly layout: MapLayoutResult
   readonly visible: ComputeVisibleResult
   readonly tree?: TreeState
+  readonly crossLinks?: readonly CrossLinkEdge[]
   readonly focusId: string
   readonly orientation: MapEdgeOrientation
   readonly theme: MapThemeMode
@@ -63,6 +66,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     layout,
     visible,
     tree,
+    crossLinks = [],
     focusId,
     orientation,
     theme,
@@ -128,6 +132,12 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     writeDisabled,
     onReparentNode,
   })
+
+  const activeCrossLinkNodeIds = useMemo(() => {
+    const ids = new Set<string>([focusId])
+    if (hoveredNodeId) ids.add(hoveredNodeId)
+    return ids
+  }, [focusId, hoveredNodeId])
 
   const handleSelectNode = useCallback(
     (nodeId: string) => {
@@ -196,6 +206,14 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
             fallbackStroke={palette.accent}
             edgeRefs={edgeRefs}
           />
+          {crossLinks.length > 0 ? (
+            <MapCrossLinks
+              crossLinks={crossLinks}
+              layout={layout}
+              activeNodeIds={activeCrossLinkNodeIds}
+              theme={theme}
+            />
+          ) : null}
           <g data-testid="map-nodes">
             {layout.orderedIds.map((id) => {
               const layoutNode = layout.nodes[id]

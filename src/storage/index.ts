@@ -15,6 +15,7 @@ export {
   getErrorLogs,
   getMovedBasePaths,
   getPendingDeletes,
+  loadActiveCanvasDocs,
   loadRootExtraFiles,
   loadTreeBuildEntries,
   restoreSoftDeletedSubtree,

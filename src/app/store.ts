@@ -2,7 +2,14 @@ import { castDraft } from 'immer'
 import { createStore, type StoreApi } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createIdGenerator, nowUtcIso } from '@/app/clock-id'
-import type { CanvasJson, NodeStatus, NodeType, SchemaIssue, VirtualRootId } from '@/domain/schema'
+import {
+  extractKnovitesLinkTargetsFromCanvas,
+  type CanvasJson,
+  type NodeStatus,
+  type NodeType,
+  type SchemaIssue,
+  type VirtualRootId,
+} from '@/domain/schema'
 import { serializeCanvasJson } from '@/domain/serialize'
 import {
   VIRTUAL_ROOT_ID,
@@ -27,6 +34,7 @@ import {
   applyChangeset,
   finalizeSoftDeletes,
   getCanvasRecord,
+  loadActiveCanvasDocs,
   loadTreeBuildEntries,
   restoreSoftDeletedSubtree,
   softDeleteSubtree,
@@ -125,6 +133,7 @@ export type StoreOperationResult =
 export interface WorkspaceStorageAdapter {
   loadEntries: () => Promise<TreeBuildEntry[]>
   loadCanvas: (nodeId: string) => Promise<StoredCanvasRecord | undefined>
+  loadActiveCanvases?: () => Promise<Array<{ nodeId: string; doc: CanvasJson }>>
   applyChangeset: (changeset: Changeset, options?: { now?: string }) => Promise<void>
   softDeleteSubtree: (nodeIds: readonly string[], deletedAt: string) => Promise<void>
   restoreSoftDeletedSubtree: (
@@ -149,6 +158,7 @@ export interface WorkspaceStoreState {
   hydrated: boolean
   tree: TreeState
   rootHome: RootHomeState
+  canvasCrossLinks: Record<string, string[]>
   issues: TreeIssue[]
   pendingUndoDelete: PendingUndoDelete | null
   lastUndoResult: RestoreSoftDeleteResult | null
@@ -240,6 +250,7 @@ export function createDexieWorkspaceAdapter(db: KnovitesDatabase): WorkspaceStor
   return {
     loadEntries: () => loadTreeBuildEntries(db),
     loadCanvas: (nodeId) => getCanvasRecord(db, nodeId),
+    loadActiveCanvases: () => loadActiveCanvasDocs(db),
     applyChangeset: (changeset, options) => applyChangeset(db, changeset, options),
     softDeleteSubtree: (nodeIds, deletedAt) => softDeleteSubtree(db, { nodeIds, deletedAt }),
     restoreSoftDeletedSubtree: (nodeIds, now) => restoreSoftDeletedSubtree(db, nodeIds, now),
@@ -318,6 +329,19 @@ function collectSubtreeIds(tree: TreeState, rootId: string): string[] {
     }
   }
   return result
+}
+
+function buildCanvasCrossLinksMap(
+  canvases: ReadonlyArray<{ nodeId: string; doc: CanvasJson }>,
+): Record<string, string[]> {
+  const map: Record<string, string[]> = {}
+  for (const item of canvases) {
+    const targets = extractKnovitesLinkTargetsFromCanvas(item.doc)
+    if (targets.length > 0) {
+      map[item.nodeId] = targets
+    }
+  }
+  return map
 }
 
 function extractErrorMessage(error: unknown): string {
@@ -421,6 +445,7 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
         hydrated: false,
         tree: { nodes: {}, rootIds: [], rootHasCanvas: false, rootAssets: [], rootExtraFiles: [] },
         rootHome: makeEmptyRootHomeState(),
+        canvasCrossLinks: {},
         issues: [],
         pendingUndoDelete: null,
         lastUndoResult: null,
@@ -441,10 +466,16 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
               await deps.storage.applyChangeset(built.changeset, { now })
             }
 
+            const activeCanvases = deps.storage.loadActiveCanvases
+              ? await deps.storage.loadActiveCanvases()
+              : []
+            const canvasCrossLinks = buildCanvasCrossLinksMap(activeCanvases)
+
             pendingRetryOp = null
             set((draft) => {
               draft.tree = castDraft(built.state)
               draft.rootHome = castDraft(buildRootHomeState(built.state))
+              draft.canvasCrossLinks = canvasCrossLinks
               draft.issues = built.issues
               draft.pendingUndoDelete = null
               draft.lastUndoResult = null
@@ -554,12 +585,18 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             deletes: [],
           }
 
+          const extractedTargets = extractKnovitesLinkTargetsFromCanvas(doc)
           set((draft) => {
             if (isVirtualRootId(nodeId)) {
               draft.tree.rootHasCanvas = true
               draft.rootHome.hasCanvas = true
             } else if (draft.tree.nodes[nodeId]) {
               draft.tree.nodes[nodeId]!.hasCanvas = true
+            }
+            if (extractedTargets.length > 0) {
+              draft.canvasCrossLinks[nodeId] = extractedTargets
+            } else {
+              delete draft.canvasCrossLinks[nodeId]
             }
           })
 
@@ -681,6 +718,9 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
           clearUndoTimer()
           set((draft) => {
             draft.tree = castDraft(result.state)
+            for (const deletedId of subtreeIds) {
+              delete draft.canvasCrossLinks[deletedId]
+            }
             draft.pendingUndoDelete = {
               rootNodeId: nodeId,
               title,
@@ -722,9 +762,14 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             if (built.changeset.upserts.length > 0) {
               await deps.storage.applyChangeset(built.changeset, { now })
             }
+            const activeCanvases = deps.storage.loadActiveCanvases
+              ? await deps.storage.loadActiveCanvases()
+              : []
+            const canvasCrossLinks = buildCanvasCrossLinksMap(activeCanvases)
             set((draft) => {
               draft.tree = castDraft(built.state)
               draft.rootHome = castDraft(buildRootHomeState(built.state))
+              draft.canvasCrossLinks = canvasCrossLinks
               draft.issues = built.issues
               draft.pendingUndoDelete = null
               draft.lastUndoResult = restoreResult

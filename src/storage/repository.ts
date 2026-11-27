@@ -5,6 +5,7 @@ import {
   NODE_META_FILE,
   parseCanvasJson,
   parseNodeJson,
+  type CanvasJson,
   type NodeJson,
 } from '@/domain/schema'
 import {
@@ -725,6 +726,22 @@ export async function getCanvasRecord(
   nodeId: string,
 ): Promise<StoredCanvasRecord | undefined> {
   return db.canvases.get(nodeId)
+}
+
+/**
+ * Lightweight read-only scan of active (`deletedAt === 0`, non-corrupt) canvas documents
+ * for deriving `knovites:<ulid>` cross-links without changing Dexie schema or migrations (`FR-MAP-16`).
+ */
+export async function loadActiveCanvasDocs(
+  db: KnovitesDatabase,
+): Promise<Array<{ nodeId: string; doc: CanvasJson }>> {
+  const records = await db.canvases.toArray()
+  const result: Array<{ nodeId: string; doc: CanvasJson }> = []
+  for (const record of records) {
+    if (record.deletedAt !== 0 || record.corrupt || !record.doc) continue
+    result.push({ nodeId: record.nodeId, doc: record.doc })
+  }
+  return result
 }
 
 /**

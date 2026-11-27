@@ -5,7 +5,11 @@ export {
   parseKnovitesJson,
   parseNodeJson,
 } from '@/domain/schema/schemas'
-export { sanitizeTipTapDoc } from '@/domain/schema/tiptap'
+export {
+  extractKnovitesLinkTargetsFromCanvas,
+  extractKnovitesLinkTargetsFromDoc,
+  sanitizeTipTapDoc,
+} from '@/domain/schema/tiptap'
 export {
   ASSETS_DIR,
   ASSET_PATH_REGEX,

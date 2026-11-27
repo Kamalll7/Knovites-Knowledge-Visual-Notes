@@ -32,6 +32,7 @@ import { DeleteNodeDialog, MoveNodeDialog } from '@/features/map/NodeCrudDialogs
 import { computeMapBoundingBox } from '@/features/map/map-bounds'
 import { buildBreadcrumbTrail } from '@/features/map/map-breadcrumb'
 import type { CameraTransform } from '@/features/map/map-camera'
+import { collectWorkspaceCrossLinks } from '@/features/map/map-cross-links'
 import { MAP_CAPSULE_BOX_CONFIG, createCanvasTextMeasurer } from '@/features/map/map-measure'
 import { useMapKeyboard } from '@/features/map/useMapKeyboard'
 import { Button } from '@/ui/components/button'
@@ -51,6 +52,7 @@ const PHASE1_NODE_TYPES: readonly Exclude<NodeType, 'lab'>[] = [
 export function MapRoute() {
   const tree = useWorkspaceStore((s) => s.tree)
   const rootHome = useWorkspaceStore((s) => s.rootHome)
+  const canvasCrossLinks = useWorkspaceStore((s) => s.canvasCrossLinks)
   const isReadOnlyTab = useWorkspaceStore((s) => s.isReadOnlyTab)
   const storageError = useWorkspaceStore((s) => s.storageError)
   const createNode = useWorkspaceStore((s) => s.createNode)
@@ -147,6 +149,10 @@ export function MapRoute() {
   }, [visible, measurer, fontVersion, orientation, zoomScale, zoomTier])
 
   const bbox = useMemo(() => computeMapBoundingBox(layout), [layout])
+  const crossLinks = useMemo(
+    () => collectWorkspaceCrossLinks(tree, canvasCrossLinks),
+    [tree, canvasCrossLinks],
+  )
 
   const handleCameraChange = useCallback(
     (transform: CameraTransform, viewport: { width: number; height: number }) => {
@@ -424,6 +430,7 @@ export function MapRoute() {
             layout={layout}
             visible={visible}
             tree={tree}
+            crossLinks={crossLinks}
             focusId={effectiveFocusId}
             orientation={orientation}
             theme={resolvedTheme}

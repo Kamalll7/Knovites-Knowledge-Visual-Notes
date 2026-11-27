@@ -2,6 +2,7 @@ import {
   HEX_COLOR_REGEX,
   ULID_REGEX,
   isPlainObject,
+  type CanvasJson,
   type SchemaIssue,
   type TipTapDoc,
   type TipTapMark,
@@ -393,4 +394,61 @@ export function sanitizeTipTapDoc(
     cleanDoc.content = content
   }
   return cleanDoc
+}
+
+const KNOVITES_HREF_PREFIX = 'knovites:'
+
+/**
+ * Extracts unique target node ULIDs referenced by `knovites:<ulid>` link marks in a TipTap doc
+ * (`docs/data-format.md` §5.4, `FR-MAP-16`). Pure, iterative, preserves first-seen order.
+ */
+export function extractKnovitesLinkTargetsFromDoc(doc: TipTapDoc | null | undefined): string[] {
+  if (!doc || !Array.isArray(doc.content) || doc.content.length === 0) return []
+  const seen = new Set<string>()
+  const targets: string[] = []
+  const stack: TipTapNode[] = []
+  for (let i = doc.content.length - 1; i >= 0; i -= 1) {
+    stack.push(doc.content[i]!)
+  }
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (Array.isArray(node.marks)) {
+      for (const mark of node.marks) {
+        if (mark.type !== 'link') continue
+        const href = mark.attrs?.['href']
+        if (typeof href === 'string' && KNOVITES_HREF_REGEX.test(href)) {
+          const targetId = href.slice(KNOVITES_HREF_PREFIX.length)
+          if (!seen.has(targetId)) {
+            seen.add(targetId)
+            targets.push(targetId)
+          }
+        }
+      }
+    }
+    if (Array.isArray(node.content)) {
+      for (let i = node.content.length - 1; i >= 0; i -= 1) {
+        stack.push(node.content[i]!)
+      }
+    }
+  }
+  return targets
+}
+
+/**
+ * Extracts unique `knovites:<ulid>` link targets across all text elements of a `CanvasJson` doc.
+ */
+export function extractKnovitesLinkTargetsFromCanvas(doc: CanvasJson | null | undefined): string[] {
+  if (!doc || !isPlainObject(doc.elements)) return []
+  const seen = new Set<string>()
+  const targets: string[] = []
+  for (const element of Object.values(doc.elements)) {
+    if (element.type !== 'text') continue
+    for (const id of extractKnovitesLinkTargetsFromDoc(element.content)) {
+      if (!seen.has(id)) {
+        seen.add(id)
+        targets.push(id)
+      }
+    }
+  }
+  return targets
 }
