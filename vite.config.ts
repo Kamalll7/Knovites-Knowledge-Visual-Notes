@@ -10,4 +10,19 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, './src'),
     },
   },
+  // Pre-bundle lazy canvas dependencies in dev mode so navigating to #/n/:id
+  // never triggers mid-session 504 Outdated Optimize Dep reloads.
+  optimizeDeps: {
+    include: [
+      '@xyflow/react',
+      '@tiptap/core',
+      '@tiptap/static-renderer/pm/react',
+      '@tiptap/starter-kit',
+      '@tiptap/extension-underline',
+      '@tiptap/extension-link',
+      '@tiptap/extension-text-style',
+      '@tiptap/extension-text-align',
+      '@tiptap/extension-highlight',
+    ],
+  },
 })

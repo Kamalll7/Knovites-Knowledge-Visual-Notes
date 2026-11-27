@@ -147,6 +147,12 @@
   color: var(--canvas-hl-danger-fg);
 }
 
+/* Restore pointer interaction on cards (links, code horizontal scroll, frameless hover)
+   even when React Flow sets pointer-events:none on non-draggable/non-selectable wrappers. */
+.knovites-canvas-card {
+  pointer-events: auto;
+}
+
 /* Frame "none" subtle visual cues without shifting layout */
 .knovites-canvas-card[data-frame-mode='none'][data-empty='true'] {
   outline: 1.5px dashed var(--border);
