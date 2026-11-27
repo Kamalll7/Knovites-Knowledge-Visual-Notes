@@ -23,8 +23,9 @@ import {
 } from '@/domain/layout'
 import type { NodeStatus, NodeType } from '@/domain/schema'
 import { MapBreadcrumb } from '@/features/map/MapBreadcrumb'
-import { MapHudControls } from '@/features/map/MapHudControls'
+import { MapHudControls, type MapViewMode } from '@/features/map/MapHudControls'
 import { MapMinimap, type MapMinimapHandle } from '@/features/map/MapMinimap'
+import { MapOutlineView } from '@/features/map/MapOutlineView'
 import { MapViewport, type MapViewportHandle } from '@/features/map/MapViewport'
 import { NodeActionToolbar } from '@/features/map/NodeActionToolbar'
 import { DeleteNodeDialog, MoveNodeDialog } from '@/features/map/NodeCrudDialogs'
@@ -69,6 +70,7 @@ export function MapRoute() {
     viewport: { width: number; height: number }
   } | null>(null)
   const [focusId, setFocusId] = useState<string>(MAP_ROOT_ID)
+  const [viewMode, setViewMode] = useState<MapViewMode>('map')
   const [expandedOverflowParentIds, setExpandedOverflowParentIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   )
@@ -162,13 +164,13 @@ export function MapRoute() {
   )
 
   useLayoutEffect(() => {
-    if (hasNodes && lastCameraRef.current) {
+    if (hasNodes && viewMode === 'map' && lastCameraRef.current) {
       minimapRef.current?.updateViewportRect(
         lastCameraRef.current.transform,
         lastCameraRef.current.viewport,
       )
     }
-  }, [hasNodes])
+  }, [hasNodes, viewMode])
 
   const handleSelectNode = useCallback((nodeId: string) => {
     if (nodeId.startsWith(OVERFLOW_NODE_PREFIX)) {
@@ -298,6 +300,7 @@ export function MapRoute() {
     orientation,
     disabled:
       !hasNodes ||
+      viewMode === 'outline' ||
       creatingFirstNode ||
       toolbarInteractiveOpen ||
       moveDialogOpen ||
@@ -312,6 +315,8 @@ export function MapRoute() {
       {hasNodes ? (
         <MapHudControls
           leading={<MapBreadcrumb items={breadcrumbItems} onSelectNode={handleSelectNode} />}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
           orientation={orientation}
           zoomScale={zoomScale}
           zoomTier={zoomTier}
@@ -393,33 +398,44 @@ export function MapRoute() {
         </div>
       ) : null}
 
-      <div className="relative flex min-h-0 flex-1">
-        <MapViewport
-          ref={viewportRef}
-          layout={layout}
-          visible={visible}
+      {hasNodes && viewMode === 'outline' ? (
+        <MapOutlineView
+          tree={tree}
+          rootTitle={rootHome.title}
           focusId={effectiveFocusId}
-          orientation={orientation}
           theme={resolvedTheme}
-          measureText={measurer.measure}
-          keyboardFocusActive={keyboardFocusActive}
           onSelectNode={handleSelectNode}
           onOpenNode={handleOpenNode}
-          onCreateFirstNode={handleOpenFirstNodeForm}
-          onScaleTierChange={handleScaleTierChange}
-          onCameraChange={handleCameraChange}
         />
-        {hasNodes ? (
-          <MapMinimap
-            ref={minimapRef}
+      ) : (
+        <div className="relative flex min-h-0 flex-1">
+          <MapViewport
+            ref={viewportRef}
             layout={layout}
             visible={visible}
-            bbox={bbox}
+            focusId={effectiveFocusId}
+            orientation={orientation}
             theme={resolvedTheme}
-            onNavigateWorldPoint={handleMinimapNavigate}
+            measureText={measurer.measure}
+            keyboardFocusActive={keyboardFocusActive}
+            onSelectNode={handleSelectNode}
+            onOpenNode={handleOpenNode}
+            onCreateFirstNode={handleOpenFirstNodeForm}
+            onScaleTierChange={handleScaleTierChange}
+            onCameraChange={handleCameraChange}
           />
-        ) : null}
-      </div>
+          {hasNodes ? (
+            <MapMinimap
+              ref={minimapRef}
+              layout={layout}
+              visible={visible}
+              bbox={bbox}
+              theme={resolvedTheme}
+              onNavigateWorldPoint={handleMinimapNavigate}
+            />
+          ) : null}
+        </div>
+      )}
 
       {hasNodes ? (
         <NodeActionToolbar
