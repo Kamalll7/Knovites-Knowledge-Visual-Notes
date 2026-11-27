@@ -1,0 +1,38 @@
+{
+  "schema": 2,
+  "elements": {
+    "e_8f2a1c0d": {
+      "type": "text",
+      "x": 100,
+      "y": 80,
+      "w": 320,
+      "z": "a0",
+      "style": {
+        "bg": "auto",
+        "border": "auto"
+      },
+      "content": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "heading",
+            "attrs": { "level": 2, "textAlign": "justify" },
+            "content": [{ "type": "text", "text": "Justified heading" }]
+          },
+          {
+            "type": "paragraph",
+            "attrs": { "textAlign": "justify" },
+            "content": [{ "type": "text", "text": "Justified paragraph" }]
+          },
+          {
+            "type": "paragraph",
+            "attrs": { "textAlign": null },
+            "content": [{ "type": "text", "text": "Null align paragraph" }]
+          }
+        ]
+      },
+      "updatedAt": "2026-11-27T10:00:00Z"
+    }
+  }
+}
+

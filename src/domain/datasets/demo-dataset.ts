@@ -1,11 +1,13 @@
-import type {
-  CanvasJson,
-  CanvasTextElement,
-  KnovitesJson,
-  NodeJson,
-  NodeStatus,
-  NodeType,
-  TipTapDoc,
+import {
+  CANVAS_SCHEMA_VERSION,
+  type CanvasJson,
+  type CanvasStyleToken,
+  type CanvasTextElement,
+  type KnovitesJson,
+  type NodeJson,
+  type NodeStatus,
+  type NodeType,
+  type TipTapDoc,
 } from '@/domain/schema'
 import {
   deriveNodePath,
@@ -424,8 +426,8 @@ function makeTextBox(params: {
   y: number
   w: number
   z: string
-  bg?: string | null
-  border?: string | null
+  bg?: CanvasStyleToken
+  border?: CanvasStyleToken
   updatedAt: string
   content: TipTapDoc
 }): CanvasTextElement {
@@ -436,8 +438,8 @@ function makeTextBox(params: {
     w: params.w,
     z: params.z,
     style: {
-      bg: params.bg ?? null,
-      border: params.border ?? null,
+      bg: params.bg ?? 'auto',
+      border: params.border ?? 'auto',
     },
     content: params.content,
     updatedAt: params.updatedAt,
@@ -456,7 +458,7 @@ function buildDemoCanvases(
 
   // Canvas 1 (3 text elements): Ret2win & Calling Conventions
   canvases[pathByKey.get('pwn-ret2win')!] = {
-    schema: 1,
+    schema: CANVAS_SCHEMA_VERSION,
     elements: {
       e_pwn00001: makeTextBox({
         x: 80,
@@ -490,8 +492,8 @@ function buildDemoCanvases(
         y: 60,
         w: 380,
         z: 'a1',
-        bg: '#fef3c7',
-        border: '#d97706',
+        bg: 'warning',
+        border: 'warning',
         updatedAt: ts,
         content: {
           type: 'doc',
@@ -562,7 +564,7 @@ function buildDemoCanvases(
 
   // Canvas 2 (2 text elements): Return-Oriented Programming
   canvases[pathByKey.get('pwn-rop')!] = {
-    schema: 1,
+    schema: CANVAS_SCHEMA_VERSION,
     elements: {
       e_rop00001: makeTextBox({
         x: 100,
@@ -629,7 +631,7 @@ function buildDemoCanvases(
                   content: [
                     {
                       type: 'text',
-                      marks: [{ type: 'highlight', attrs: { color: '#fef08a' } }],
+                      marks: [{ type: 'highlight', attrs: { color: 'warning' } }],
                       text: 'Prefer ret2csu only when pop rdi; ret or pop rdx gadgets are absent.',
                     },
                   ],
@@ -644,7 +646,7 @@ function buildDemoCanvases(
 
   // Canvas 3 (3 text elements): Ghidra P-Code Analysis
   canvases[pathByKey.get('re-ghidra')!] = {
-    schema: 1,
+    schema: CANVAS_SCHEMA_VERSION,
     elements: {
       e_rev00001: makeTextBox({
         x: 60,
@@ -696,8 +698,8 @@ function buildDemoCanvases(
         y: 250,
         w: 340,
         z: 'a2',
-        bg: '#e0f2fe',
-        border: '#0284c7',
+        bg: 'accent',
+        border: 'accent',
         updatedAt: ts,
         content: {
           type: 'doc',
@@ -714,7 +716,7 @@ function buildDemoCanvases(
 
   // Canvas 4 (2 text elements): Small Public Exponent Attack
   canvases[pathByKey.get('crypto-rsa-e3')!] = {
-    schema: 1,
+    schema: CANVAS_SCHEMA_VERSION,
     elements: {
       e_cry00001: makeTextBox({
         x: 90,

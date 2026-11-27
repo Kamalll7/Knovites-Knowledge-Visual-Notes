@@ -2,16 +2,21 @@ import { z } from 'zod'
 import { sanitizeTipTapDoc } from '@/domain/schema/tiptap'
 import {
   ASSET_PATH_REGEX,
+  CANVAS_SCHEMA_VERSION,
+  CANVAS_STYLE_TOKENS,
   CURRENT_SCHEMA_VERSION,
   ELEMENT_ID_REGEX,
   HEX_COLOR_REGEX,
   ORDER_INDEX_REGEX,
   TAG_REGEX,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
   ULID_REGEX,
   isPlainObject,
   type CanvasElement,
   type CanvasImageElement,
   type CanvasJson,
+  type CanvasStyleToken,
   type CanvasTextElement,
   type KnovitesJson,
   type NodeJson,
@@ -23,10 +28,12 @@ const utcIsoDatetimeSchema = z.iso.datetime()
 const ulidSchema = z.string().regex(ULID_REGEX, 'Expected valid ULID')
 const hexColorSchema = z.string().regex(HEX_COLOR_REGEX, 'Expected #rrggbb hex color')
 const nullableHexColorSchema = hexColorSchema.nullable()
+const canvasStyleTokenSchema = z.enum(CANVAS_STYLE_TOKENS)
 const orderStringSchema = z
   .string()
   .min(1, 'Order string must be non-empty')
   .regex(ORDER_INDEX_REGEX, 'Order string must not contain whitespace')
+const finiteNumberSchema = z.number().refine(Number.isFinite, 'Expected finite number')
 
 export const knovitesJsonSchema = z.strictObject({
   schema: z.literal(CURRENT_SCHEMA_VERSION),
@@ -53,31 +60,13 @@ export const nodeJsonSchema = z.strictObject({
   updatedAt: utcIsoDatetimeSchema,
 })
 
-const canvasTextStyleSchema = z.strictObject({
-  bg: nullableHexColorSchema,
-  border: nullableHexColorSchema,
-})
-
-const finiteNumberSchema = z.number().refine(Number.isFinite, 'Expected finite number')
-
-const rawCanvasTextElementSchema = z.strictObject({
-  type: z.literal('text'),
-  x: finiteNumberSchema,
-  y: finiteNumberSchema,
-  w: finiteNumberSchema,
-  h: z.unknown().optional(),
-  z: orderStringSchema,
-  rotation: finiteNumberSchema.optional(),
-  style: canvasTextStyleSchema,
-  content: z
-    .object({ type: z.literal('doc') })
-    .passthrough()
-    .refine(
-      (doc) => doc['content'] === undefined || Array.isArray(doc['content']),
-      'doc.content must be an array when present',
-    ),
-  updatedAt: utcIsoDatetimeSchema,
-})
+const tipTapDocContainerSchema = z
+  .object({ type: z.literal('doc') })
+  .passthrough()
+  .refine(
+    (doc) => doc['content'] === undefined || Array.isArray(doc['content']),
+    'doc.content must be an array when present',
+  )
 
 const rawCanvasImageElementSchema = z.strictObject({
   type: z.literal('image'),
@@ -94,16 +83,60 @@ const rawCanvasImageElementSchema = z.strictObject({
   updatedAt: utcIsoDatetimeSchema,
 })
 
-const rawCanvasElementSchema = z.discriminatedUnion('type', [
-  rawCanvasTextElementSchema,
-  rawCanvasImageElementSchema,
-])
+const canvasV1TextStyleSchema = z.strictObject({
+  bg: nullableHexColorSchema,
+  border: nullableHexColorSchema,
+})
 
-const rawCanvasJsonSchema = z.strictObject({
-  schema: z.literal(CURRENT_SCHEMA_VERSION),
+const rawCanvasV1TextElementSchema = z.strictObject({
+  type: z.literal('text'),
+  x: finiteNumberSchema,
+  y: finiteNumberSchema,
+  w: finiteNumberSchema,
+  h: z.unknown().optional(),
+  z: orderStringSchema,
+  rotation: finiteNumberSchema.optional(),
+  style: canvasV1TextStyleSchema,
+  content: tipTapDocContainerSchema,
+  updatedAt: utcIsoDatetimeSchema,
+})
+
+const rawCanvasV1JsonSchema = z.strictObject({
+  schema: z.literal(1),
   elements: z.record(
     z.string().regex(ELEMENT_ID_REGEX, 'Element ID must match e_<8 lowercase alphanumeric>'),
-    rawCanvasElementSchema,
+    z.discriminatedUnion('type', [rawCanvasV1TextElementSchema, rawCanvasImageElementSchema]),
+  ),
+})
+
+const canvasV2TextStyleSchema = z.strictObject({
+  bg: canvasStyleTokenSchema,
+  border: canvasStyleTokenSchema,
+})
+
+const textScaleSchema = finiteNumberSchema
+  .min(TEXT_SCALE_MIN, `textScale must be at least ${TEXT_SCALE_MIN}`)
+  .max(TEXT_SCALE_MAX, `textScale must be at most ${TEXT_SCALE_MAX}`)
+
+const rawCanvasV2TextElementSchema = z.strictObject({
+  type: z.literal('text'),
+  x: finiteNumberSchema,
+  y: finiteNumberSchema,
+  w: finiteNumberSchema,
+  h: z.unknown().optional(),
+  z: orderStringSchema,
+  rotation: finiteNumberSchema.optional(),
+  textScale: textScaleSchema.optional(),
+  style: canvasV2TextStyleSchema,
+  content: tipTapDocContainerSchema,
+  updatedAt: utcIsoDatetimeSchema,
+})
+
+const rawCanvasV2JsonSchema = z.strictObject({
+  schema: z.literal(CANVAS_SCHEMA_VERSION),
+  elements: z.record(
+    z.string().regex(ELEMENT_ID_REGEX, 'Element ID must match e_<8 lowercase alphanumeric>'),
+    z.discriminatedUnion('type', [rawCanvasV2TextElementSchema, rawCanvasImageElementSchema]),
   ),
 })
 
@@ -134,8 +167,9 @@ function mapZodIssues(zodIssues: z.core.$ZodIssue[]): SchemaIssue[] {
 
 function decodeInput(
   input: unknown,
+  maxSchemaVersion: number,
 ):
-  | { kind: 'ready'; value: Record<string, unknown> }
+  | { kind: 'ready'; value: Record<string, unknown>; schemaVersion: number }
   | { kind: 'newer-schema'; schemaVersion: number }
   | { kind: 'corrupt'; errors: SchemaIssue[] } {
   let parsed: unknown = input
@@ -183,18 +217,22 @@ function decodeInput(
     }
   }
 
-  if (schema > CURRENT_SCHEMA_VERSION) {
+  if (schema > maxSchemaVersion) {
     return {
       kind: 'newer-schema',
       schemaVersion: schema,
     }
   }
 
-  return { kind: 'ready', value: parsed }
+  return { kind: 'ready', value: parsed, schemaVersion: schema }
 }
 
-function parseWithZodSchema<T>(input: unknown, schema: z.ZodType<T>): ParseResult<T> {
-  const decoded = decodeInput(input)
+function parseWithZodSchema<T>(
+  input: unknown,
+  schema: z.ZodType<T>,
+  maxSchemaVersion: number,
+): ParseResult<T> {
+  const decoded = decodeInput(input, maxSchemaVersion)
   if (decoded.kind === 'corrupt') {
     return { status: 'corrupt', errors: decoded.errors }
   }
@@ -210,32 +248,41 @@ function parseWithZodSchema<T>(input: unknown, schema: z.ZodType<T>): ParseResul
 }
 
 export function parseKnovitesJson(input: unknown): ParseResult<KnovitesJson> {
-  return parseWithZodSchema(input, knovitesJsonSchema)
+  return parseWithZodSchema(input, knovitesJsonSchema, CURRENT_SCHEMA_VERSION)
 }
 
 export function parseNodeJson(input: unknown): ParseResult<NodeJson> {
-  return parseWithZodSchema(input, nodeJsonSchema)
+  return parseWithZodSchema(input, nodeJsonSchema, CURRENT_SCHEMA_VERSION)
 }
 
-export function parseCanvasJson(input: unknown): ParseResult<CanvasJson> {
-  const decoded = decodeInput(input)
-  if (decoded.kind === 'corrupt') {
-    return { status: 'corrupt', errors: decoded.errors }
-  }
-  if (decoded.kind === 'newer-schema') {
-    return { status: 'newer-schema', schemaVersion: decoded.schemaVersion }
-  }
+type RawTextElV1 = z.infer<typeof rawCanvasV1TextElementSchema>
+type RawTextElV2 = z.infer<typeof rawCanvasV2TextElementSchema>
+type RawImageEl = z.infer<typeof rawCanvasImageElementSchema>
 
-  const result = rawCanvasJsonSchema.safeParse(decoded.value)
-  if (!result.success) {
-    return { status: 'corrupt', errors: mapZodIssues(result.error.issues) }
+function mapLegacyStyleValue(
+  value: string | null,
+  path: string,
+  issues: SchemaIssue[],
+): CanvasStyleToken {
+  if (value !== null) {
+    issues.push({
+      path,
+      code: 'migrated_legacy_hex_style',
+      message: `Migrated legacy v1 hex style "${value}" to "auto".`,
+    })
   }
+  return 'auto'
+}
 
+function finalizeCanvasElements(
+  rawElements: Record<string, RawTextElV1 | RawTextElV2 | RawImageEl>,
+  legacyV1: boolean,
+): ParseResult<CanvasJson> {
   const issues: SchemaIssue[] = []
   const errors: SchemaIssue[] = []
   const cleanElements: Record<string, CanvasElement> = {}
 
-  for (const [id, rawEl] of Object.entries(result.data.elements)) {
+  for (const [id, rawEl] of Object.entries(rawElements)) {
     const basePath = `elements.${id}`
     const x = roundCoord(rawEl.x, `${basePath}.x`, issues)
     const y = roundCoord(rawEl.y, `${basePath}.y`, issues)
@@ -263,18 +310,42 @@ export function parseCanvasJson(input: unknown): ParseResult<CanvasJson> {
           message: 'Ignored height "h" on text element because text height is auto-derived.',
         })
       }
+
+      const style = legacyV1
+        ? {
+            bg: mapLegacyStyleValue(
+              (rawEl as RawTextElV1).style.bg,
+              `${basePath}.style.bg`,
+              issues,
+            ),
+            border: mapLegacyStyleValue(
+              (rawEl as RawTextElV1).style.border,
+              `${basePath}.style.border`,
+              issues,
+            ),
+          }
+        : (rawEl as RawTextElV2).style
+
       const cleanEl: CanvasTextElement = {
         type: 'text',
         x,
         y,
         w,
         z: rawEl.z,
-        style: rawEl.style,
-        content: sanitizeTipTapDoc(rawEl.content, `${basePath}.content`, issues),
+        style,
+        content: sanitizeTipTapDoc(rawEl.content, `${basePath}.content`, issues, {
+          legacyV1HexMigration: legacyV1,
+        }),
         updatedAt: rawEl.updatedAt,
       }
       if (rotation !== undefined) {
         cleanEl.rotation = rotation
+      }
+      if (!legacyV1) {
+        const rawScale = (rawEl as RawTextElV2).textScale
+        if (rawScale !== undefined && rawScale !== 1) {
+          cleanEl.textScale = rawScale
+        }
       }
       cleanElements[id] = cleanEl
     } else {
@@ -316,9 +387,52 @@ export function parseCanvasJson(input: unknown): ParseResult<CanvasJson> {
   return {
     status: 'ok',
     data: {
-      schema: CURRENT_SCHEMA_VERSION,
+      schema: CANVAS_SCHEMA_VERSION,
       elements: cleanElements,
     },
     issues,
   }
+}
+
+/**
+ * Pure migration `canvas.json` v1 -> v2 (`docs/data-format.md` §5.7):
+ * maps v1 `null` and `#rrggbb` card styles to `'auto'`, strips legacy `#rrggbb` TipTap mark colors
+ * safely to Auto, and preserves all text content, links, and image assets intact.
+ */
+export function migrateCanvasV1ToV2(input: unknown): ParseResult<CanvasJson> {
+  const decoded = decodeInput(input, 1)
+  if (decoded.kind === 'corrupt') {
+    return { status: 'corrupt', errors: decoded.errors }
+  }
+  if (decoded.kind === 'newer-schema') {
+    return { status: 'newer-schema', schemaVersion: decoded.schemaVersion }
+  }
+
+  const result = rawCanvasV1JsonSchema.safeParse(decoded.value)
+  if (!result.success) {
+    return { status: 'corrupt', errors: mapZodIssues(result.error.issues) }
+  }
+
+  return finalizeCanvasElements(result.data.elements, true)
+}
+
+export function parseCanvasJson(input: unknown): ParseResult<CanvasJson> {
+  const decoded = decodeInput(input, CANVAS_SCHEMA_VERSION)
+  if (decoded.kind === 'corrupt') {
+    return { status: 'corrupt', errors: decoded.errors }
+  }
+  if (decoded.kind === 'newer-schema') {
+    return { status: 'newer-schema', schemaVersion: decoded.schemaVersion }
+  }
+
+  if (decoded.schemaVersion === 1) {
+    return migrateCanvasV1ToV2(decoded.value)
+  }
+
+  const result = rawCanvasV2JsonSchema.safeParse(decoded.value)
+  if (!result.success) {
+    return { status: 'corrupt', errors: mapZodIssues(result.error.issues) }
+  }
+
+  return finalizeCanvasElements(result.data.elements, false)
 }

@@ -3,6 +3,7 @@ import { createStore, type StoreApi } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createIdGenerator, nowUtcIso } from '@/app/clock-id'
 import {
+  createEmptyCanvas,
   extractKnovitesLinkTargetsFromCanvas,
   type CanvasJson,
   type NodeStatus,
@@ -500,14 +501,14 @@ export function createWorkspaceStore(deps: WorkspaceStoreDeps): WorkspaceStoreAp
             return {
               nodeId,
               exists: false,
-              doc: { schema: 1, elements: {} },
+              doc: createEmptyCanvas(),
               corrupt: false,
             }
           }
           return {
             nodeId,
             exists: true,
-            doc: record.doc ?? { schema: 1, elements: {} },
+            doc: record.doc ?? createEmptyCanvas(),
             corrupt: record.corrupt,
             ...(record.corruptErrors ? { corruptErrors: record.corruptErrors } : {}),
             ...(record.newerSchemaVersion !== undefined

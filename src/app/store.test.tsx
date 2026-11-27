@@ -15,6 +15,7 @@ import {
   selectPageTarget,
   type WorkspaceStorageAdapter,
 } from '@/app/store'
+import { CANVAS_SCHEMA_VERSION, createEmptyCanvas } from '@/domain/schema'
 import { serializeCanvasJson } from '@/domain/serialize'
 import { VIRTUAL_ROOT_ID } from '@/domain/tree'
 import {
@@ -116,7 +117,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
 
     // Seed custom canvas element + binary asset on child
     const customCanvas = serializeCanvasJson({
-      schema: 1,
+      schema: CANVAS_SCHEMA_VERSION,
       elements: {
         e_12345678: {
           type: 'text',
@@ -124,7 +125,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
           y: 30,
           w: 240,
           z: 'a0',
-          style: { bg: null, border: null },
+          style: { bg: 'auto', border: 'auto' },
           content: {
             type: 'doc',
             content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Saved note' }] }],
@@ -352,7 +353,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
     if (!origChild.ok) return
 
     const customCanvas = serializeCanvasJson({
-      schema: 1,
+      schema: CANVAS_SCHEMA_VERSION,
       elements: {
         e_deadbeef: {
           type: 'text',
@@ -360,7 +361,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
           y: 20,
           w: 200,
           z: 'a0',
-          style: { bg: null, border: null },
+          style: { bg: 'auto', border: 'auto' },
           content: {
             type: 'doc',
             content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Original Stack' }] }],
@@ -1105,14 +1106,14 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
       expect(lazyLoaded).toEqual({
         nodeId: VIRTUAL_ROOT_ID,
         exists: false,
-        doc: { schema: 1, elements: {} },
+        doc: createEmptyCanvas(),
         corrupt: false,
       })
       expect(await getCanvasRecord(db1, VIRTUAL_ROOT_ID)).toBeUndefined()
 
       // First edit saves root canvas lazily as 'canvas.json' without creating any db.nodes row
       const savedHome = await store1.getState().savePageCanvas(VIRTUAL_ROOT_ID, {
-        schema: 1,
+        schema: CANVAS_SCHEMA_VERSION,
         elements: {
           e_home0001: {
             type: 'text',
@@ -1120,7 +1121,7 @@ describe('app/store (Zustand + immer + IndexedDB persistence) [T2.2]', () => {
             y: 20,
             w: 300,
             z: 'a0',
-            style: { bg: null, border: null },
+            style: { bg: 'auto', border: 'auto' },
             content: {
               type: 'doc',
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Welcome Home' }] }],

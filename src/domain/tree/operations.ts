@@ -5,6 +5,7 @@ import {
   KNOVITES_META_FILE,
   TAG_REGEX,
   ULID_REGEX,
+  createEmptyCanvas,
   type NodeJson,
   type NodeStatus,
   type NodeType,
@@ -697,7 +698,7 @@ export function createNode(state: TreeState, input: CreateNodeInput): TreeOperat
     }
   }
 
-  const emptyCanvas = serializeCanvasJson({ schema: 1, elements: {} })
+  const emptyCanvas = serializeCanvasJson(createEmptyCanvas())
   return {
     ok: true,
     nodeId: id,

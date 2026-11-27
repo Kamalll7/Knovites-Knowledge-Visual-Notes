@@ -10,6 +10,7 @@ import {
 } from '@/app/store'
 import { WorkspaceStoreContext } from '@/app/workspace-context'
 import {
+  CANVAS_SCHEMA_VERSION,
   extractKnovitesLinkTargetsFromCanvas,
   parseCanvasJson,
   parseNodeJson,
@@ -50,7 +51,7 @@ function makeMeta(
 
 function makeCanvasWithLinks(hrefs: readonly string[]): CanvasJson {
   return {
-    schema: 1,
+    schema: CANVAS_SCHEMA_VERSION,
     elements: {
       e_1234abcd: {
         type: 'text',
@@ -58,7 +59,7 @@ function makeCanvasWithLinks(hrefs: readonly string[]): CanvasJson {
         y: 0,
         w: 240,
         z: 'a0',
-        style: { bg: null, border: null },
+        style: { bg: 'auto', border: 'auto' },
         content: {
           type: 'doc',
           content: [

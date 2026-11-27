@@ -4,6 +4,8 @@ import {
   type CanvasJson,
   type KnovitesJson,
   type NodeJson,
+  type TipTapDoc,
+  type TipTapNode,
 } from '@/domain/schema'
 
 function normalizeInt(value: number): number {
@@ -40,15 +42,60 @@ function serializeCanonical(value: unknown): string {
   return `${JSON.stringify(canonicalize(value), null, 2)}\n`
 }
 
+function normalizeTipTapNode(node: TipTapNode): TipTapNode {
+  const next: TipTapNode = { type: node.type }
+  if (node.text !== undefined) {
+    next.text = node.text
+  }
+  if (node.marks !== undefined && node.marks.length > 0) {
+    next.marks = node.marks
+  }
+  if (node.attrs && isPlainObject(node.attrs)) {
+    const cleanedAttrs: Record<string, string | number | null> = {}
+    for (const [key, val] of Object.entries(node.attrs)) {
+      if (
+        key === 'textAlign' &&
+        (node.type === 'paragraph' || node.type === 'heading') &&
+        (val === null || val === 'left')
+      ) {
+        continue
+      }
+      if (val !== undefined) {
+        cleanedAttrs[key] = val
+      }
+    }
+    if (Object.keys(cleanedAttrs).length > 0) {
+      next.attrs = cleanedAttrs
+    }
+  }
+  if (node.content !== undefined) {
+    next.content = node.content.map(normalizeTipTapNode)
+  }
+  return next
+}
+
+function normalizeTipTapDoc(doc: TipTapDoc): TipTapDoc {
+  const out: TipTapDoc = { type: 'doc' }
+  if (doc.content !== undefined) {
+    out.content = doc.content.map(normalizeTipTapNode)
+  }
+  return out
+}
+
 function normalizeCanvasElement(element: CanvasElement): CanvasElement {
   const rotation = element.rotation !== undefined ? normalizeInt(element.rotation) : undefined
   if (element.type === 'text') {
+    const { textScale, ...rest } = element
     return {
-      ...element,
+      ...rest,
       x: normalizeInt(element.x),
       y: normalizeInt(element.y),
       w: normalizeInt(element.w),
+      content: normalizeTipTapDoc(element.content),
       ...(rotation !== undefined ? { rotation } : {}),
+      ...(textScale !== undefined && textScale !== 1
+        ? { textScale: normalizeNumber(textScale) }
+        : {}),
     }
   }
   return {

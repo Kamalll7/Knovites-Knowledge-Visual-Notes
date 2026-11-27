@@ -1,6 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import { parseNodeJson, type NodeJson } from '@/domain/schema'
+import { createEmptyCanvas, parseNodeJson, type NodeJson } from '@/domain/schema'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
 import {
   EMPTY_CHANGESET,
@@ -86,7 +86,7 @@ function stateToVirtualRepo(state: TreeState): Map<string, string> {
     } else {
       files.set(`${node.path}/node.json`, serializeNodeJson(node.meta))
       if (node.hasCanvas) {
-        files.set(`${node.path}/canvas.json`, serializeCanvasJson({ schema: 1, elements: {} }))
+        files.set(`${node.path}/canvas.json`, serializeCanvasJson(createEmptyCanvas()))
       }
     }
     for (const asset of node.assets) {

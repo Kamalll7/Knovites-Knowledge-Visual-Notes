@@ -1,0 +1,27 @@
+{
+  "schema": 2,
+  "elements": {
+    "e_8f2a1c0d": {
+      "type": "text",
+      "x": 100,
+      "y": 80,
+      "w": 320,
+      "z": "a0",
+      "style": {
+        "bg": "#ff0000",
+        "border": "#00ff00"
+      },
+      "content": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [{ "type": "text", "text": "Raw hex style must be rejected in v2" }]
+          }
+        ]
+      },
+      "updatedAt": "2026-11-27T10:00:00Z"
+    }
+  }
+}
+

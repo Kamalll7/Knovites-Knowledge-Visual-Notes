@@ -1,13 +1,21 @@
 import {
   HEX_COLOR_REGEX,
   ULID_REGEX,
+  isAllowedTextAlign,
+  isHighlightColorToken,
   isPlainObject,
+  isTextColorToken,
   type CanvasJson,
   type SchemaIssue,
   type TipTapDoc,
   type TipTapMark,
   type TipTapNode,
 } from '@/domain/schema/types'
+
+export interface SanitizeTipTapOptions {
+  /** When true (during v1 -> v2 migration), legacy `#rrggbb` mark colors record `migrated_legacy_hex_color`. */
+  legacyV1HexMigration?: boolean
+}
 
 const SIMPLE_MARKS = new Set(['bold', 'italic', 'underline', 'strike', 'code'])
 const CONTAINER_NODES = new Set([
@@ -21,8 +29,24 @@ const CONTAINER_NODES = new Set([
 ])
 const LEAF_NODES = new Set(['hardBreak', 'horizontalRule'])
 const KNOVITES_HREF_REGEX = new RegExp(`^knovites:${ULID_REGEX.source.slice(1, -1)}$`)
+const SAFE_FONT_FAMILY_REGEX = /^[a-zA-Z0-9\s,'"-]{1,120}$/
+const SAFE_FONT_SIZE_REGEX = /^(\d{1,3}(?:\.\d{1,2})?)(?:px|rem|em)$/
+const SAFE_CODE_LANGUAGE_REGEX = /^[a-zA-Z0-9_+#.-]{0,32}$/
+const DANGEROUS_CSS_PATTERN =
+  /(?:url\s*\(|expression\s*\(|javascript:|vbscript:|data:|@import|background)/i
 
-function isAllowedHref(href: string): boolean {
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+export function isAllowedHref(href: string): boolean {
+  if (href.length === 0 || href !== href.trim() || hasControlCharacter(href)) {
+    return false
+  }
   if (KNOVITES_HREF_REGEX.test(href)) {
     return true
   }
@@ -32,12 +56,30 @@ function isAllowedHref(href: string): boolean {
       return parsed.hostname.length > 0
     }
     if (parsed.protocol === 'mailto:') {
-      return href.slice('mailto:'.length).trim().length > 0
+      return parsed.pathname.trim().length > 0
     }
     return false
   } catch {
     return false
   }
+}
+
+function isSafeFontFamily(value: string): boolean {
+  const trimmed = value.trim()
+  return (
+    trimmed.length > 0 &&
+    !hasControlCharacter(value) &&
+    !DANGEROUS_CSS_PATTERN.test(value) &&
+    SAFE_FONT_FAMILY_REGEX.test(trimmed)
+  )
+}
+
+function isSafeFontSize(value: string): boolean {
+  if (value !== value.trim() || hasControlCharacter(value) || DANGEROUS_CSS_PATTERN.test(value)) {
+    return false
+  }
+  const match = SAFE_FONT_SIZE_REGEX.exec(value)
+  return Boolean(match?.[1] && Number.parseFloat(match[1]) > 0)
 }
 
 function recordExtraAttrs(
@@ -57,7 +99,49 @@ function recordExtraAttrs(
   }
 }
 
-function sanitizeMark(rawMark: unknown, path: string, issues: SchemaIssue[]): TipTapMark | null {
+function sanitizeTextAlignAttr(
+  rawAlign: unknown,
+  path: string,
+  issues: SchemaIssue[],
+): 'center' | 'right' | undefined {
+  if (rawAlign === undefined) return undefined
+  if (isAllowedTextAlign(rawAlign)) return rawAlign === 'left' ? undefined : rawAlign
+  issues.push({
+    path,
+    code: 'disallowed_text_align',
+    message: 'Removed disallowed textAlign attribute (expected "left", "center", or "right").',
+  })
+  return undefined
+}
+
+function recordInvalidColor(
+  color: unknown,
+  markName: 'textStyle' | 'highlight',
+  path: string,
+  issues: SchemaIssue[],
+  legacyV1Hex: boolean,
+): void {
+  if (legacyV1Hex && typeof color === 'string' && HEX_COLOR_REGEX.test(color)) {
+    issues.push({
+      path,
+      code: 'migrated_legacy_hex_color',
+      message: `Migrated legacy v1 hex ${markName} color "${color}" to Auto.`,
+    })
+  } else {
+    issues.push({
+      path,
+      code: 'disallowed_tiptap_attr',
+      message: `Removed invalid ${markName} color attribute (expected semantic token).`,
+    })
+  }
+}
+
+function sanitizeMark(
+  rawMark: unknown,
+  path: string,
+  issues: SchemaIssue[],
+  legacyV1Hex: boolean,
+): TipTapMark | null {
   if (!isPlainObject(rawMark) || typeof rawMark['type'] !== 'string') {
     issues.push({
       path,
@@ -111,27 +195,32 @@ function sanitizeMark(rawMark: unknown, path: string, issues: SchemaIssue[]): Ti
         issues,
       )
       const color = rawAttrs['color']
-      if (color === null || (typeof color === 'string' && HEX_COLOR_REGEX.test(color))) {
+      if (isTextColorToken(color)) {
         cleanAttrs['color'] = color
-      } else if (color !== undefined) {
+      } else if (color !== undefined && color !== null) {
+        recordInvalidColor(color, 'textStyle', `${path}.attrs.color`, issues, legacyV1Hex)
+      }
+
+      const fontFamily = rawAttrs['fontFamily']
+      if (typeof fontFamily === 'string' && isSafeFontFamily(fontFamily)) {
+        cleanAttrs['fontFamily'] = fontFamily
+      } else if (fontFamily !== undefined && fontFamily !== null) {
         issues.push({
-          path: `${path}.attrs.color`,
+          path: `${path}.attrs.fontFamily`,
           code: 'disallowed_tiptap_attr',
-          message: 'Removed invalid textStyle color attribute.',
+          message: 'Removed invalid or unsafe textStyle fontFamily attribute.',
         })
       }
 
-      for (const strKey of ['fontFamily', 'fontSize'] as const) {
-        const val = rawAttrs[strKey]
-        if (val === null || (typeof val === 'string' && val.length > 0)) {
-          cleanAttrs[strKey] = val
-        } else if (val !== undefined) {
-          issues.push({
-            path: `${path}.attrs.${strKey}`,
-            code: 'disallowed_tiptap_attr',
-            message: `Removed invalid textStyle ${strKey} attribute.`,
-          })
-        }
+      const fontSize = rawAttrs['fontSize']
+      if (typeof fontSize === 'string' && isSafeFontSize(fontSize)) {
+        cleanAttrs['fontSize'] = fontSize
+      } else if (fontSize !== undefined && fontSize !== null) {
+        issues.push({
+          path: `${path}.attrs.fontSize`,
+          code: 'disallowed_tiptap_attr',
+          message: 'Removed invalid or unsafe textStyle fontSize attribute.',
+        })
       }
     } else if (rawAttrs !== undefined) {
       issues.push({
@@ -141,24 +230,18 @@ function sanitizeMark(rawMark: unknown, path: string, issues: SchemaIssue[]): Ti
       })
     }
 
-    return Object.keys(cleanAttrs).length > 0
-      ? { type: 'textStyle', attrs: cleanAttrs }
-      : { type: 'textStyle' }
+    return Object.keys(cleanAttrs).length > 0 ? { type: 'textStyle', attrs: cleanAttrs } : null
   }
 
   if (markType === 'highlight') {
-    const cleanAttrs: Record<string, string | null> = {}
     if (isPlainObject(rawAttrs)) {
       recordExtraAttrs(rawAttrs, new Set(['color']), `${path}.attrs`, issues)
       const color = rawAttrs['color']
-      if (color === null || (typeof color === 'string' && HEX_COLOR_REGEX.test(color))) {
-        cleanAttrs['color'] = color
-      } else if (color !== undefined) {
-        issues.push({
-          path: `${path}.attrs.color`,
-          code: 'disallowed_tiptap_attr',
-          message: 'Removed invalid highlight color attribute.',
-        })
+      if (isHighlightColorToken(color)) {
+        return { type: 'highlight', attrs: { color } }
+      }
+      if (color !== undefined && color !== null) {
+        recordInvalidColor(color, 'highlight', `${path}.attrs.color`, issues, legacyV1Hex)
       }
     } else if (rawAttrs !== undefined) {
       issues.push({
@@ -168,9 +251,7 @@ function sanitizeMark(rawMark: unknown, path: string, issues: SchemaIssue[]): Ti
       })
     }
 
-    return Object.keys(cleanAttrs).length > 0
-      ? { type: 'highlight', attrs: cleanAttrs }
-      : { type: 'highlight' }
+    return null
   }
 
   issues.push({
@@ -185,6 +266,7 @@ function sanitizeMarks(
   rawMarks: unknown,
   path: string,
   issues: SchemaIssue[],
+  legacyV1Hex: boolean,
 ): TipTapMark[] | undefined {
   if (rawMarks === undefined) return undefined
   if (!Array.isArray(rawMarks)) {
@@ -197,7 +279,7 @@ function sanitizeMarks(
   }
   const cleanMarks: TipTapMark[] = []
   for (let i = 0; i < rawMarks.length; i += 1) {
-    const clean = sanitizeMark(rawMarks[i], `${path}[${i}]`, issues)
+    const clean = sanitizeMark(rawMarks[i], `${path}[${i}]`, issues, legacyV1Hex)
     if (clean) {
       cleanMarks.push(clean)
     }
@@ -209,6 +291,7 @@ function sanitizeNodeContent(
   rawContent: unknown,
   path: string,
   issues: SchemaIssue[],
+  legacyV1Hex: boolean,
 ): TipTapNode[] | undefined {
   if (rawContent === undefined) return undefined
   if (!Array.isArray(rawContent)) {
@@ -221,7 +304,7 @@ function sanitizeNodeContent(
   }
   const cleanNodes: TipTapNode[] = []
   for (let i = 0; i < rawContent.length; i += 1) {
-    const clean = sanitizeChildNode(rawContent[i], `${path}[${i}]`, issues)
+    const clean = sanitizeChildNode(rawContent[i], `${path}[${i}]`, issues, legacyV1Hex)
     if (clean) {
       cleanNodes.push(clean)
     }
@@ -233,6 +316,7 @@ function sanitizeChildNode(
   rawNode: unknown,
   path: string,
   issues: SchemaIssue[],
+  legacyV1Hex: boolean,
 ): TipTapNode | null {
   if (!isPlainObject(rawNode) || typeof rawNode['type'] !== 'string') {
     issues.push({
@@ -268,7 +352,7 @@ function sanitizeChildNode(
         message: 'Removed disallowed child content on text node.',
       })
     }
-    const marks = sanitizeMarks(rawNode['marks'], `${path}.marks`, issues)
+    const marks = sanitizeMarks(rawNode['marks'], `${path}.marks`, issues, legacyV1Hex)
     const node: TipTapNode = { type: 'text', text: rawNode['text'] }
     if (marks) {
       node.marks = marks
@@ -313,7 +397,26 @@ function sanitizeChildNode(
 
   const cleanNode: TipTapNode = { type: nodeType as TipTapNode['type'] }
 
-  if (nodeType === 'heading') {
+  if (nodeType === 'paragraph') {
+    const rawAttrs = rawNode['attrs']
+    if (isPlainObject(rawAttrs)) {
+      recordExtraAttrs(rawAttrs, new Set(['textAlign']), `${path}.attrs`, issues)
+      const textAlign = sanitizeTextAlignAttr(
+        rawAttrs['textAlign'],
+        `${path}.attrs.textAlign`,
+        issues,
+      )
+      if (textAlign !== undefined) {
+        cleanNode.attrs = { textAlign }
+      }
+    } else if (rawAttrs !== undefined) {
+      issues.push({
+        path: `${path}.attrs`,
+        code: 'disallowed_tiptap_attr',
+        message: 'Removed malformed attributes on paragraph node.',
+      })
+    }
+  } else if (nodeType === 'heading') {
     const rawAttrs = rawNode['attrs']
     const level = isPlainObject(rawAttrs) ? rawAttrs['level'] : undefined
     if (level !== 1 && level !== 2 && level !== 3) {
@@ -326,17 +429,29 @@ function sanitizeChildNode(
     }
     recordExtraAttrs(
       rawAttrs as Record<string, unknown>,
-      new Set(['level']),
+      new Set(['level', 'textAlign']),
       `${path}.attrs`,
       issues,
     )
-    cleanNode.attrs = { level }
+    const attrs: Record<string, string | number | null> = { level }
+    const textAlign = sanitizeTextAlignAttr(
+      (rawAttrs as Record<string, unknown>)['textAlign'],
+      `${path}.attrs.textAlign`,
+      issues,
+    )
+    if (textAlign !== undefined) {
+      attrs['textAlign'] = textAlign
+    }
+    cleanNode.attrs = attrs
   } else if (nodeType === 'codeBlock') {
     const rawAttrs = rawNode['attrs']
     if (isPlainObject(rawAttrs)) {
       recordExtraAttrs(rawAttrs, new Set(['language']), `${path}.attrs`, issues)
       const language = rawAttrs['language']
-      if (language === null || typeof language === 'string') {
+      if (
+        language === null ||
+        (typeof language === 'string' && SAFE_CODE_LANGUAGE_REGEX.test(language))
+      ) {
         cleanNode.attrs = { language }
       } else if (language !== undefined) {
         issues.push({
@@ -360,7 +475,7 @@ function sanitizeChildNode(
     })
   }
 
-  const content = sanitizeNodeContent(rawNode['content'], `${path}.content`, issues)
+  const content = sanitizeNodeContent(rawNode['content'], `${path}.content`, issues, legacyV1Hex)
   if (content !== undefined) {
     cleanNode.content = content
   }
@@ -372,6 +487,7 @@ export function sanitizeTipTapDoc(
   rawDoc: Record<string, unknown>,
   basePath: string,
   issues: SchemaIssue[],
+  options: SanitizeTipTapOptions = {},
 ): TipTapDoc {
   if (rawDoc['attrs'] !== undefined) {
     issues.push({
@@ -389,11 +505,35 @@ export function sanitizeTipTapDoc(
   }
 
   const cleanDoc: TipTapDoc = { type: 'doc' }
-  const content = sanitizeNodeContent(rawDoc['content'], `${basePath}.content`, issues)
+  const content = sanitizeNodeContent(
+    rawDoc['content'],
+    `${basePath}.content`,
+    issues,
+    Boolean(options.legacyV1HexMigration),
+  )
   if (content !== undefined) {
     cleanDoc.content = content
   }
   return cleanDoc
+}
+
+export function sanitizeEditorContent(rawDoc: unknown): {
+  doc: TipTapDoc
+  issues: SchemaIssue[]
+} {
+  const issues: SchemaIssue[] = []
+  if (!isPlainObject(rawDoc) || rawDoc['type'] !== 'doc') {
+    issues.push({
+      path: 'content',
+      code: 'disallowed_tiptap_node',
+      message: 'Expected TipTap root node with type "doc".',
+    })
+    return { doc: { type: 'doc', content: [] }, issues }
+  }
+  return {
+    doc: sanitizeTipTapDoc(rawDoc, 'content', issues),
+    issues,
+  }
 }
 
 const KNOVITES_HREF_PREFIX = 'knovites:'

@@ -1,0 +1,74 @@
+{
+  "elements": {
+    "e_home0001": {
+      "content": {
+        "content": [
+          {
+            "attrs": {
+              "level": 1
+            },
+            "content": [
+              {
+                "text": "Home Workspace",
+                "type": "text"
+              }
+            ],
+            "type": "heading"
+          },
+          {
+            "content": [
+              {
+                "text": "Start from ",
+                "type": "text"
+              },
+              {
+                "marks": [
+                  {
+                    "attrs": {
+                      "href": "knovites:01JC8ZQ4M7X2K9T5VB3N6D8RHW"
+                    },
+                    "type": "link"
+                  },
+                  {
+                    "attrs": {
+                      "color": "success"
+                    },
+                    "type": "textStyle"
+                  }
+                ],
+                "text": "ret2win",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "doc"
+      },
+      "style": {
+        "bg": "auto",
+        "border": "auto"
+      },
+      "type": "text",
+      "updatedAt": "2026-11-26T10:00:00Z",
+      "w": 360,
+      "x": 40,
+      "y": 40,
+      "z": "a0"
+    },
+    "e_home0002": {
+      "alt": "home overview diagram",
+      "asset": "assets/7ab1c2d3e4f50987.webp",
+      "h": 240,
+      "nh": 960,
+      "nw": 1440,
+      "type": "image",
+      "updatedAt": "2026-11-26T10:05:00Z",
+      "w": 360,
+      "x": 440,
+      "y": 40,
+      "z": "a1"
+    }
+  },
+  "schema": 2
+}

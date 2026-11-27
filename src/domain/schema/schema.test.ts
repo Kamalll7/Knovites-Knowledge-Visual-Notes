@@ -3,21 +3,36 @@ import path from 'node:path'
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import {
+  CANVAS_SCHEMA_VERSION,
+  CANVAS_STYLE_TOKENS,
   CURRENT_SCHEMA_VERSION,
+  HIGHLIGHT_COLOR_TOKENS,
+  TEXT_COLOR_TOKENS,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
   VIRTUAL_ROOT_ID,
+  createEmptyCanvas,
+  isAllowedHref,
   isVirtualRootId,
+  migrateCanvasV1ToV2,
   parseCanvasJson,
   parseKnovitesJson,
   parseNodeJson,
+  sanitizeEditorContent,
 } from '@/domain/schema'
 
-const fixturesDir = path.resolve(import.meta.dirname, '../../testing/fixtures/v1')
+const fixturesV1Dir = path.resolve(import.meta.dirname, '../../testing/fixtures/v1')
+const fixturesV2Dir = path.resolve(import.meta.dirname, '../../testing/fixtures/v2')
 const VALID_ULID = '01JC8ZQ4M7X2K9T5VB3N6D8RHW'
 const VALID_ULID_2 = '01JC8ZR1B2C3D4E5F6G7H8J9KM'
 const VALID_UTC = '2026-11-16T10:00:00Z'
 
-function readFixture(relPath: string): string {
-  return fs.readFileSync(path.join(fixturesDir, relPath), 'utf8')
+function readV1Fixture(relPath: string): string {
+  return fs.readFileSync(path.join(fixturesV1Dir, relPath), 'utf8')
+}
+
+function readV2Fixture(relPath: string): string {
+  return fs.readFileSync(path.join(fixturesV2Dir, relPath), 'utf8')
 }
 
 function makeValidNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -37,14 +52,34 @@ function makeValidNode(overrides: Record<string, unknown> = {}): Record<string, 
   }
 }
 
-function makeValidCanvas(elements: Record<string, unknown>): Record<string, unknown> {
+function makeValidCanvas(
+  elements: Record<string, unknown>,
+  schema: number = CANVAS_SCHEMA_VERSION,
+): Record<string, unknown> {
   return {
-    schema: 1,
+    schema,
     elements,
   }
 }
 
 function makeTextElement(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: 'text',
+    x: 10,
+    y: 20,
+    w: 200,
+    z: 'a0',
+    style: { bg: 'auto', border: 'auto' },
+    content: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }],
+    },
+    updatedAt: VALID_UTC,
+    ...overrides,
+  }
+}
+
+function makeV1TextElement(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     type: 'text',
     x: 10,
@@ -77,36 +112,168 @@ function makeImageElement(overrides: Record<string, unknown> = {}): Record<strin
   }
 }
 
-describe('schema parsers and fixtures [T1.1]', () => {
-  it('parses valid v1 fixtures cleanly with no issues', () => {
-    const knovites = parseKnovitesJson(readFixture('knovites.json'))
+describe('schema parsers and fixtures [T1.1, M4-Schema]', () => {
+  it('uses per-file schema versions (knovites/node v1, canvas v2) and provides createEmptyCanvas()', () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe(1)
+    expect(CANVAS_SCHEMA_VERSION).toBe(2)
+    expect(createEmptyCanvas()).toEqual({ schema: 2, elements: {} })
+  })
+
+  it('parses valid v1 manifest/node and v2 canvas fixtures cleanly with no issues', () => {
+    const knovites = parseKnovitesJson(readV1Fixture('knovites.json'))
     expect(knovites.status).toBe('ok')
     if (knovites.status === 'ok') {
       expect(knovites.issues).toEqual([])
       expect(knovites.data.schema).toBe(CURRENT_SCHEMA_VERSION)
     }
 
-    const node = parseNodeJson(readFixture('node.json'))
+    const node = parseNodeJson(readV1Fixture('node.json'))
     expect(node.status).toBe('ok')
     if (node.status === 'ok') {
       expect(node.issues).toEqual([])
       expect(node.data.id).toBe(VALID_ULID)
     }
 
-    const canvas = parseCanvasJson(readFixture('canvas.json'))
+    const canvasV2 = parseCanvasJson(readV2Fixture('canvas.json'))
+    expect(canvasV2.status).toBe('ok')
+    if (canvasV2.status === 'ok') {
+      expect(canvasV2.issues).toEqual([])
+      expect(canvasV2.data.schema).toBe(CANVAS_SCHEMA_VERSION)
+      expect(Object.keys(canvasV2.data.elements)).toEqual([
+        'e_8f2a1c0d',
+        'e_91bc40aa',
+        'e_a200none',
+      ])
+      const textEl = canvasV2.data.elements['e_8f2a1c0d']
+      expect(textEl?.type).toBe('text')
+      if (textEl?.type === 'text') {
+        expect(textEl.textScale).toBe(1.25)
+        expect(textEl.style).toEqual({ bg: 'auto', border: 'auto' })
+      }
+      const frameless = canvasV2.data.elements['e_a200none']
+      expect(frameless?.type).toBe('text')
+      if (frameless?.type === 'text') {
+        expect(frameless.style).toEqual({ bg: 'none', border: 'none' })
+        expect(frameless.textScale).toBeUndefined()
+      }
+    }
+
+    const rootCanvasV2 = parseCanvasJson(readV2Fixture('root-canvas.json'))
+    expect(rootCanvasV2.status).toBe('ok')
+    if (rootCanvasV2.status === 'ok') {
+      expect(rootCanvasV2.issues).toEqual([])
+      expect(rootCanvasV2.data.schema).toBe(CANVAS_SCHEMA_VERSION)
+      expect(Object.keys(rootCanvasV2.data.elements)).toEqual(['e_home0001', 'e_home0002'])
+    }
+  })
+
+  it('migrates v1 canvas.json and root-canvas.json fixtures cleanly to v2 while preserving content and assets', () => {
+    const canvas = parseCanvasJson(readV1Fixture('canvas.json'))
     expect(canvas.status).toBe('ok')
     if (canvas.status === 'ok') {
       expect(canvas.issues).toEqual([])
+      expect(canvas.data.schema).toBe(2)
       expect(Object.keys(canvas.data.elements)).toEqual(['e_8f2a1c0d', 'e_91bc40aa'])
+      const textEl = canvas.data.elements['e_8f2a1c0d']
+      expect(textEl?.type).toBe('text')
+      if (textEl?.type === 'text') {
+        expect(textEl.style).toEqual({ bg: 'auto', border: 'auto' })
+        expect(textEl.content.content).toHaveLength(3)
+      }
+      const imgEl = canvas.data.elements['e_91bc40aa']
+      expect(imgEl?.type).toBe('image')
+      if (imgEl?.type === 'image') {
+        expect(imgEl.asset).toBe('assets/3fa9c1d2e4b5a671.webp')
+        expect(imgEl.nw).toBe(1600)
+        expect(imgEl.nh).toBe(1040)
+      }
     }
 
-    const rootCanvas = parseCanvasJson(readFixture('root-canvas.json'))
+    const rootCanvas = parseCanvasJson(readV1Fixture('root-canvas.json'))
     expect(rootCanvas.status).toBe('ok')
     if (rootCanvas.status === 'ok') {
       expect(rootCanvas.issues).toEqual([])
-      expect(rootCanvas.data.schema).toBe(CURRENT_SCHEMA_VERSION)
+      expect(rootCanvas.data.schema).toBe(2)
       expect(Object.keys(rootCanvas.data.elements)).toEqual(['e_home0001', 'e_home0002'])
+      const homeText = rootCanvas.data.elements['e_home0001']
+      if (homeText?.type === 'text') {
+        expect(homeText.style).toEqual({ bg: 'auto', border: 'auto' })
+      }
+      const homeImg = rootCanvas.data.elements['e_home0002']
+      if (homeImg?.type === 'image') {
+        expect(homeImg.asset).toBe('assets/7ab1c2d3e4f50987.webp')
+      }
     }
+  })
+
+  it('migrates legacy v1 canvas hex colors on style and TipTap marks safely to Auto via migrateCanvasV1ToV2', () => {
+    const legacyV1 = {
+      schema: 1,
+      elements: {
+        e_8f2a1c0d: makeV1TextElement({
+          style: { bg: '#fef3c7', border: '#d97706' },
+          content: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Colored legacy text',
+                    marks: [
+                      { type: 'bold' },
+                      {
+                        type: 'textStyle',
+                        attrs: { color: '#7c9cff', fontFamily: 'Inter', fontSize: '16px' },
+                      },
+                      { type: 'highlight', attrs: { color: '#fbbf24' } },
+                    ],
+                  },
+                  {
+                    type: 'text',
+                    text: 'Pure hex color',
+                    marks: [{ type: 'textStyle', attrs: { color: '#ff0000' } }],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        e_91bc40aa: makeImageElement(),
+      },
+    }
+
+    const migrated = migrateCanvasV1ToV2(legacyV1)
+    expect(migrated.status).toBe('ok')
+    if (migrated.status === 'ok') {
+      expect(migrated.data.schema).toBe(2)
+      expect(migrated.issues.map((i) => i.code)).toEqual(
+        expect.arrayContaining(['migrated_legacy_hex_style', 'migrated_legacy_hex_color']),
+      )
+      const textEl = migrated.data.elements['e_8f2a1c0d']
+      expect(textEl?.type).toBe('text')
+      if (textEl?.type === 'text') {
+        expect(textEl.style).toEqual({ bg: 'auto', border: 'auto' })
+        const nodes = textEl.content.content?.[0]?.content ?? []
+        expect(nodes[0]?.text).toBe('Colored legacy text')
+        expect(nodes[0]?.marks).toEqual([
+          { type: 'bold' },
+          { type: 'textStyle', attrs: { fontFamily: 'Inter', fontSize: '16px' } },
+        ])
+        expect(nodes[1]?.text).toBe('Pure hex color')
+        expect(nodes[1]?.marks).toBeUndefined()
+      }
+      const imgEl = migrated.data.elements['e_91bc40aa']
+      expect(imgEl?.type).toBe('image')
+      if (imgEl?.type === 'image') {
+        expect(imgEl.asset).toBe('assets/3fa9c1d2e4b5a671.webp')
+      }
+    }
+
+    // parseCanvasJson invokes the same v1 -> v2 upgrade path automatically
+    const viaParse = parseCanvasJson(legacyV1)
+    expect(viaParse).toEqual(migrated)
   })
 
   it('defines canonical VIRTUAL_ROOT_ID ("__root__") and rejects it as a node.json ID [M3-HomeRoot]', () => {
@@ -120,40 +287,97 @@ describe('schema parsers and fixtures [T1.1]', () => {
     expect(parseNodeJson(makeValidNode({ id: VIRTUAL_ROOT_ID })).status).toBe('corrupt')
   })
 
-  it('parses invalid fixtures into the expected discriminated outcomes without throwing', () => {
-    const invalidId = parseNodeJson(readFixture('invalid/node-invalid-id.json'))
+  it('parses v1 and v2 invalid fixtures into the expected discriminated outcomes without throwing', () => {
+    const invalidId = parseNodeJson(readV1Fixture('invalid/node-invalid-id.json'))
     expect(invalidId.status).toBe('corrupt')
 
-    const newer = parseNodeJson(readFixture('invalid/node-newer-schema.json'))
-    expect(newer).toEqual({ status: 'newer-schema', schemaVersion: 2 })
+    const newerNode = parseNodeJson(readV1Fixture('invalid/node-newer-schema.json'))
+    expect(newerNode).toEqual({ status: 'newer-schema', schemaVersion: 2 })
 
-    const invalidAsset = parseCanvasJson(readFixture('invalid/canvas-invalid-asset.json'))
+    const invalidAsset = parseCanvasJson(readV1Fixture('invalid/canvas-invalid-asset.json'))
     expect(invalidAsset.status).toBe('corrupt')
 
-    const unsanitized = parseCanvasJson(readFixture('invalid/canvas-unsanitized-tiptap.json'))
+    const unsanitized = parseCanvasJson(readV1Fixture('invalid/canvas-unsanitized-tiptap.json'))
     expect(unsanitized.status).toBe('ok')
     if (unsanitized.status === 'ok') {
+      expect(unsanitized.data.schema).toBe(2)
       expect(unsanitized.issues.length).toBeGreaterThanOrEqual(5)
       const textEl = unsanitized.data.elements['e_8f2a1c0d']
       expect(textEl?.type).toBe('text')
       if (textEl?.type === 'text') {
         expect(textEl.x).toBe(121)
+        expect(textEl.style).toEqual({ bg: 'auto', border: 'auto' })
         expect(textEl.content.content).toHaveLength(1)
         const paragraph = textEl.content.content?.[0]
         const textNode = paragraph?.content?.[0]
         expect(textNode?.marks).toEqual([{ type: 'bold' }])
       }
     }
+
+    // New v2 invalid fixtures
+    const newerCanvas = parseCanvasJson(readV2Fixture('invalid/canvas-newer-schema.json'))
+    expect(newerCanvas).toEqual({ status: 'newer-schema', schemaVersion: 3 })
+
+    const rawHexCanvas = parseCanvasJson(readV2Fixture('invalid/canvas-raw-hex.json'))
+    expect(rawHexCanvas.status).toBe('corrupt')
+
+    const badAlignCanvas = parseCanvasJson(readV2Fixture('invalid/canvas-bad-align.json'))
+    expect(badAlignCanvas.status).toBe('ok')
+    if (badAlignCanvas.status === 'ok') {
+      expect(badAlignCanvas.issues.filter((i) => i.code === 'disallowed_text_align')).toHaveLength(
+        3,
+      )
+      const textEl = badAlignCanvas.data.elements['e_8f2a1c0d']
+      expect(textEl?.type).toBe('text')
+      if (textEl?.type === 'text') {
+        const blocks = textEl.content.content ?? []
+        expect(blocks[0]?.attrs).toEqual({ level: 2 })
+        expect(blocks[1]?.attrs).toBeUndefined()
+        expect(blocks[2]?.attrs).toBeUndefined()
+      }
+    }
+
+    const obfuscatedHrefCanvas = parseCanvasJson(
+      readV2Fixture('invalid/canvas-obfuscated-href.json'),
+    )
+    expect(obfuscatedHrefCanvas.status).toBe('ok')
+    if (obfuscatedHrefCanvas.status === 'ok') {
+      const codes = obfuscatedHrefCanvas.issues.map((i) => i.code)
+      expect(codes).toEqual(
+        expect.arrayContaining([
+          'disallowed_tiptap_node',
+          'disallowed_tiptap_attr',
+          'disallowed_link_href',
+        ]),
+      )
+      expect(
+        obfuscatedHrefCanvas.issues.filter((i) => i.code === 'disallowed_link_href'),
+      ).toHaveLength(6)
+      const textEl = obfuscatedHrefCanvas.data.elements['e_8f2a1c0d']
+      expect(textEl?.type).toBe('text')
+      if (textEl?.type === 'text') {
+        // Inline image node stripped, onclick stripped, all bad links & raw hex / bad CSS marks stripped
+        expect(textEl.content).toEqual({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'obfuscated links' }],
+            },
+          ],
+        })
+      }
+    }
   })
 
-  it('returns corrupt for malformed JSON, non-objects, and invalid schema versions', () => {
+  it('returns corrupt for malformed JSON, non-objects, and invalid schema versions; newer-schema for > max version', () => {
     for (const badInput of ['{not json', null, [], 42, 'hello']) {
       expect(parseKnovitesJson(badInput).status).toBe('corrupt')
       expect(parseNodeJson(badInput).status).toBe('corrupt')
       expect(parseCanvasJson(badInput).status).toBe('corrupt')
     }
 
-    for (const badSchema of [0, -1, 1.5, '1', null]) {
+    for (const badSchema of [0, -1, 1.5, '1', '2', null]) {
       expect(
         parseKnovitesJson({ schema: badSchema, title: 'x', createdAt: VALID_UTC }).status,
       ).toBe('corrupt')
@@ -164,6 +388,10 @@ describe('schema parsers and fixtures [T1.1]', () => {
     expect(parseKnovitesJson({ schema: 2, title: 'x', createdAt: VALID_UTC })).toEqual({
       status: 'newer-schema',
       schemaVersion: 2,
+    })
+    expect(parseCanvasJson({ schema: 3, elements: {} })).toEqual({
+      status: 'newer-schema',
+      schemaVersion: 3,
     })
     expect(parseCanvasJson({ schema: 99, elements: {} })).toEqual({
       status: 'newer-schema',
@@ -201,14 +429,14 @@ describe('schema parsers and fixtures [T1.1]', () => {
     it('enforces ULID format for id and links.to', () => {
       const invalidUlids = [
         '',
-        '01JC8ZQ4M7X2K9T5VB3N6D8RH', // 25 chars
-        '01JC8ZQ4M7X2K9T5VB3N6D8RHW0', // 27 chars
-        '01jc8zq4m7x2k9t5vb3n6d8rhw', // lowercase
-        '01IC8ZQ4M7X2K9T5VB3N6D8RHW', // I excluded from Crockford base32
-        '01LC8ZQ4M7X2K9T5VB3N6D8RHW', // L excluded
-        '01OC8ZQ4M7X2K9T5VB3N6D8RHW', // O excluded
-        '01UC8ZQ4M7X2K9T5VB3N6D8RHW', // U excluded
-        '81JC8ZQ4M7X2K9T5VB3N6D8RHW', // leading char >= 8 overflows 128-bit ULID
+        '01JC8ZQ4M7X2K9T5VB3N6D8RH',
+        '01JC8ZQ4M7X2K9T5VB3N6D8RHW0',
+        '01jc8zq4m7x2k9t5vb3n6d8rhw',
+        '01IC8ZQ4M7X2K9T5VB3N6D8RHW',
+        '01LC8ZQ4M7X2K9T5VB3N6D8RHW',
+        '01OC8ZQ4M7X2K9T5VB3N6D8RHW',
+        '01UC8ZQ4M7X2K9T5VB3N6D8RHW',
+        '81JC8ZQ4M7X2K9T5VB3N6D8RHW',
       ]
       for (const badId of invalidUlids) {
         expect(parseNodeJson(makeValidNode({ id: badId })).status).toBe('corrupt')
@@ -271,7 +499,7 @@ describe('schema parsers and fixtures [T1.1]', () => {
     })
   })
 
-  describe('canvas.json boundaries', () => {
+  describe('canvas.json v2 boundaries', () => {
     it('enforces element ID format e_<8 lowercase alphanumeric>', () => {
       expect(parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement() })).status).toBe('ok')
       for (const badKey of ['e_1234567', 'e_123456789', 'e_ABCDEF12', 'x_8f2a1c0d', 'e_8f2a1c0!']) {
@@ -348,24 +576,97 @@ describe('schema parsers and fixtures [T1.1]', () => {
       ).toBe('corrupt')
     })
 
-    it('enforces text style colors and image asset/nw/nh requirements', () => {
-      for (const badColor of ['#fff', 'blue', '#12345z']) {
+    it('restricts v2 style.bg and style.border strictly to semantic tokens + auto + none (no hex, no null, no frame field)', () => {
+      for (const token of CANVAS_STYLE_TOKENS) {
+        const parsed = parseCanvasJson(
+          makeValidCanvas({
+            e_8f2a1c0d: makeTextElement({ style: { bg: token, border: token } }),
+          }),
+        )
+        expect(parsed.status).toBe('ok')
+      }
+
+      for (const badStyle of [null, '#ff0000', '#7c9cff', '#fff', 'blue', 'transparent', '']) {
         expect(
           parseCanvasJson(
             makeValidCanvas({
-              e_8f2a1c0d: makeTextElement({ style: { bg: badColor, border: null } }),
+              e_8f2a1c0d: makeTextElement({ style: { bg: badStyle, border: 'auto' } }),
             }),
           ).status,
         ).toBe('corrupt')
         expect(
           parseCanvasJson(
             makeValidCanvas({
-              e_8f2a1c0d: makeTextElement({ style: { bg: null, border: badColor } }),
+              e_8f2a1c0d: makeTextElement({ style: { bg: 'auto', border: badStyle } }),
             }),
           ).status,
         ).toBe('corrupt')
       }
 
+      // Adding a separate `frame` property must be rejected by strict schema
+      expect(
+        parseCanvasJson(
+          makeValidCanvas({
+            e_8f2a1c0d: makeTextElement({ style: { bg: 'none', border: 'none', frame: 'none' } }),
+          }),
+        ).status,
+      ).toBe('corrupt')
+    })
+
+    it('validates textScale within [0.5, 3.0], omits default 1 on parse, and rejects invalid/out-of-range values', () => {
+      for (const validScale of [TEXT_SCALE_MIN, 0.75, 1.25, 2.5, TEXT_SCALE_MAX]) {
+        const parsed = parseCanvasJson(
+          makeValidCanvas({ e_8f2a1c0d: makeTextElement({ textScale: validScale }) }),
+        )
+        expect(parsed.status).toBe('ok')
+        if (parsed.status === 'ok') {
+          const el = parsed.data.elements['e_8f2a1c0d']
+          expect(el?.type).toBe('text')
+          if (el?.type === 'text') {
+            expect(el.textScale).toBe(validScale)
+          }
+        }
+      }
+
+      // Default textScale === 1 is normalized away
+      const defaultScale = parseCanvasJson(
+        makeValidCanvas({ e_8f2a1c0d: makeTextElement({ textScale: 1 }) }),
+      )
+      expect(defaultScale.status).toBe('ok')
+      if (defaultScale.status === 'ok') {
+        const el = defaultScale.data.elements['e_8f2a1c0d']
+        expect(el?.type).toBe('text')
+        if (el?.type === 'text') {
+          expect('textScale' in el).toBe(false)
+        }
+      }
+
+      for (const badScale of [
+        0,
+        -1,
+        0.49,
+        3.01,
+        10,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+        '1.5',
+        null,
+      ]) {
+        expect(
+          parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ textScale: badScale }) }))
+            .status,
+        ).toBe('corrupt')
+      }
+
+      // Image elements must reject textScale
+      expect(
+        parseCanvasJson(makeValidCanvas({ e_91bc40aa: makeImageElement({ textScale: 1.5 }) }))
+          .status,
+      ).toBe('corrupt')
+    })
+
+    it('enforces image asset/nw/nh requirements', () => {
       for (const ext of ['png', 'jpg', 'jpeg', 'webp', 'gif']) {
         expect(
           parseCanvasJson(
@@ -405,19 +706,19 @@ describe('schema parsers and fixtures [T1.1]', () => {
     })
   })
 
-  describe('TipTap content whitelist sanitizer', () => {
-    it('preserves all allowed nodes, marks, attributes, and valid href schemes', () => {
+  describe('TipTap content whitelist sanitizer (v2 semantic tokens, textAlign, strict href & XSS defense)', () => {
+    it('preserves all allowed nodes, textAlign (center/right, omits left), semantic color/highlight tokens, and valid href schemes', () => {
       const content = {
         type: 'doc',
         content: [
           {
             type: 'heading',
-            attrs: { level: 1 },
+            attrs: { level: 1, textAlign: 'center' },
             content: [{ type: 'text', text: 'H1' }],
           },
           {
             type: 'heading',
-            attrs: { level: 3 },
+            attrs: { level: 3, textAlign: 'right' },
             content: [{ type: 'text', text: 'H3' }],
           },
           {
@@ -428,6 +729,7 @@ describe('schema parsers and fixtures [T1.1]', () => {
                 content: [
                   {
                     type: 'paragraph',
+                    attrs: { textAlign: 'center' },
                     content: [
                       {
                         type: 'text',
@@ -441,12 +743,12 @@ describe('schema parsers and fixtures [T1.1]', () => {
                           {
                             type: 'textStyle',
                             attrs: {
-                              color: '#7c9cff',
+                              color: 'accent',
                               fontFamily: 'Inter',
                               fontSize: '16px',
                             },
                           },
-                          { type: 'highlight', attrs: { color: '#fbbf24' } },
+                          { type: 'highlight', attrs: { color: 'warning' } },
                         ],
                       },
                     ],
@@ -518,9 +820,198 @@ describe('schema parsers and fixtures [T1.1]', () => {
           expect(el.content).toEqual(content)
         }
       }
+
+      // Verify all 5 text color tokens and all 4 highlight tokens are accepted
+      for (const token of TEXT_COLOR_TOKENS) {
+        const res = sanitizeEditorContent({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: token,
+                  marks: [{ type: 'textStyle', attrs: { color: token } }],
+                },
+              ],
+            },
+          ],
+        })
+        expect(res.issues).toEqual([])
+        expect(res.doc.content?.[0]?.content?.[0]?.marks).toEqual([
+          { type: 'textStyle', attrs: { color: token } },
+        ])
+      }
+
+      for (const token of HIGHLIGHT_COLOR_TOKENS) {
+        const res = sanitizeEditorContent({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: token,
+                  marks: [{ type: 'highlight', attrs: { color: token } }],
+                },
+              ],
+            },
+          ],
+        })
+        expect(res.issues).toEqual([])
+        expect(res.doc.content?.[0]?.content?.[0]?.marks).toEqual([
+          { type: 'highlight', attrs: { color: token } },
+        ])
+      }
+
+      // 'violet' is valid for textStyle.color but NOT in the 4-token highlight palette
+      const violetHighlight = sanitizeEditorContent({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: 'x',
+                marks: [{ type: 'highlight', attrs: { color: 'violet' } }],
+              },
+            ],
+          },
+        ],
+      })
+      expect(violetHighlight.issues).toHaveLength(1)
+      expect(violetHighlight.doc.content?.[0]?.content?.[0]?.marks).toBeUndefined()
     })
 
-    it('strips disallowed href schemes, heading level 4, unknown nodes/marks, and unknown attrs as non-fatal issues', () => {
+    it('omits default textAlign "left" cleanly and strips null / "justify" / invalid textAlign', () => {
+      const content = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { textAlign: 'left' },
+            content: [{ type: 'text', text: 'default left' }],
+          },
+          {
+            type: 'heading',
+            attrs: { level: 2, textAlign: 'left' },
+            content: [{ type: 'text', text: 'left heading' }],
+          },
+          {
+            type: 'paragraph',
+            attrs: { textAlign: null },
+            content: [{ type: 'text', text: 'null align' }],
+          },
+          {
+            type: 'paragraph',
+            attrs: { textAlign: 'justify' },
+            content: [{ type: 'text', text: 'justify align' }],
+          },
+        ],
+      }
+
+      const parsed = parseCanvasJson(makeValidCanvas({ e_8f2a1c0d: makeTextElement({ content }) }))
+      expect(parsed.status).toBe('ok')
+      if (parsed.status === 'ok') {
+        expect(parsed.issues.filter((i) => i.code === 'disallowed_text_align')).toHaveLength(2)
+        const el = parsed.data.elements['e_8f2a1c0d']
+        expect(el?.type).toBe('text')
+        if (el?.type === 'text') {
+          expect(el.content).toEqual({
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'default left' }] },
+              {
+                type: 'heading',
+                attrs: { level: 2 },
+                content: [{ type: 'text', text: 'left heading' }],
+              },
+              { type: 'paragraph', content: [{ type: 'text', text: 'null align' }] },
+              { type: 'paragraph', content: [{ type: 'text', text: 'justify align' }] },
+            ],
+          })
+        }
+      }
+    })
+
+    it('enforces strict href allowlist both in isAllowedHref / sanitizeEditorContent and parseCanvasJson', () => {
+      for (const good of [
+        'http://example.com',
+        'https://example.com/path?a=1#b',
+        'mailto:sec@example.com',
+        `knovites:${VALID_ULID}`,
+      ]) {
+        expect(isAllowedHref(good)).toBe(true)
+      }
+
+      const badHrefs = [
+        '',
+        'javascript:alert(1)',
+        'JaVaScRiPt:alert(1)',
+        'java\nscript:alert(1)',
+        'java\tscript:alert(1)',
+        ' javascript:alert(1)',
+        ' https://example.com',
+        'https://example.com ',
+        'data:text/html,<script>alert(1)</script>',
+        'vbscript:msgbox(1)',
+        'file:///etc/passwd',
+        'knovites:bad-id',
+        'KNOVITES:' + VALID_ULID,
+      ]
+      for (const bad of badHrefs) {
+        expect(isAllowedHref(bad)).toBe(false)
+
+        const editorClean = sanitizeEditorContent({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'link', marks: [{ type: 'link', attrs: { href: bad } }] },
+              ],
+            },
+          ],
+        })
+        expect(editorClean.issues.some((i) => i.code === 'disallowed_link_href')).toBe(true)
+        expect(editorClean.doc.content?.[0]?.content?.[0]?.marks).toBeUndefined()
+
+        const parsed = parseCanvasJson(
+          makeValidCanvas({
+            e_8f2a1c0d: makeTextElement({
+              content: {
+                type: 'doc',
+                content: [
+                  {
+                    type: 'paragraph',
+                    content: [
+                      {
+                        type: 'text',
+                        text: 'link',
+                        marks: [{ type: 'link', attrs: { href: bad } }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          }),
+        )
+        expect(parsed.status).toBe('ok')
+        if (parsed.status === 'ok') {
+          expect(parsed.issues.some((i) => i.code === 'disallowed_link_href')).toBe(true)
+          const el = parsed.data.elements['e_8f2a1c0d']
+          if (el?.type === 'text') {
+            expect(el.content.content?.[0]?.content?.[0]?.marks).toBeUndefined()
+          }
+        }
+      }
+    })
+
+    it('strips raw hex marks, on* attrs, dangerous CSS values, inline images, and unknown nodes/marks', () => {
       const content = {
         type: 'doc',
         content: [
@@ -530,23 +1021,44 @@ describe('schema parsers and fixtures [T1.1]', () => {
             content: [{ type: 'text', text: 'Too deep' }],
           },
           {
+            type: 'image',
+            attrs: { src: 'http://evil.example/a.png' },
+          },
+          {
             type: 'customWidget',
             content: [{ type: 'text', text: 'drop' }],
           },
           {
             type: 'paragraph',
-            attrs: { align: 'center' },
+            attrs: { align: 'center', onclick: 'alert(1)', onmouseover: 'x()' },
             content: [
               {
                 type: 'text',
-                text: 'bad links',
+                text: 'cleaned text',
                 marks: [
-                  { type: 'link', attrs: { href: 'javascript:alert(1)' } },
-                  { type: 'link', attrs: { href: 'data:text/html,<script>1</script>' } },
-                  { type: 'link', attrs: { href: 'knovites:bad-id' } },
+                  {
+                    type: 'link',
+                    attrs: {
+                      href: 'https://example.com',
+                      target: '_blank',
+                      rel: 'noopener',
+                      class: 'ext',
+                      title: 'x',
+                      onclick: 'evil()',
+                    },
+                  },
                   { type: 'superscript' },
-                  { type: 'textStyle', attrs: { color: 'red', evil: '1', fontSize: '14px' } },
-                  { type: 'highlight', attrs: { color: 'yellow', extra: 'x' } },
+                  {
+                    type: 'textStyle',
+                    attrs: {
+                      color: '#ff0000',
+                      fontFamily: 'Inter; background:url(javascript:alert(1))',
+                      fontSize: '14px',
+                      onclick: 'alert(1)',
+                    },
+                  },
+                  { type: 'textStyle', attrs: { color: '#7c9cff' } },
+                  { type: 'highlight', attrs: { color: '#fbbf24', extra: 'x' } },
                 ],
               },
             ],
@@ -562,7 +1074,6 @@ describe('schema parsers and fixtures [T1.1]', () => {
             'invalid_heading_level',
             'disallowed_tiptap_node',
             'disallowed_tiptap_attr',
-            'disallowed_link_href',
             'disallowed_tiptap_mark',
           ]),
         )
@@ -578,10 +1089,10 @@ describe('schema parsers and fixtures [T1.1]', () => {
                 content: [
                   {
                     type: 'text',
-                    text: 'bad links',
+                    text: 'cleaned text',
                     marks: [
+                      { type: 'link', attrs: { href: 'https://example.com' } },
                       { type: 'textStyle', attrs: { fontSize: '14px' } },
-                      { type: 'highlight' },
                     ],
                   },
                 ],

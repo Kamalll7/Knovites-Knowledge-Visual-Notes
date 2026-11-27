@@ -1,0 +1,54 @@
+{
+  "schema": 2,
+  "elements": {
+    "e_8f2a1c0d": {
+      "type": "text",
+      "x": 100,
+      "y": 80,
+      "w": 320,
+      "z": "a0",
+      "style": {
+        "bg": "auto",
+        "border": "auto"
+      },
+      "content": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "image",
+            "attrs": { "src": "http://evil.example/pixel.png", "onerror": "alert(1)" }
+          },
+          {
+            "type": "paragraph",
+            "attrs": { "onclick": "alert(1)" },
+            "content": [
+              {
+                "type": "text",
+                "text": "obfuscated links",
+                "marks": [
+                  { "type": "link", "attrs": { "href": "JaVaScRiPt:alert(1)", "onclick": "x()" } },
+                  { "type": "link", "attrs": { "href": "java\nscript:alert(1)" } },
+                  { "type": "link", "attrs": { "href": " javascript:alert(1)" } },
+                  { "type": "link", "attrs": { "href": " https://example.com" } },
+                  { "type": "link", "attrs": { "href": "data:text/html,<script>alert(1)</script>" } },
+                  { "type": "link", "attrs": { "href": "vbscript:msgbox(1)" } },
+                  {
+                    "type": "textStyle",
+                    "attrs": {
+                      "color": "#ff0000",
+                      "fontFamily": "Inter; background:url(javascript:alert(1))",
+                      "fontSize": "expression(alert(1))"
+                    }
+                  },
+                  { "type": "highlight", "attrs": { "color": "#fbbf24" } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "updatedAt": "2026-11-27T10:00:00Z"
+    }
+  }
+}
+

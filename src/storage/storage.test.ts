@@ -1,6 +1,7 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb'
 import Dexie from 'dexie'
 import { describe, expect, it } from 'vitest'
+import { CANVAS_SCHEMA_VERSION, createEmptyCanvas, parseCanvasJson } from '@/domain/schema'
 import { serializeCanvasJson, serializeNodeJson } from '@/domain/serialize'
 import {
   VIRTUAL_ROOT_ID,
@@ -421,7 +422,55 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     expect(migratedCanvas?.basePath).toBe('legacy-stack-note')
     expect(migratedCanvas?.dirty).toBe(0)
     expect(migratedCanvas?.deletedAt).toBe(0)
-    expect(migratedCanvas?.rawJson).toBe(serializeCanvasJson(legacyCanvas))
+    expect(migratedCanvas?.rawJson).toBe('{\n  "elements": {},\n  "schema": 1\n}\n')
+    const upgradedFromLegacyRaw = parseCanvasJson(migratedCanvas?.rawJson)
+    expect(upgradedFromLegacyRaw).toEqual({
+      status: 'ok',
+      data: createEmptyCanvas(),
+      issues: [],
+    })
+
+    // Also confirm legacy v1 raw canvas JSON with hex colors migrates safely to v2
+    const legacyHexCanvasRaw = JSON.stringify({
+      schema: 1,
+      elements: {
+        e_11223344: {
+          type: 'text',
+          x: 10,
+          y: 20,
+          w: 240,
+          z: 'a0',
+          style: { bg: '#fef3c7', border: '#d97706' },
+          content: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Legacy note',
+                    marks: [{ type: 'textStyle', attrs: { color: '#7c9cff' } }],
+                  },
+                ],
+              },
+            ],
+          },
+          updatedAt: now,
+        },
+      },
+    })
+    const upgradedHex = parseCanvasJson(legacyHexCanvasRaw)
+    expect(upgradedHex.status).toBe('ok')
+    if (upgradedHex.status === 'ok') {
+      expect(upgradedHex.data.schema).toBe(CANVAS_SCHEMA_VERSION)
+      const el = upgradedHex.data.elements['e_11223344']
+      expect(el?.type).toBe('text')
+      if (el?.type === 'text') {
+        expect(el.style).toEqual({ bg: 'auto', border: 'auto' })
+        expect(el.content.content?.[0]?.content?.[0]?.marks).toBeUndefined()
+      }
+    }
 
     const migratedSetting = await migratedDb.table('settings').get('theme')
     expect(migratedSetting?.value).toBe('dark')
@@ -519,7 +568,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
       hasCanvas: true,
       deletedAt: 0,
     }))
-    const emptyCanvas = { schema: 1 as const, elements: {} }
+    const emptyCanvas = createEmptyCanvas()
     const rawCanvasJson = serializeCanvasJson(emptyCanvas)
     const canvasRows = nodeList.map((n, index) => ({
       nodeId: n.id,
@@ -592,7 +641,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
 
       // 2. First edit on home root: upsert 'canvas.json' + save root asset + save rootExtraFiles
       const rootCanvasJson = serializeCanvasJson({
-        schema: 1,
+        schema: CANVAS_SCHEMA_VERSION,
         elements: {
           e_home0001: {
             type: 'text',
@@ -600,7 +649,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
             y: 36,
             w: 320,
             z: 'a0',
-            style: { bg: null, border: null },
+            style: { bg: 'auto', border: 'auto' },
             content: {
               type: 'doc',
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Home note' }] }],
@@ -674,7 +723,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
     it('handles applyChangeset deletes, getEffectiveDeletes, getMovedBasePaths, and read-only guards for __root__', async () => {
       const { db } = makeTestDb('knovites-root-diff-test')
       const now = '2026-11-26T10:00:00Z'
-      const rootCanvasJson = serializeCanvasJson({ schema: 1, elements: {} })
+      const rootCanvasJson = serializeCanvasJson(createEmptyCanvas())
 
       // Seed synced __root__ canvas, asset, and rootExtraFiles
       await applyChangeset(
@@ -819,7 +868,7 @@ describe('storage (Dexie repository & migrations) [T2.1]', () => {
         createdAt: now,
         updatedAt: now,
       }
-      const existingCanvas = { schema: 1 as const, elements: {} }
+      const existingCanvas = createEmptyCanvas()
       const rawNode = serializeNodeJson(existingMeta)
       const rawCanvas = serializeCanvasJson(existingCanvas)
 

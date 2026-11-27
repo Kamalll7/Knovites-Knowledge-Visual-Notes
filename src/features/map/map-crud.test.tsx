@@ -9,7 +9,13 @@ import {
   type WorkspaceStoreApi,
 } from '@/app/store'
 import { WorkspaceStoreContext } from '@/app/workspace-context'
-import { parseCanvasJson, parseNodeJson, type CanvasJson, type NodeJson } from '@/domain/schema'
+import {
+  createEmptyCanvas,
+  parseCanvasJson,
+  parseNodeJson,
+  type CanvasJson,
+  type NodeJson,
+} from '@/domain/schema'
 import {
   VIRTUAL_ROOT_ID,
   parseCanvasFilePath,
@@ -58,7 +64,7 @@ function createInMemoryStorageAdapter(): WorkspaceStorageAdapter {
       const targetPath = nodeId === VIRTUAL_ROOT_ID ? 'canvas.json' : null
       if (targetPath && files.has(targetPath)) {
         const parsed = parseCanvasJson(files.get(targetPath)!)
-        const doc: CanvasJson = parsed.status === 'ok' ? parsed.data : { schema: 1, elements: {} }
+        const doc: CanvasJson = parsed.status === 'ok' ? parsed.data : createEmptyCanvas()
         return {
           nodeId,
           path: '',
